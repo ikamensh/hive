@@ -1,0 +1,7 @@
+# Iteration 1: MVP
+
+**Demo scenario ("done"):** create a greenfield multi-repo-capable project via the web UI with a mission and an iteration goal; hive interviews you to clarify the spec (workstream 0), bootstraps infra sized to the project (workstream 1), then builds as fast as resources allow — serialized per repo, verified per task, landing work via PR or direct push per the toggle — parking workstreams on batched questions you answer in the inbox, until the iteration goal is `idle: goal complete`.
+
+**IN:** single-VM control plane (Firestore + GCS + Secret Manager), supervisor state machine, stateful orchestrator with cold-start fallback, Build mode with workstreams and serialized per-repo execution, multi-repo projects with spec-home repo, clarification inbox with batching and guess-propensity dial, verification gate with anti-bloat checklist, resource registry with observed-usage estimates and cooldown wake-ups, user's `gh` credentials, web UI (project list, project page, resources page), full episode logging with prompt versioning, VM-as-runner + laptop-as-runner, org-context document.
+
+**OUT (post-MVP, roughly in order):** Maintain mode (fast follow), drift detection + `blocked: infra`, GEPA optimization loop, hive provisioning runners and injecting credentials from the vault, GitHub App + webhooks (heartbeat polling until then), notification channels beyond web UI, multi-user, within-repo parallelism via worktrees, finer-grained work-type toggles, automated provider-rulebook updates.

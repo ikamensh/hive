@@ -1,31 +1,25 @@
-# Hive — design doc
+# Architecture
 
-A system that uses coding agents and LLMs to continuously work on software projects. Result of a design interview session, 2026-06-12.
+Condensed current understanding of hive's design. Originated from a design interview session, 2026-06-12; edit as implementation teaches us things. See `mission.md` for what hive is and `iteration.md` for the current goal.
 
-## 1. Vision
-
-Hive manages a portfolio of projects for a user (later: an organization). Each project has a high-level mission and a concrete, timeboxed iteration goal. Hive keeps agents working toward the iteration goal as fast as available resources allow — and stops to ask the human precisely when the spec is ambiguous in ways that matter. A large part of the value is not the coding itself but the **spec clarification loop**: hive distinguishes "spec is clear, build the next bit" from "there's a contradiction/gap, resolve with human input first," and clarification answers accumulate into an ever-more-precise spec.
-
-Product-shaped from day one (others should eventually self-host it), but the MVP is maximally simple and personally runnable, reusing GCP managed services where they simplify things.
-
-**Anti-bloat is a core principle.** The known failure mode of autonomous development is complexity growth ("we could also check this extra thing"). All tests and CI must verify something with real value. Distilling specs, code, tests, and CI is a priority and a prerequisite for success — it is baked into the verifier's checklist and is the heart of the future Maintain mode.
-
-## 2. Core concepts
+## 1. Core concepts
 
 - **Project** — a mission + iteration goal + a set of one or more git repos (multi-repo from the start). Operational wiring lives in the app DB: per-project policy (toggles) and the authoritative list of member repos (managed via the web UI; the wiki may describe each repo's role, but the DB list is the registry).
-- **Spec home** — one dedicated git repo per project containing:
+- **Spec home** — one git repo per project containing:
   - `mission.md` — high-level goal, rarely changes.
   - `iteration.md` — the current timeboxed goal (user stories / "using system, steps X lead to Y").
+  - `iterations/` — archive of completed iterations, each with a short outcome note. Git history technically preserves this, but an explicit archive is better UX for agents and humans.
   - `wiki/` — condensed, current understanding of the project, curated by agents and corrected by the human. Includes `infrastructure.md` (deployed services, URLs, how to deploy, where logs/secrets live).
   - `input-log/` — raw user inputs (clarification answers, free-text feedback) preserved verbatim for later re-evaluation. The wiki is the distillation; the log is the source.
+  - For a single-repo project, the spec home and the code repo may be the same repo (hive itself is the first example).
 - **Org context** — a "related resources" text document at the organization level (shared internal infra, conventions, org-wide facts), injected into orchestrator context for every project. Unstructured text in MVP.
 - **Modes** — per project: **Build** (work toward iteration goal; MVP) and **Maintain** (distill/refactor/test-suite care, drift repair; fast follow, designed-for but not in MVP). Finer-grained work-type toggles may come later.
 
-## 3. The core loop
+## 2. The core loop
 
 Two layers, deliberately separated:
 
-### 3.1 Supervisor (deterministic, no LLM)
+### 2.1 Supervisor (deterministic, no LLM)
 
 Plain code that owns the project state machine and computes the state purely from facts in the DB:
 
@@ -37,7 +31,7 @@ Plain code that owns the project state machine and computes the state purely fro
 
 The supervisor wakes the orchestrator on events: task finished, question answered, resource cooldown expired, heartbeat timer, (later) GitHub webhook.
 
-### 3.2 Orchestrator (AI, stateful)
+### 2.2 Orchestrator (AI, stateful)
 
 A high-intelligence model session that plans and decides: decomposes the iteration goal into workstreams, picks the next task, picks the machine and agent backend for it, adapts when a runner times out or rejects, decides when to ask the human. Orchestration may require more intelligence than the worker tasks themselves.
 
@@ -45,19 +39,19 @@ A high-intelligence model session that plans and decides: decomposes the iterati
 - **Everything is also logged to the DB.** If a session is unusable for any reason, the orchestrator cold-starts from the wiki + operational state. Session files are backed up to GCS after each invocation.
 - All durable orchestrator knowledge must be written down (wiki, workstream states, decisions) — transparency, debuggability, and future GEPA inputs all depend on this.
 
-### 3.3 Workstreams and concurrency
+### 2.3 Workstreams and concurrency
 
 - The orchestrator decomposes the iteration goal into **workstreams** — coarse directions ("auth flow", "data ingestion") chosen to touch mostly-disjoint parts of the codebase. Each is a sequence of tasks.
 - **Execution is serialized per repo**: one agent task at a time per repo, commit/push lands before the next task starts. No merge conflicts by construction. Different repos of one project can progress simultaneously.
 - When a workstream hits a blocking question it is **parked** and the orchestrator picks the next task from an unblocked workstream — the system stays busy if any direction is clear.
 - True parallelism within a repo (git worktrees, kodo-style parallel stages) is a later opt-in.
 
-### 3.4 Standard opening workstreams
+### 2.4 Standard opening workstreams
 
-1. **Workstream 0: spec clarification** — interview the user about the iteration goal until it is buildable (same style as this design session).
+1. **Workstream 0: spec clarification** — interview the user about the iteration goal until it is buildable.
 2. **Workstream 1: infra bootstrap** — repo skeleton, test harness, CI — *sized to the project*. A narrow script project gets pytest and nothing else. Skipped when not warranted.
 
-## 4. Clarification protocol
+## 3. Clarification protocol
 
 When the orchestrator/worker hits ambiguity:
 
@@ -70,7 +64,7 @@ When the orchestrator/worker hits ambiguity:
 
 In MVP the only channel is the web UI inbox (user visits the page, sees work stalled on questions). Email/messenger channels later.
 
-## 5. Quality gate
+## 4. Quality gate
 
 - Every task ends with **verification by a different agent session** than the one that wrote the code: tests pass, acceptance criteria checked against actual behavior, architect-style review. Kodo's benchmark edge came exactly from independent verification (9 rounds of caught bugs in real runs).
 - The verifier's checklist includes **anti-bloat**: "does this add complexity/tests/CI not justified by the spec?" is a rejection reason.
@@ -78,14 +72,14 @@ In MVP the only channel is the web UI inbox (user visits the page, sees work sta
 - Failed verification loops back to the worker at most N times (~3), then the workstream parks with a question ("can't get this to pass, here's why").
 - A red main build (when CI exists) is an event that triggers a fix task.
 
-## 6. Distribution: runners
+## 5. Distribution: runners
 
 - A **runner** is a small daemon on any machine (the control-plane VM itself, the user's laptop, a GCP VM). It registers with the control plane and advertises **capabilities**: installed agent CLIs, loaded credentials and their licensing mode, auth freshness, machine specs.
 - **Push semantics, pull transport**: the orchestrator assigns "task → runner X"; physically the runner long-polls for assignments and streams results back. Works behind NAT, no inbound ports. Timeouts/rejections surface to the orchestrator, which adapts (retry elsewhere, replan).
 - **Escalation channel** (first-class): any agent can file "missing credential / infra problem / harness limitation" → orchestrator grants, rejects, or escalates to the human inbox. These complaints are also valuable logs for improving the harness.
 - Post-MVP: hive provisions runners itself (spin up a VM, install backends, inject credentials from the vault).
 
-## 7. AI resources
+## 6. AI resources
 
 - **Resource registry** in the DB: credential + binding (which runner/human) + quota model (rolling-window / weekly-cap / monthly-$ / unknown) + current estimate.
 - **Licensing modes differ per provider and evolve** — e.g. Cursor issues API keys that spend subscription quota anywhere; Claude Max is practically bound to the machine where the human logged in. A **provider rulebook** (human- and agent-maintained notes) tracks these evolving rules; hive should investigate and update them over time.
@@ -94,18 +88,18 @@ In MVP the only channel is the web UI inbox (user visits the page, sees work sta
 - **Budget enforcement is best-effort**: hive stops at the soft limit it tracks; the hard backstop is the budget set in the provider's console.
 - **Auth freshness is a human task**: "refresh login on runner X or that capacity is lost" appears in the same inbox as questions.
 
-## 8. Credentials & secrets
+## 7. Credentials & secrets
 
 - Credentials are **entrusted to hive centrally** (GCP Secret Manager as the vault) rather than scattered on machines. Target: orchestrator injects only the credentials a task needs into the runner; runners are cattle.
 - MVP simplification: credentials manually placed on the two runners (VM + laptop); GitHub access is simply the user's own `gh` login on the runners. GitHub App (per-repo installs, short-lived tokens, webhooks) is the product path; the auth interface is designed to swap to it without touching anything else.
 
-## 9. Infrastructure awareness
+## 8. Infrastructure awareness
 
 - `wiki/infrastructure.md` in the spec home is the source of truth for deployed services: URLs, GCP projects, deploy procedure, log/secret locations. Agents update it when they deploy; verification of deploy tasks means actually hitting the deployed URL.
 - **Drift detection (post-MVP but committed)**: periodic inventory sync (e.g. GCP Asset Inventory) vs `infrastructure.md`; minor drift is self-repaired, otherwise the project enters `blocked: infra` with an alert — autonomy requires self-repair or a clear escalation, never silent rot.
 - Prod deploys are gated by a per-project toggle (default off).
 
-## 10. Web UI (web-first)
+## 9. Web UI (web-first)
 
 Screens, in priority order:
 
@@ -116,7 +110,7 @@ Screens, in priority order:
 
 Deferred: analytics, multi-user management, notification channels, mobile polish.
 
-## 11. Logging now, GEPA later
+## 10. Logging now, GEPA later
 
 GEPA-style prompt optimization (reflective mutation from execution traces + natural-language feedback, Pareto frontier of candidates) is **post-MVP**, but the MVP builds the logging because it's needed for visibility anyway and it is where the future GEPA inputs live:
 
@@ -125,23 +119,15 @@ GEPA-style prompt optimization (reflective mutation from execution traces + natu
 - **Feedback**: explicit 👍/👎 + free text on any task/PR/question (free text matters most for GEPA); implicit signals — PR merged untouched vs amended, clarification answer contradicting an agent guess, verification rejection reasons.
 - No automatic prompt self-modification in the live loop — per-project adaptation in MVP comes from wiki/spec accumulation only.
 
-## 12. Architecture & stack
+## 11. Deployment & stack
 
 - **Control plane: one small always-on GCE VM** running docker-compose. The VM doubles as **runner #1** (API-key backends); the user's laptop registers as runner #2 for subscription-bound backends (e.g. Claude Max). Access via Tailscale (no public exposure, works from phone); no IAP/load-balancer ceremony in MVP.
 - **State lives off-VM from day one**: **Firestore** for structured state (projects, tasks, questions, resources, episode index), **GCS** for blobs (orchestrator session backups, traces, archives). The VM is disposable: a fresh one re-attaches and resumes, losing at most an in-flight task. Secret Manager from day one.
 - **Monorepo** (`hive`): `control-plane/` (Python/FastAPI — supervisor, orchestrator invocations, Firestore/GCS, GitHub ops), `runner-agent/` (small Python daemon), `web/` (React + Vite + TypeScript SPA), `deploy/` (compose, VM bootstrap).
 - **Kodo is reused as a library, not as the orchestration**: its raw primitives — backend sessions (Claude Code / Cursor / Codex / Gemini CLI wrappers with session persistence, token/cost parsing, malformed-output hardening), agent = prompt + session + budget, JSONL trace format. Hive builds its own supervisor, planning, distribution, inbox, and UI on top.
-- Migration path when product time comes: control-plane container → Cloud Run (min-instances 1) , runners → real fleet, `gh` login → GitHub App, Tailscale → proper auth. All mechanical because everything is containerized and state is already in managed services.
+- Migration path when product time comes: control-plane container → Cloud Run (min-instances 1), runners → real fleet, `gh` login → GitHub App, Tailscale → proper auth. All mechanical because everything is containerized and state is already in managed services.
 
-## 13. MVP definition
-
-**Demo scenario ("MVP done"):** create a greenfield multi-repo-capable project via the web UI with a mission and an iteration goal; hive interviews you to clarify the spec (workstream 0), bootstraps infra sized to the project (workstream 1), then builds as fast as resources allow — serialized per repo, verified per task, landing work via PR or direct push per the toggle — parking workstreams on batched questions you answer in the inbox, until the iteration goal is `idle: goal complete`.
-
-**IN (MVP):** single-VM control plane (Firestore + GCS + Secret Manager), supervisor state machine, stateful orchestrator with cold-start fallback, Build mode with workstreams and serialized per-repo execution, multi-repo projects with spec-home repo, clarification inbox with batching and guess-propensity dial, verification gate with anti-bloat checklist, resource registry with observed-usage estimates and cooldown wake-ups, user's `gh` credentials, web UI (project list, project page, resources page), full episode logging with prompt versioning, VM-as-runner + laptop-as-runner, org-context document.
-
-**OUT (post-MVP, roughly in order):** Maintain mode (fast follow), drift detection + `blocked: infra`, GEPA optimization loop, hive provisioning runners and injecting credentials from the vault, GitHub App + webhooks (heartbeat polling until then), notification channels beyond web UI, multi-user, within-repo parallelism via worktrees, finer-grained work-type toggles, automated provider-rulebook updates.
-
-## 14. Open questions
+## 12. Open questions
 
 - Orchestrator backend choice for stateful high-intelligence sessions (API model with our own context store vs CLI session on persistent disk) — decide at implementation time; kodo has working examples of both.
 - Exact workstream/task schema in Firestore; what the orchestrator may restructure vs what's append-only.
