@@ -8,7 +8,9 @@ This repo is structured as hive's own **spec home** (dogfooding the format it de
 - [iteration.md](iteration.md) — the current iteration goal (Iteration 1: MVP).
 - [wiki/architecture.md](wiki/architecture.md) — condensed current understanding of the system design.
 
-Status: design phase; MVP scope defined, implementation not started.
+Status: MVP deployed and demo-verified — control plane (FastAPI + Firestore + GCS) and a runner live on a GCE VM (`hive-vm`, project `hive-ikamen`), web UI included. A greenfield demo project ([wordfreq-demo](https://github.com/ikamensh/wordfreq-demo)) was planned, built, verified, and completed autonomously end-to-end. See `AGENTS.md` for the code map and how to run.
+
+Web UI access: `gcloud compute ssh hive-vm --zone=europe-west1-b --project=hive-ikamen -- -L 8000:localhost:8000`, then open http://localhost:8000. Laptop runner: `bash scripts/laptop_runner.sh`.
 
 Built on primitives from [kodo](https://github.com/ikamensh/kodo) (agent/session wrappers for Claude Code, Cursor, Codex, Gemini CLI), with its own distributed orchestration layer on top.
 
