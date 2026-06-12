@@ -7,7 +7,15 @@ echo "=== hive startup $(date -Is) ==="
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y git curl ca-certificates gnupg docker.io docker-compose-v2
+apt-get install -y git curl ca-certificates gnupg docker.io
+
+# docker compose v2 plugin (no Debian package)
+if ! docker compose version >/dev/null 2>&1; then
+  mkdir -p /usr/local/lib/docker/cli-plugins
+  curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" \
+    -o /usr/local/lib/docker/cli-plugins/docker-compose
+  chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+fi
 
 # --- gh CLI ---
 if ! command -v gh >/dev/null; then
