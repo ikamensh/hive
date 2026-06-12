@@ -279,9 +279,11 @@ class Orchestrator:
         final_text = self._generate(project, history, user_msg, tools)
         log.info("orchestrator[%s]: %s | actions: %s", project.name, final_text[:200], tools.actions)
 
+        # Persist model text only — echoing executed tool calls as text teaches
+        # the model to narrate actions instead of calling tools. The snapshot in
+        # the next invocation is the ground truth for what actually happened.
         history.append({"role": "user", "text": f"EVENTS:\n{event_text}"})
-        action_log = "\n".join(f"[action] {a}" for a in tools.actions)
-        history.append({"role": "model", "text": f"{final_text}\n{action_log}".strip()})
+        history.append({"role": "model", "text": final_text})
         self._save_history(project_id, history[-HISTORY_LIMIT:])
 
     # -- LLM call (overridden in tests) ---------------------------------------

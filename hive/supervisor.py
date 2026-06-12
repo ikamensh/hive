@@ -154,6 +154,8 @@ class Supervisor:
                 continue
             self.dispatch(project)
             state = self.refresh_state(project)
+            if project.id in self._busy:
+                continue  # invocation in flight; events stay queued for the next step
             events = self._events.pop(project.id, [])
             needs_decision = (
                 state == ProjectState.working
@@ -162,7 +164,7 @@ class Supervisor:
                 and time.time() - self._last_heartbeat.get(project.id, 0)
                 > self.HEARTBEAT_MIN_INTERVAL_S
             )
-            if (events or needs_decision) and project.id not in self._busy:
+            if events or needs_decision:
                 if not events:
                     events = [
                         "Heartbeat: workstreams are active but nothing is queued or running. "
