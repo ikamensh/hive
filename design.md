@@ -12,13 +12,12 @@ Product-shaped from day one (others should eventually self-host it), but the MVP
 
 ## 2. Core concepts
 
-- **Project** — a mission + iteration goal + a set of one or more git repos (multi-repo from the start). Per-project policy (toggles) lives in the app DB.
+- **Project** — a mission + iteration goal + a set of one or more git repos (multi-repo from the start). Operational wiring lives in the app DB: per-project policy (toggles) and the authoritative list of member repos (managed via the web UI; the wiki may describe each repo's role, but the DB list is the registry).
 - **Spec home** — one dedicated git repo per project containing:
   - `mission.md` — high-level goal, rarely changes.
   - `iteration.md` — the current timeboxed goal (user stories / "using system, steps X lead to Y").
   - `wiki/` — condensed, current understanding of the project, curated by agents and corrected by the human. Includes `infrastructure.md` (deployed services, URLs, how to deploy, where logs/secrets live).
   - `input-log/` — raw user inputs (clarification answers, free-text feedback) preserved verbatim for later re-evaluation. The wiki is the distillation; the log is the source.
-  - List of member repos.
 - **Org context** — a "related resources" text document at the organization level (shared internal infra, conventions, org-wide facts), injected into orchestrator context for every project. Unstructured text in MVP.
 - **Modes** — per project: **Build** (work toward iteration goal; MVP) and **Maintain** (distill/refactor/test-suite care, drift repair; fast follow, designed-for but not in MVP). Finer-grained work-type toggles may come later.
 
