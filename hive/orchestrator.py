@@ -78,9 +78,13 @@ class Tools:
         """Queue a task for a coding agent. repo is the git URL to check out.
         kind is 'work' (implements, then lands changes) or 'verify' (fresh-eyes
         review of the previous task; landing is disabled). backend is one of
-        claude | cursor | codex | gemini-cli."""
+        claude | cursor | codex | gemini-cli — pick one that an online runner
+        advertises (see RUNNERS in the snapshot), or the task cannot dispatch."""
         if backend not in BACKENDS:
             return f"error: unknown backend {backend!r}, use one of {BACKENDS}"
+        online = [b for r in self.store.list(Runner) if r.online() for b in r.backends]
+        if online and backend not in online:
+            return f"error: no online runner offers {backend!r}; available now: {sorted(set(online))}"
         if not self.store.get(Workstream, workstream_id):
             return f"error: no workstream {workstream_id}"
         prompt_versions = {}
