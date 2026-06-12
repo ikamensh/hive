@@ -16,7 +16,7 @@ Built on primitives from [kodo](https://github.com/ikamensh/kodo) (agent/session
 
 ## Web UI
 
-`web/` holds the control-plane SPA (React + Vite + TypeScript). Three pages: project list with live state badges, a project page (workstream board, question inbox, task activity feed, policy toggles), and a resources page (runners, backend cooldowns, editable org context). It polls the API every 4s and degrades to a "control plane unreachable" banner when the backend is down.
+`web/` holds the control-plane SPA (React + Vite + TypeScript). Three pages: project list with live state badges, a project page (workstream board, question inbox, task activity feed, policy toggles), and a resources page (runners, backend cooldowns, human todos with copy-pasteable instructions, a subscriptions registry, editable org context). It polls the API every 4s and degrades to a "control plane unreachable" banner when the backend is down.
 
 ```bash
 cd web

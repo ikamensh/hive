@@ -4,7 +4,7 @@ Architecture rationale lives in `wiki/architecture.md`; this file is the code ma
 
 ## Layout
 
-- `hive/models.py` — pydantic domain models; persisted as dicts via the store.
+- `hive/models.py` — pydantic domain models; persisted as dicts via the store. `Subscription` (AI plans the user owns) and `HumanTask` (operator todos with markdown instructions, e.g. CLI logins on remote runners) are org-level, not project-scoped.
 - `hive/store.py` — `MemoryStore` (tests) / `FirestoreStore` (prod), same duck-typed API.
 - `hive/supervisor.py` — deterministic layer: `compute_state` (pure), dispatch (serialized per repo), orphan failing, asyncio loop waking the orchestrator on events.
 - `hive/orchestrator.py` — Gemini tool-loop (`google-genai` automatic function calling). `Tools` methods are the tool surface; docstrings are what the model sees. No `from __future__ import annotations` in this file — stringified annotations break genai schema inference. Conversation history persists to the blob store; cold start is always safe because every invocation gets a full state snapshot + spec digest.
