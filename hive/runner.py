@@ -11,6 +11,7 @@ import os
 import re
 import socket
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -107,6 +108,19 @@ def main() -> None:
         "/api/runners/register", json={"name": RUNNER_NAME, "backends": backends}
     ).raise_for_status().json()["runner_id"]
     log.info("registered as %s (%s) with backends %s", RUNNER_NAME, runner_id, backends)
+
+    def heartbeat() -> None:
+        # Keeps last_seen fresh while a long task blocks the main loop;
+        # otherwise the control plane declares us offline and orphans the task.
+        hb = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=15.0)
+        while True:
+            time.sleep(30)
+            try:
+                hb.post("/api/runners/register", json={"name": RUNNER_NAME, "backends": backends})
+            except httpx.HTTPError:
+                pass
+
+    threading.Thread(target=heartbeat, daemon=True).start()
 
     while True:
         try:
