@@ -71,6 +71,7 @@ class FeedbackBody(BaseModel):
 class RunnerRegister(BaseModel):
     name: str
     backends: list[str]
+    boot: bool = False  # true on daemon startup (vs periodic heartbeat)
 
 
 class TaskResult(BaseModel):
@@ -200,6 +201,15 @@ def create_app(store, supervisor: Supervisor, config: Config) -> FastAPI:
         for backend in body.backends:
             if (runner.id, backend) not in present:
                 store.put(Resource(runner_id=runner.id, backend=backend))
+        if body.boot:
+            # A booting daemon executes nothing: whatever was in flight on this
+            # runner died with the previous process — requeue it.
+            for task in store.list(Task, status=TaskStatus.running, runner_id=runner.id):
+                task.status = TaskStatus.pending
+                task.runner_id = ""
+                task.delivered = False
+                store.put(task)
+                log.info("requeued task %s after runner %s reboot", task.id, runner.name)
         return {"runner_id": runner.id}
 
     @app.post("/api/runners/{runner_id}/poll", dependencies=[Depends(runner_auth)])

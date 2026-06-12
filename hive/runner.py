@@ -105,7 +105,7 @@ def main() -> None:
 
     backends = detect_backends()
     runner_id = client.post(
-        "/api/runners/register", json={"name": RUNNER_NAME, "backends": backends}
+        "/api/runners/register", json={"name": RUNNER_NAME, "backends": backends, "boot": True}
     ).raise_for_status().json()["runner_id"]
     log.info("registered as %s (%s) with backends %s", RUNNER_NAME, runner_id, backends)
 
