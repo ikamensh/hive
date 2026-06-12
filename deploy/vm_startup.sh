@@ -75,6 +75,27 @@ cat > /root/.gemini/settings.json <<'EOF'
 EOF
 printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key || true
 
+# --- caddy: public HTTPS with basic auth (web UI + laptop runners) ---
+if ! command -v caddy >/dev/null; then
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+    | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+    > /etc/apt/sources.list.d/caddy-stable.list
+  apt-get update && apt-get install -y caddy
+fi
+WEB_PASS=$(secret hive-web-password)
+WEB_HASH=$(caddy hash-password --plaintext "$WEB_PASS")
+cat > /etc/caddy/Caddyfile <<EOF
+hive.ilyakamen.com, hive.34-62-218-54.sslip.io {
+    basic_auth {
+        ilya $WEB_HASH
+    }
+    reverse_proxy localhost:8000
+}
+EOF
+systemctl enable --now caddy
+systemctl reload caddy || systemctl restart caddy
+
 # --- control plane (docker compose) ---
 cd /opt/hive
 docker compose -f deploy/compose.yaml up -d --build
