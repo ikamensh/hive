@@ -14,6 +14,8 @@ import logging
 from pathlib import Path
 
 from hive.models import (
+    HumanTask,
+    HumanTaskStatus,
     Project,
     Question,
     Runner,
@@ -53,6 +55,7 @@ class Tools:
             self.reactivate_workstream,
             self.complete_workstream,
             self.commit_to_spec,
+            self.create_human_task,
             self.mark_goal_complete,
         ]
 
@@ -175,6 +178,16 @@ class Tools:
         self.actions.append(f"committed to spec repo: {message} ({sha[:8]})")
         return f"committed {sha[:8]}"
 
+    def create_human_task(self, title: str, instructions_markdown: str) -> str:
+        """File a todo for the human operator: an action only they can perform
+        outside the system — CLI logins on runner machines, DNS records, billing,
+        granting access. Give exact copy-pasteable commands/steps. Unlike
+        ask_user this requests an action, not an answer. Check OPEN HUMAN TODOS
+        in the snapshot first to avoid duplicates."""
+        t = self.store.put(HumanTask(title=title, instructions=instructions_markdown))
+        self.actions.append(f"filed human todo {t.id} '{title}'")
+        return f"human_task_id={t.id} (user will see it on the resources page)"
+
     def mark_goal_complete(self, summary: str) -> str:
         """Declare the iteration goal fully built and verified. Only valid once
         every workstream is done/parked, no tasks are queued or running, and no
@@ -224,6 +237,10 @@ class Tools:
             f"- {r.name}: backends={','.join(r.backends)} {'online' if r.online() else 'OFFLINE'}"
             for r in self.store.list(Runner)
         ]
+        todo_lines = [
+            f"- {t.id}: {t.title}"
+            for t in self.store.list(HumanTask, status=HumanTaskStatus.open)
+        ]
         p = self.project
         return "\n".join(
             [
@@ -243,6 +260,9 @@ class Tools:
                 "",
                 "RUNNERS:",
                 *(runner_lines or ["(none online — tasks will wait)"]),
+                "",
+                "OPEN HUMAN TODOS (org-wide):",
+                *(todo_lines or ["(none)"]),
             ]
         )
 

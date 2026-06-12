@@ -124,6 +124,20 @@ def test_full_loop(harness):
     assert resources["resources"][0]["total_cost_usd"] == 0.5
 
 
+def test_human_task_tool_and_api(harness):
+    client, store, _orch = harness
+    project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
+    tools = Tools(store, project, spec=None)
+    out = tools.create_human_task("Log in codex on vm-1", "run `codex login`")
+    task_id = out.split("=")[1].split()[0]
+
+    assert "Log in codex on vm-1" in tools.snapshot()
+    assert client.get("/api/human-tasks").json()[0]["status"] == "open"
+
+    assert client.post(f"/api/human-tasks/{task_id}/done").json()["status"] == "done"
+    assert "Log in codex" not in tools.snapshot()  # only open todos are shown
+
+
 def test_rate_limited_result_sets_cooldown(harness):
     client, store, orch = harness
     client.post("/api/projects", json={"name": "p2", "spec_repo": "https://example.com/s.git"})

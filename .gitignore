@@ -5,3 +5,4 @@ __pycache__/
 web/node_modules/
 web/dist/
 .env
+scripts/spec_critique_report.md
