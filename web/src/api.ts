@@ -13,7 +13,9 @@ import type {
 import { api as mockApi } from "./mocks";
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  // Resolve against origin: a document URL with embedded user:pass@ credentials
+  // would otherwise make relative-URL fetch() throw.
+  const res = await fetch(new URL(path, window.location.origin), {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
