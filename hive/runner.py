@@ -18,6 +18,7 @@ from pathlib import Path
 import httpx
 
 HIVE_URL = os.environ.get("HIVE_URL", "http://localhost:8000")
+HIVE_BASIC_AUTH = os.environ.get("HIVE_BASIC_AUTH", "")  # "user:pass" when behind Caddy
 RUNNER_TOKEN = os.environ.get("HIVE_RUNNER_TOKEN", "dev-token")
 RUNNER_NAME = os.environ.get("HIVE_RUNNER_NAME", socket.gethostname())
 WORKDIR = Path(os.environ.get("HIVE_RUNNER_WORKDIR", "~/hive-work")).expanduser()
@@ -101,7 +102,8 @@ def execute(task: dict) -> dict:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     headers = {"X-Hive-Token": RUNNER_TOKEN}
-    client = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=40.0)
+    auth = tuple(HIVE_BASIC_AUTH.split(":", 1)) if HIVE_BASIC_AUTH else None
+    client = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=40.0, auth=auth)
 
     backends = detect_backends()
     runner_id = client.post(
@@ -112,7 +114,7 @@ def main() -> None:
     def heartbeat() -> None:
         # Keeps last_seen fresh while a long task blocks the main loop;
         # otherwise the control plane declares us offline and orphans the task.
-        hb = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=15.0)
+        hb = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=15.0, auth=auth)
         while True:
             time.sleep(30)
             try:

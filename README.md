@@ -10,7 +10,7 @@ This repo is structured as hive's own **spec home** (dogfooding the format it de
 
 Status: MVP deployed and demo-verified — control plane (FastAPI + Firestore + GCS) and a runner live on a GCE VM (`hive-vm`, project `hive-ikamen`), web UI included. A greenfield demo project ([wordfreq-demo](https://github.com/ikamensh/wordfreq-demo)) was planned, built, verified, and completed autonomously end-to-end. See `AGENTS.md` for the code map and how to run.
 
-Web UI access: `gcloud compute ssh hive-vm --zone=europe-west1-b --project=hive-ikamen -- -L 8000:localhost:8000`, then open http://localhost:8000. Laptop runner: `bash scripts/laptop_runner.sh`.
+Web UI access: `https://hive.ilyakamen.com (or https://hive.34-62-218-54.sslip.io), user `ilya`, password in Secret Manager `hive-web-password`. Laptop runner: `bash scripts/laptop_runner.sh`.
 
 Built on primitives from [kodo](https://github.com/ikamensh/kodo) (agent/session wrappers for Claude Code, Cursor, Codex, Gemini CLI), with its own distributed orchestration layer on top.
 

@@ -1,22 +1,17 @@
 #!/bin/bash
-# Laptop runner: connects to the hive VM through an SSH tunnel and serves
+# Laptop runner: connects to the public hive endpoint and serves
 # subscription-bound backends (claude, cursor) plus whatever else is installed.
 set -euo pipefail
 PROJECT=hive-ikamen
-ZONE=europe-west1-b
 
 TOKEN=$(gcloud secrets versions access latest --secret=hive-runner-token \
   --project=$PROJECT --account=ikamenshchikov@gmail.com)
-
-# Tunnel: localhost:18000 -> VM:8000 (background, dies with this script)
-gcloud compute ssh hive-vm --zone=$ZONE --project=$PROJECT \
-  --account=ikamenshchikov@gmail.com -- -N -L 18000:localhost:8000 &
-TUNNEL_PID=$!
-trap "kill $TUNNEL_PID 2>/dev/null" EXIT
-sleep 5
+WEB_PASS=$(gcloud secrets versions access latest --secret=hive-web-password \
+  --project=$PROJECT --account=ikamenshchikov@gmail.com)
 
 cd "$(dirname "$0")/.."
-HIVE_URL=http://localhost:18000 \
+HIVE_URL=https://hive.34-62-218-54.sslip.io \
+HIVE_BASIC_AUTH="ilya:$WEB_PASS" \
 HIVE_RUNNER_TOKEN="$TOKEN" \
 HIVE_RUNNER_NAME="laptop-$(hostname -s)" \
 uv run python -m hive.runner
