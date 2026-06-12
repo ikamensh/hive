@@ -11,3 +11,15 @@ This repo is structured as hive's own **spec home** (dogfooding the format it de
 Status: design phase; MVP scope defined, implementation not started.
 
 Built on primitives from [kodo](https://github.com/ikamensh/kodo) (agent/session wrappers for Claude Code, Cursor, Codex, Gemini CLI), with its own distributed orchestration layer on top.
+
+## Web UI
+
+`web/` holds the control-plane SPA (React + Vite + TypeScript). Three pages: project list with live state badges, a project page (workstream board, question inbox, task activity feed, policy toggles), and a resources page (runners, backend cooldowns, editable org context). It polls the API every 4s and degrades to a "control plane unreachable" banner when the backend is down.
+
+```bash
+cd web
+npm install
+npm run dev          # dev server, proxies /api → http://localhost:8000
+VITE_MOCK=1 npm run dev   # canned fixtures, no backend needed
+npm run build        # tsc --noEmit + vite build → web/dist
+```

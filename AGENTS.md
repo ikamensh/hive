@@ -12,7 +12,7 @@ Architecture rationale lives in `wiki/architecture.md`; this file is the code ma
 - `hive/api.py` — FastAPI: web API (unauthenticated; sits behind a tunnel/Tailscale) + runner protocol (shared token via `X-Hive-Token`). `production_app()` wires env config; SPA fallback serves `web/dist`.
 - `hive/runner.py` — daemon: register → long-poll → checkout repo → run kodo `Agent` → report. Reuses kodo sessions (claude/cursor/codex/gemini-cli) for cost parsing, timeouts, error classification.
 - `hive/prompts/` — versioned base prompts (hash recorded on tasks for future GEPA).
-- `web/` — React+Vite+TS SPA, polls the API.
+- `web/` — React+Vite+TS SPA, polls the API every 4s (`usePoll` in `src/api.ts`; no state library). Pages in `src/pages/` (Projects, Project, Resources); markdown via `marked`; `VITE_MOCK=1` swaps the API client for in-memory fixtures (`src/mocks.ts`). Dev proxy `/api` → `:8000`; `npm run build` = `tsc --noEmit` + vite → `web/dist`.
 - `deploy/` — Dockerfile (control plane), compose, GCE VM creation + startup script.
 - `scripts/` — `smoke_orchestrator.py` (real-LLM smoke), `laptop_runner.sh`.
 
