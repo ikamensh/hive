@@ -61,6 +61,7 @@ class Supervisor:
     (project_id, events) whenever a project needs an orchestrator decision."""
 
     TICK_S = 15.0
+    HEARTBEAT_MIN_INTERVAL_S = 600.0  # rate-limit decision wakes not driven by events
 
     def __init__(self, store, orchestrate: Callable[[str, list[str]], None]) -> None:
         self.store = store
@@ -68,6 +69,7 @@ class Supervisor:
         self._events: dict[str, list[str]] = defaultdict(list)
         self._wakeup = asyncio.Event()
         self._busy: set[str] = set()  # projects with an orchestrator invocation in flight
+        self._last_heartbeat: dict[str, float] = {}
 
     def wake(self, project_id: str, event: str) -> None:
         self._events[project_id].append(event)
@@ -157,10 +159,16 @@ class Supervisor:
                 state == ProjectState.working
                 and not self.store.tasks_in(project.id, TaskStatus.running)
                 and not self.store.tasks_in(project.id, TaskStatus.pending)
+                and time.time() - self._last_heartbeat.get(project.id, 0)
+                > self.HEARTBEAT_MIN_INTERVAL_S
             )
             if (events or needs_decision) and project.id not in self._busy:
                 if not events:
-                    events = ["Heartbeat: no tasks queued; decide the next step."]
+                    events = [
+                        "Heartbeat: workstreams are active but nothing is queued or running. "
+                        "Queue the next task, or park workstreams that are genuinely waiting."
+                    ]
+                    self._last_heartbeat[project.id] = time.time()
                 self._busy.add(project.id)
                 asyncio.get_running_loop().create_task(self._orchestrate(project.id, events))
 
