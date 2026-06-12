@@ -4,6 +4,7 @@
 set -euxo pipefail
 exec >>/var/log/hive-startup.log 2>&1
 echo "=== hive startup $(date -Is) ==="
+export HOME=/root  # startup-script env has no HOME; git/gh need it
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
