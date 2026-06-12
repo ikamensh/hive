@@ -5,11 +5,12 @@ the conversation history (kept in the blob store) is an optimization that can
 be lost at any time — every invocation also receives a full state snapshot.
 """
 
-from __future__ import annotations
+# No `from __future__ import annotations` here: google-genai automatic function
+# calling inspects runtime type hints of the tool methods; stringified
+# annotations break its schema inference.
 
 import json
 import logging
-import time
 from pathlib import Path
 
 from hive.models import (
@@ -171,8 +172,24 @@ class Tools:
         return f"committed {sha[:8]}"
 
     def mark_goal_complete(self, summary: str) -> str:
-        """Declare the iteration goal fully built and verified. The project
-        goes idle until the human sets the next goal."""
+        """Declare the iteration goal fully built and verified. Only valid once
+        every workstream is done/parked, no tasks are queued or running, and no
+        questions are open. The project goes idle until the human sets the next
+        goal."""
+        unfinished = [
+            t
+            for t in self.store.list(Task, project_id=self.project.id)
+            if t.status in (TaskStatus.pending, TaskStatus.running)
+        ]
+        active = self.store.list(
+            Workstream, project_id=self.project.id, status=WorkstreamStatus.active
+        )
+        open_questions = self.store.open_questions(self.project.id)
+        if unfinished or active or open_questions:
+            return (
+                f"rejected: {len(unfinished)} unfinished tasks, {len(active)} active "
+                f"workstreams, {len(open_questions)} open questions. Finish or park them first."
+            )
         self.project.goal_complete = True
         self.project.goal_complete_note = summary
         self.store.put(self.project)

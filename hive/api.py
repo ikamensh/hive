@@ -277,14 +277,20 @@ def production_app() -> FastAPI:
     supervisor = Supervisor(store, orchestrator.invoke)
     app = create_app(store, supervisor, config)
 
-    web_dist = config.data_dir.parent / "web-dist"
     import os
-
-    web_dir = os.environ.get("HIVE_WEB_DIST", str(web_dist))
     from pathlib import Path
 
-    if Path(web_dir).is_dir():
-        from fastapi.staticfiles import StaticFiles
+    web_dir = Path(os.environ.get("HIVE_WEB_DIST", "web/dist"))
+    if web_dir.is_dir():
+        from fastapi.responses import FileResponse
 
-        app.mount("/", StaticFiles(directory=web_dir, html=True), name="web")
+        @app.get("/{path:path}")
+        def spa(path: str):
+            # Serve built assets; anything else falls back to the SPA shell so
+            # deep links like /p/<id> work. /api routes are matched first.
+            target = web_dir / path
+            if path and target.is_file():
+                return FileResponse(target)
+            return FileResponse(web_dir / "index.html")
+
     return app

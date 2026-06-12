@@ -26,7 +26,7 @@ class Config:
             gcs_bucket=os.environ.get("HIVE_GCS_BUCKET", ""),
             gh_token=os.environ.get("HIVE_GH_TOKEN", ""),
             gemini_api_key=os.environ.get("GEMINI_API_KEY", ""),
-            orch_model=os.environ.get("HIVE_ORCH_MODEL", "gemini-3.5-flash"),
+            orch_model=os.environ.get("HIVE_ORCH_MODEL", "gemini-3-flash-preview"),
             runner_token=os.environ.get("HIVE_RUNNER_TOKEN", "dev-token"),
             data_dir=data_dir,
         )

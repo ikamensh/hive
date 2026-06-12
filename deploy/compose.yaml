@@ -1,0 +1,15 @@
+services:
+  control-plane:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - /etc/hive/env
+    volumes:
+      - hive-data:/data
+
+volumes:
+  hive-data:
