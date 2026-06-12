@@ -1,0 +1,172 @@
+"""End-to-end mocked run through the HTTP API.
+
+A scripted orchestrator (no LLM) plays the planning role; a fake runner uses
+the real runner protocol endpoints. Verifies the full loop: project creation →
+workstream/task planning → dispatch → runner poll → result → verify task →
+question → answer → goal complete.
+"""
+
+import time
+
+import pytest
+from fastapi.testclient import TestClient
+
+from hive.config import Config
+from hive.models import Project, Question, Task, TaskKind, Workstream
+from hive.orchestrator import Tools
+from hive.store import MemoryStore
+from hive.supervisor import Supervisor
+
+RUNNER_HEADERS = {"X-Hive-Token": "test-token"}
+
+
+class ScriptedOrchestrator:
+    """Plays the orchestrator: plans one workstream/task, verifies after work,
+    asks a question after verify, completes the goal after the answer."""
+
+    def __init__(self, store):
+        self.store = store
+        self.invocations: list[list[str]] = []
+
+    def invoke(self, project_id: str, events: list[str]) -> None:
+        self.invocations.append(events)
+        project = self.store.get(Project, project_id)
+        tools = Tools(self.store, project, spec=None)
+        tasks = self.store.list(Task, project_id=project_id)
+        questions = self.store.list(Question, project_id=project_id)
+
+        if not self.store.list(Workstream, project_id=project_id):
+            ws_id = tools.create_workstream("build", "build the thing").split("=")[1]
+            tools.create_task(ws_id, "https://example.com/app.git", "implement feature")
+        elif any("answered question" in e for e in events):
+            tools.mark_goal_complete("done after clarification")
+        elif any(t.kind == TaskKind.work and t.status == "done" for t in tasks) and not any(
+            t.kind == TaskKind.verify for t in tasks
+        ):
+            ws_id = tasks[0].workstream_id
+            tools.create_task(ws_id, "https://example.com/app.git", "verify it", kind="verify")
+        elif any(t.kind == TaskKind.verify and t.status == "done" for t in tasks) and not questions:
+            tools.ask_user("Should we also add B? My recommendation: yes.", tasks[0].workstream_id)
+
+
+@pytest.fixture
+def harness(tmp_path):
+    store = MemoryStore()
+    orch = ScriptedOrchestrator(store)
+    supervisor = Supervisor(store, orch.invoke)
+    config = Config(
+        gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
+        orch_model="", runner_token="test-token", data_dir=tmp_path,
+    )
+    from hive.api import create_app
+
+    app = create_app(store, supervisor, config)
+    # No context manager: lifespan (the background loop) stays off; tests pump manually.
+    yield TestClient(app), store, orch
+
+
+def test_full_loop(harness):
+    client, store, orch = harness
+
+    # 1. create project → orchestrator plans a workstream + task
+    project = client.post(
+        "/api/projects",
+        json={"name": "demo", "spec_repo": "https://example.com/spec.git"},
+    ).json()
+    pid = project["id"]
+    _pump(client, store)
+    detail = client.get(f"/api/projects/{pid}").json()
+    assert len(detail["workstreams"]) == 1
+    assert len(detail["tasks"]) == 1
+
+    # 2. runner registers and polls — gets the task after dispatch
+    rid = client.post(
+        "/api/runners/register",
+        json={"name": "fake-runner", "backends": ["cursor"]},
+        headers=RUNNER_HEADERS,
+    ).json()["runner_id"]
+    _pump(client, store)
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert task is not None and task["kind"] == "work"
+
+    # 3. work result → orchestrator queues a verify task
+    client.post(
+        f"/api/tasks/{task['id']}/result",
+        json={"text": "implemented, tests pass", "cost_usd": 0.5},
+        headers=RUNNER_HEADERS,
+    )
+    _pump(client, store)
+    verify = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert verify is not None and verify["kind"] == "verify"
+    assert "VERDICT" in verify["instructions"]
+
+    # 4. verify result → orchestrator asks a question, workstream parks
+    client.post(
+        f"/api/tasks/{verify['id']}/result",
+        json={"text": "VERDICT: ACCEPT"},
+        headers=RUNNER_HEADERS,
+    )
+    _pump(client, store)
+    detail = client.get(f"/api/projects/{pid}").json()
+    assert len(detail["questions"]) == 1
+    assert detail["workstreams"][0]["status"] == "parked"
+
+    # 5. answer → goal complete; resource usage was recorded
+    qid = detail["questions"][0]["id"]
+    client.post(f"/api/questions/{qid}/answer", json={"answer": "yes, add B"})
+    _pump(client, store)
+    project = client.get(f"/api/projects/{pid}").json()["project"]
+    assert project["goal_complete"]
+    assert project["state"] == "idle_goal_complete"
+
+    resources = client.get("/api/resources").json()
+    assert resources["resources"][0]["total_tasks"] == 2
+    assert resources["resources"][0]["total_cost_usd"] == 0.5
+
+
+def test_rate_limited_result_sets_cooldown(harness):
+    client, store, orch = harness
+    pid = client.post(
+        "/api/projects", json={"name": "p2", "spec_repo": "https://example.com/s.git"}
+    ).json()["id"]
+    _pump(client, store)
+    rid = client.post(
+        "/api/runners/register",
+        json={"name": "r2", "backends": ["cursor"]},
+        headers=RUNNER_HEADERS,
+    ).json()["runner_id"]
+    _pump(client, store)
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    client.post(
+        f"/api/tasks/{task['id']}/result",
+        json={"text": "429 rate limit", "is_error": True, "resource_exhausted": True},
+        headers=RUNNER_HEADERS,
+    )
+    res = client.get("/api/resources").json()["resources"][0]
+    assert not res["available"]
+    assert res["cooldown_until"] > time.time()
+
+
+def test_runner_auth_required(harness):
+    client, *_ = harness
+    assert client.post("/api/runners/register", json={"name": "x", "backends": []}).status_code == 401
+
+
+def _pump(client, store, rounds: int = 4):
+    """Run supervisor steps synchronously: dispatch + drain orchestrator wakes.
+
+    The production supervisor loop is asyncio-driven; tests pump it manually
+    for determinism.
+    """
+    app_supervisor = client.app.state.supervisor
+    for _ in range(rounds):
+        app_supervisor.fail_orphaned_tasks()
+        for project in store.list(Project):
+            app_supervisor.dispatch(project)
+            app_supervisor.refresh_state(project)
+            events = app_supervisor._events.pop(project.id, [])
+            if events:
+                app_supervisor.orchestrate(project.id, events)
+        for project in store.list(Project):
+            app_supervisor.dispatch(project)
+            app_supervisor.refresh_state(project)

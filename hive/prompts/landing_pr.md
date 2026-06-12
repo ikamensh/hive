@@ -1,0 +1,1 @@
+Landing instructions: when your work is complete and tests pass, commit to a new branch named hive/<short-topic> and open a pull request with `gh pr create` — title summarizing the change, body listing what was done and how it was verified. Do not push to the default branch.

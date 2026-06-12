@@ -1,0 +1,1 @@
+Landing instructions: when your work is complete and tests pass, commit all changes with a clear message and push directly to the default branch (git push origin HEAD). If push is rejected, pull --rebase and retry once.
