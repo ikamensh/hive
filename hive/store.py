@@ -10,17 +10,21 @@ from typing import TypeVar
 
 from hive.models import (
     Feedback,
+    HumanTask,
     Project,
     Question,
     QuestionStatus,
     Resource,
     Runner,
+    Subscription,
     Task,
     TaskStatus,
     Workstream,
 )
 
-M = TypeVar("M", Project, Workstream, Task, Question, Runner, Resource, Feedback)
+M = TypeVar(
+    "M", Project, Workstream, Task, Question, Runner, Resource, Feedback, Subscription, HumanTask
+)
 
 _COLLECTIONS: dict[type, str] = {
     Project: "projects",
@@ -30,6 +34,8 @@ _COLLECTIONS: dict[type, str] = {
     Runner: "runners",
     Resource: "resources",
     Feedback: "feedback",
+    Subscription: "subscriptions",
+    HumanTask: "human_tasks",
 }
 
 

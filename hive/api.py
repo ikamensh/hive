@@ -20,12 +20,15 @@ from hive.models import (
     Autonomy,
     Feedback,
     GuessPropensity,
+    HumanTask,
+    HumanTaskStatus,
     Mode,
     Project,
     Question,
     QuestionStatus,
     Resource,
     Runner,
+    Subscription,
     Task,
     TaskStatus,
     Workstream,
@@ -178,6 +181,44 @@ def create_app(store, supervisor: Supervisor, config: Config) -> FastAPI:
                 {**r.model_dump(), "available": r.available()} for r in store.list(Resource)
             ],
         }
+
+    @app.get("/api/subscriptions")
+    def list_subscriptions():
+        return [s.model_dump() for s in store.list(Subscription)]
+
+    @app.post("/api/subscriptions")
+    def create_subscription(body: dict):
+        return store.put(
+            Subscription(
+                provider=body["provider"],
+                plan=body.get("plan", ""),
+                notes=body.get("notes", ""),
+            )
+        ).model_dump()
+
+    @app.delete("/api/subscriptions/{sub_id}")
+    def delete_subscription(sub_id: str):
+        store.delete(Subscription, sub_id)
+        return {"ok": True}
+
+    @app.get("/api/human-tasks")
+    def list_human_tasks():
+        return [t.model_dump() for t in store.list(HumanTask)]
+
+    @app.post("/api/human-tasks")
+    def create_human_task(body: dict):
+        return store.put(
+            HumanTask(title=body["title"], instructions=body.get("instructions", ""))
+        ).model_dump()
+
+    @app.post("/api/human-tasks/{task_id}/done")
+    def complete_human_task(task_id: str):
+        task = store.get(HumanTask, task_id)
+        if not task:
+            raise HTTPException(404)
+        task.status = HumanTaskStatus.done
+        task.done_at = time.time()
+        return store.put(task).model_dump()
 
     @app.get("/api/org-context")
     def get_org_context():

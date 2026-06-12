@@ -152,6 +152,35 @@ class Resource(BaseModel):
         return now() >= self.cooldown_until
 
 
+class Subscription(BaseModel):
+    """An AI subscription the user owns (Claude Max, ChatGPT/codex, Cursor...).
+    Informs orchestration about capacity that exists beyond what runners
+    currently advertise, and anchors login-todos for remote nodes."""
+
+    id: str = Field(default_factory=new_id)
+    provider: str  # backend name it powers: claude | codex | cursor | gemini-cli
+    plan: str = ""  # e.g. "ChatGPT Plus", "Claude Max 5x"
+    notes: str = ""  # e.g. which machines are logged in, renewal dates
+    created_at: float = Field(default_factory=now)
+
+
+class HumanTaskStatus(StrEnum):
+    open = "open"
+    done = "done"
+
+
+class HumanTask(BaseModel):
+    """A todo for the human operator (auth refresh, infra unblock, ...) with
+    concrete instructions. Surfaced in the web UI next to questions."""
+
+    id: str = Field(default_factory=new_id)
+    title: str
+    instructions: str  # markdown, copy-pasteable commands
+    status: HumanTaskStatus = HumanTaskStatus.open
+    created_at: float = Field(default_factory=now)
+    done_at: float = 0.0
+
+
 class Feedback(BaseModel):
     """Explicit human feedback on a task or question. Future GEPA input."""
 

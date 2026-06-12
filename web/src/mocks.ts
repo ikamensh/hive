@@ -2,12 +2,14 @@
 // the UI stays interactive for screenshots and offline development.
 
 import type {
+  HumanTask,
   Project,
   ProjectCreate,
   ProjectDetail,
   ProjectPatch,
   Question,
   ResourcesPayload,
+  Subscription,
   Task,
   Workstream,
 } from "./types";
@@ -278,9 +280,54 @@ export const api = {
 
   resources: async (): Promise<ResourcesPayload> => structuredClone(resourcesPayload),
 
+  subscriptions: async (): Promise<Subscription[]> => structuredClone(subscriptions),
+
+  addSubscription: async (provider: string, plan: string, notes: string): Promise<Subscription> => {
+    const s: Subscription = {
+      id: `s-${Math.random().toString(36).slice(2, 8)}`,
+      provider,
+      plan,
+      notes,
+      created_at: Date.now() / 1000,
+    };
+    subscriptions.push(s);
+    return structuredClone(s);
+  },
+
+  deleteSubscription: async (id: string): Promise<void> => {
+    const i = subscriptions.findIndex((s) => s.id === id);
+    if (i >= 0) subscriptions.splice(i, 1);
+  },
+
+  humanTasks: async (): Promise<HumanTask[]> => structuredClone(humanTasks),
+
+  completeHumanTask: async (id: string): Promise<HumanTask> => {
+    const t = humanTasks.find((x) => x.id === id)!;
+    t.status = "done";
+    t.done_at = Date.now() / 1000;
+    return structuredClone(t);
+  },
+
   orgContext: async (): Promise<string> => orgContext,
 
   setOrgContext: async (text: string): Promise<void> => {
     orgContext = text;
   },
 };
+
+const subscriptions: Subscription[] = [
+  { id: "s1", provider: "codex", plan: "ChatGPT Plus", notes: "logged in on laptop", created_at: now - 86400 },
+  { id: "s2", provider: "claude", plan: "Claude Max 5x", notes: "", created_at: now - 86400 },
+];
+
+const humanTasks: HumanTask[] = [
+  {
+    id: "ht1",
+    title: "Log in codex on hive-vm",
+    instructions:
+      "Run on your laptop:\n\n```\ngcloud compute ssh hive-vm -- -L 1455:localhost:1455\nsudo HOME=/root codex login\n```\n\nOpen the printed URL in your local browser.",
+    status: "open",
+    created_at: now - 3600,
+    done_at: 0,
+  },
+];

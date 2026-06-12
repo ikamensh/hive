@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  HumanTask,
   Project,
   ProjectCreate,
   ProjectDetail,
   ProjectPatch,
   Question,
   ResourcesPayload,
+  Subscription,
   Task,
 } from "./types";
 import { api as mockApi } from "./mocks";
@@ -36,6 +38,18 @@ const realApi = {
   },
   task: (id: string) => http<Task>(`/api/tasks/${id}`),
   resources: () => http<ResourcesPayload>("/api/resources"),
+  subscriptions: () => http<Subscription[]>("/api/subscriptions"),
+  addSubscription: (provider: string, plan: string, notes: string) =>
+    http<Subscription>("/api/subscriptions", {
+      method: "POST",
+      body: JSON.stringify({ provider, plan, notes }),
+    }),
+  deleteSubscription: async (id: string) => {
+    await http(`/api/subscriptions/${id}`, { method: "DELETE" });
+  },
+  humanTasks: () => http<HumanTask[]>("/api/human-tasks"),
+  completeHumanTask: (id: string) =>
+    http<HumanTask>(`/api/human-tasks/${id}/done`, { method: "POST" }),
   orgContext: async () => (await http<{ text: string }>("/api/org-context")).text,
   setOrgContext: async (text: string) => {
     await http("/api/org-context", { method: "PUT", body: JSON.stringify({ text }) });

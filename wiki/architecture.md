@@ -48,12 +48,12 @@ A high-intelligence model session that plans and decides: decomposes the iterati
 
 ### 2.4 Standard opening workstreams
 
-1. **Workstream 0: spec clarification** — interview the user about the iteration goal until it is buildable.
+1. **Workstream 0: spec clarification** — interview the user about the iteration goal until it is buildable. Opens with a **spec critique** run (see `wiki/spec-critique.md`): parallel LLM critics + adjudicator surface underspecified/contradictory spec items, which form the interview's first batch of questions. Re-runnable on demand from the project page, with staleness ("spec changed since last critique") tracked.
 2. **Workstream 1: infra bootstrap** — repo skeleton, test harness, CI — *sized to the project*. A narrow script project gets pytest and nothing else. Skipped when not warranted.
 
 ## 3. Clarification protocol
 
-When the orchestrator/worker hits ambiguity:
+Upfront, batch-level ambiguity detection is the spec critique (`wiki/spec-critique.md`). The protocol below is the per-decision safety net when the orchestrator/worker hits ambiguity mid-build:
 
 1. **Self-answer first** — make a few attempts to resolve it from existing material: prior human input, the wiki, the codebase. Often the answer is already implied.
 2. If unresolved, post a **structured question** to the inbox: context, the gap/contradiction, proposed options with a recommendation. The workstream parks.
@@ -114,7 +114,7 @@ Deferred: analytics, multi-user management, notification channels, mobile polish
 
 GEPA-style prompt optimization (reflective mutation from execution traces + natural-language feedback, Pareto frontier of candidates) is **post-MVP**, but the MVP builds the logging because it's needed for visibility anyway and it is where the future GEPA inputs live:
 
-- **Prompt store with overlays**: each agent role (orchestrator, worker, verifier, intake) has a versioned base prompt + optional **per-project** and **per-user** overlays (user taste, e.g. anti-bloat rules, travels across projects). Every task records the prompt versions it ran with. Later, GEPA mutates exactly the overlays — base prompts stay product code, overlays are the evolvable genome.
+- **Prompt store with overlays**: each agent role (orchestrator, worker, verifier, intake — intake = the spec-critique critics/adjudicator, `wiki/spec-critique.md`) has a versioned base prompt + optional **per-project** and **per-user** overlays (user taste, e.g. anti-bloat rules, travels across projects). Every task records the prompt versions it ran with. Later, GEPA mutates exactly the overlays — base prompts stay product code, overlays are the evolvable genome.
 - **Episodes**: per-task full trace (kodo JSONL format), outcome (verified/rejected/abandoned), cost, duration, prompt versions.
 - **Feedback**: explicit 👍/👎 + free text on any task/PR/question (free text matters most for GEPA); implicit signals — PR merged untouched vs amended, clarification answer contradicting an agent guess, verification rejection reasons.
 - No automatic prompt self-modification in the live loop — per-project adaptation in MVP comes from wiki/spec accumulation only.

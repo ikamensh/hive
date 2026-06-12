@@ -99,6 +99,23 @@ export interface ResourcesPayload {
   resources: ResourceInfo[];
 }
 
+export interface Subscription {
+  id: string;
+  provider: string;
+  plan: string;
+  notes: string;
+  created_at: number;
+}
+
+export interface HumanTask {
+  id: string;
+  title: string;
+  instructions: string;
+  status: "open" | "done";
+  created_at: number;
+  done_at: number;
+}
+
 export interface ProjectCreate {
   name: string;
   spec_repo: string;

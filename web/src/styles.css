@@ -1125,3 +1125,13 @@ textarea:focus {
   padding-left: 12px;
   color: var(--ink-faint);
 }
+
+/* ---- human todos + subscriptions (resources page) ---- */
+.human-tasks, .subscriptions { margin-top: 2.2rem; }
+.human-tasks .badge.hot { background: var(--honey); color: #1a1407; border-radius: 9px; padding: 0 0.5em; margin-left: 0.5em; font-size: 0.8em; }
+.todo-card { border: 1px solid var(--line); border-left: 3px solid var(--honey); border-radius: 8px; padding: 0.9rem 1.1rem; margin: 0.8rem 0; background: var(--panel); }
+.todo-card header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.4rem; }
+.todo-card h3 { margin: 0; font-size: 1rem; }
+.todo-card .md pre { overflow-x: auto; padding: 0.6rem 0.8rem; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); }
+.sub-add { display: flex; gap: 0.5rem; margin-top: 0.7rem; flex-wrap: wrap; }
+.sub-add input { flex: 1 1 180px; }

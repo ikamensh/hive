@@ -126,9 +126,7 @@ def test_full_loop(harness):
 
 def test_rate_limited_result_sets_cooldown(harness):
     client, store, orch = harness
-    pid = client.post(
-        "/api/projects", json={"name": "p2", "spec_repo": "https://example.com/s.git"}
-    ).json()["id"]
+    client.post("/api/projects", json={"name": "p2", "spec_repo": "https://example.com/s.git"})
     _pump(client, store)
     rid = client.post(
         "/api/runners/register",

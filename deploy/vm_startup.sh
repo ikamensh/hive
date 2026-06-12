@@ -73,7 +73,8 @@ mkdir -p /root/.gemini
 cat > /root/.gemini/settings.json <<'EOF'
 {"security": {"folderTrust": {"enabled": false}}}
 EOF
-printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key || true
+# API-key login only as a fallback — never overwrite an existing (subscription) login.
+codex login status || printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key || true
 
 # --- caddy: public HTTPS with basic auth (web UI + laptop runners) ---
 if ! command -v caddy >/dev/null; then

@@ -16,6 +16,22 @@ DIGEST_DIRS = ("wiki",)
 MAX_DIGEST_CHARS = 24_000
 
 
+def digest_dir(path: Path) -> str:
+    """Concatenated spec content (mission, iteration, wiki/*.md), size-capped."""
+    parts: list[str] = []
+    files = [path / f for f in DIGEST_FILES]
+    for d in DIGEST_DIRS:
+        if (path / d).is_dir():
+            files.extend(sorted((path / d).glob("*.md")))
+    for f in files:
+        if f.exists():
+            parts.append(f"=== {f.relative_to(path)} ===\n{f.read_text()}")
+    text = "\n\n".join(parts)
+    if len(text) > MAX_DIGEST_CHARS:
+        text = text[:MAX_DIGEST_CHARS] + "\n[... spec digest truncated ...]"
+    return text or "(spec repo is empty — no mission.md/iteration.md yet)"
+
+
 def _run(args: list[str], cwd: Path | None = None) -> str:
     result = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=120)
     if result.returncode != 0:
@@ -46,18 +62,7 @@ class SpecRepo:
 
     def digest(self) -> str:
         """Concatenated spec content for orchestrator context, size-capped."""
-        parts: list[str] = []
-        files = [self.path / f for f in DIGEST_FILES]
-        for d in DIGEST_DIRS:
-            if (self.path / d).is_dir():
-                files.extend(sorted((self.path / d).glob("*.md")))
-        for f in files:
-            if f.exists():
-                parts.append(f"=== {f.relative_to(self.path)} ===\n{f.read_text()}")
-        text = "\n\n".join(parts)
-        if len(text) > MAX_DIGEST_CHARS:
-            text = text[:MAX_DIGEST_CHARS] + "\n[... spec digest truncated ...]"
-        return text or "(spec repo is empty — no mission.md/iteration.md yet)"
+        return digest_dir(self.path)
 
     def commit_files(self, files: dict[str, str], message: str) -> str:
         """Write files (path -> content), commit, push. Returns commit sha."""
