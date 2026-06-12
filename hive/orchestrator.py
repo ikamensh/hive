@@ -178,13 +178,23 @@ class Tools:
         self.actions.append(f"committed to spec repo: {message} ({sha[:8]})")
         return f"committed {sha[:8]}"
 
-    def create_human_task(self, title: str, instructions_markdown: str) -> str:
+    def create_human_task(
+        self, title: str, instructions_markdown: str, org_wide: bool = False
+    ) -> str:
         """File a todo for the human operator: an action only they can perform
         outside the system — CLI logins on runner machines, DNS records, billing,
         granting access. Give exact copy-pasteable commands/steps. Unlike
-        ask_user this requests an action, not an answer. Check OPEN HUMAN TODOS
-        in the snapshot first to avoid duplicates."""
-        t = self.store.put(HumanTask(title=title, instructions=instructions_markdown))
+        ask_user this requests an action, not an answer. Set org_wide=True when
+        the action helps all projects (runner/machine logins, org billing), not
+        just this one. Check OPEN HUMAN TODOS in the snapshot first to avoid
+        duplicates."""
+        t = self.store.put(
+            HumanTask(
+                project_id="" if org_wide else self.project.id,
+                title=title,
+                instructions=instructions_markdown,
+            )
+        )
         self.actions.append(f"filed human todo {t.id} '{title}'")
         return f"human_task_id={t.id} (user will see it on the resources page)"
 
@@ -238,8 +248,9 @@ class Tools:
             for r in self.store.list(Runner)
         ]
         todo_lines = [
-            f"- {t.id}: {t.title}"
+            f"- {t.id} [{'org-wide' if not t.project_id else 'this project'}]: {t.title}"
             for t in self.store.list(HumanTask, status=HumanTaskStatus.open)
+            if t.project_id in ("", self.project.id)
         ]
         p = self.project
         return "\n".join(
@@ -261,7 +272,7 @@ class Tools:
                 "RUNNERS:",
                 *(runner_lines or ["(none online — tasks will wait)"]),
                 "",
-                "OPEN HUMAN TODOS (org-wide):",
+                "OPEN HUMAN TODOS (yours + org-wide):",
                 *(todo_lines or ["(none)"]),
             ]
         )

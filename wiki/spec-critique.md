@@ -8,7 +8,9 @@ An LLM process that surfaces underspecified or contradictory specs *before* buil
 
 Evidence says iterative LLM self-critique plateaus after 2–3 rounds, same-model critique suffers self-bias, and independent parallel critiques aggregate better than long debates at matched compute. So: one round of independent critics, one adjudication pass, bounded reruns.
 
-### Stage 1 — parallel critics (one LLM call each, different lenses; cross-model when available)
+### Stage 1 — parallel critics (every available model x every lens)
+
+Role assignment follows model intelligence estimates (`hive/model_intel.py`, based on the Artificial Analysis index): all models propose findings — diversity is cheap and the adjudicator dedupes — while the smartest model adjudicates, since filtering pedantry from real gaps is the judgment-heavy step.
 
 - **Tester lens** (unverifiability): for each user story in `iteration.md`, write the acceptance check you'd run; flag every story where you can't.
 - **Builder lens** (underspecification): draft the first task for each plausible workstream; flag every decision you'd have to guess that is expensive to reverse.
@@ -39,14 +41,14 @@ flowchart TD
         S1[mission.md / iteration.md / wiki / input-log]
     end
 
-    subgraph critics [Stage 1: parallel critics]
+    subgraph critics [Stage 1: parallel critics - every model x every lens]
         C1[Tester lens<br/>acceptance check per story]
         C2[Builder lens<br/>first task per workstream]
         C3[Consistency lens<br/>cross-document contradictions]
         C4[Interpretation diff<br/>two demo scripts, compare]
     end
 
-    A[Stage 2: adjudicator<br/>drop already-answered, dedupe,<br/>severity x reversibility,<br/>guess-propensity threshold]
+    A[Stage 2: adjudicator - smartest model<br/>drop already-answered, dedupe,<br/>severity x reversibility,<br/>guess-propensity threshold]
 
     subgraph out [Stage 3: outputs]
         O1[Batched inbox question<br/>top 5-7 findings]

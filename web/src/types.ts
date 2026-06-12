@@ -109,6 +109,7 @@ export interface Subscription {
 
 export interface HumanTask {
   id: string;
+  project_id: string; // empty = org-wide
   title: string;
   instructions: string;
   status: "open" | "done";

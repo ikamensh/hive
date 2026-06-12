@@ -323,6 +323,7 @@ const subscriptions: Subscription[] = [
 const humanTasks: HumanTask[] = [
   {
     id: "ht1",
+    project_id: "",
     title: "Log in codex on hive-vm",
     instructions:
       "Run on your laptop:\n\n```\ngcloud compute ssh hive-vm -- -L 1455:localhost:1455\nsudo HOME=/root codex login\n```\n\nOpen the printed URL in your local browser.",

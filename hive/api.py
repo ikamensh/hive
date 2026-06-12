@@ -208,7 +208,11 @@ def create_app(store, supervisor: Supervisor, config: Config) -> FastAPI:
     @app.post("/api/human-tasks")
     def create_human_task(body: dict):
         return store.put(
-            HumanTask(title=body["title"], instructions=body.get("instructions", ""))
+            HumanTask(
+                project_id=body.get("project_id", ""),
+                title=body["title"],
+                instructions=body.get("instructions", ""),
+            )
         ).model_dump()
 
     @app.post("/api/human-tasks/{task_id}/done")

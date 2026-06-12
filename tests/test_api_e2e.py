@@ -128,11 +128,17 @@ def test_human_task_tool_and_api(harness):
     client, store, _orch = harness
     project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
     tools = Tools(store, project, spec=None)
-    out = tools.create_human_task("Log in codex on vm-1", "run `codex login`")
+    out = tools.create_human_task("Log in codex on vm-1", "run `codex login`", org_wide=True)
     task_id = out.split("=")[1].split()[0]
 
     assert "Log in codex on vm-1" in tools.snapshot()
     assert client.get("/api/human-tasks").json()[0]["status"] == "open"
+
+    # Another project's scoped todo is invisible here; org-wide ones are shared.
+    other = store.put(Project(name="other", spec_repo="https://example.com/o.git"))
+    Tools(store, other, spec=None).create_human_task("Grant repo access", "add bot to o.git")
+    assert "Grant repo access" not in tools.snapshot()
+    assert "Grant repo access" in Tools(store, other, spec=None).snapshot()
 
     assert client.post(f"/api/human-tasks/{task_id}/done").json()["status"] == "done"
     assert "Log in codex" not in tools.snapshot()  # only open todos are shown

@@ -174,6 +174,7 @@ class HumanTask(BaseModel):
     concrete instructions. Surfaced in the web UI next to questions."""
 
     id: str = Field(default_factory=new_id)
+    project_id: str = ""  # empty = org-wide (runner logins, billing, DNS)
     title: str
     instructions: str  # markdown, copy-pasteable commands
     status: HumanTaskStatus = HumanTaskStatus.open

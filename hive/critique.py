@@ -41,6 +41,7 @@ LLM = Callable[[str], str]
 
 class Finding(BaseModel):
     lens: str = ""
+    model: str = ""  # which critic model proposed it
     title: str
     evidence: str = ""
     artifact: str = ""
@@ -75,18 +76,21 @@ def _extract_json(text: str):
     return json.loads(text[start : end + 1])
 
 
-def run_critics(digest: str, llm: LLM) -> list[Finding]:
+def run_critics(digest: str, llms: dict[str, LLM]) -> list[Finding]:
+    """Every model critiques through every lens — diversity is cheap, the
+    adjudicator dedupes."""
     template, _version = load_prompt("critic")
 
-    def one(lens: str, instruction: str) -> list[Finding]:
-        prompt = template.replace("<<LENS>>", f"{lens} — {instruction}").replace(
+    def one(model: str, lens: str) -> list[Finding]:
+        prompt = template.replace("<<LENS>>", f"{lens} — {LENSES[lens]}").replace(
             "<<DIGEST>>", digest
         )
-        raw = _extract_json(llm(prompt))
-        return [Finding(**{**f, "lens": lens}) for f in raw]
+        raw = _extract_json(llms[model](prompt))
+        return [Finding(**{**f, "lens": lens, "model": model}) for f in raw]
 
-    with ThreadPoolExecutor(max_workers=len(LENSES)) as pool:
-        results = pool.map(lambda kv: one(*kv), LENSES.items())
+    jobs = [(model, lens) for model in llms for lens in LENSES]
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        results = pool.map(lambda job: one(*job), jobs)
     return [f for batch in results for f in batch]
 
 
@@ -111,12 +115,12 @@ def run_adjudicator(
 
 def critique(
     digest: str,
-    critic_llm: LLM,
+    critic_llms: dict[str, LLM],
     adjudicator_llm: LLM,
     guess_propensity: str = "sometimes",
     max_questions: int = 7,
 ) -> CritiqueReport:
-    findings = run_critics(digest, critic_llm)
+    findings = run_critics(digest, critic_llms)
     if findings:
         verdicts, inbox, flags = run_adjudicator(
             digest, findings, adjudicator_llm, guess_propensity, max_questions
@@ -138,7 +142,7 @@ def report_markdown(report: CritiqueReport) -> str:
     lines = ["# Spec critique report", "", "## Verdicts", ""]
     for v in report.verdicts:
         f = by_title.get(v.title)
-        meta = f" (lens={f.lens}, sev={f.severity}, {f.reversibility})" if f else ""
+        meta = f" (lens={f.lens}@{f.model}, sev={f.severity}, {f.reversibility})" if f else ""
         lines.append(f"- **{v.action}** — {v.title}{meta}: {v.reason}")
     if report.inbox_markdown:
         lines += ["", "## Batched inbox question", "", report.inbox_markdown]
@@ -147,7 +151,7 @@ def report_markdown(report: CritiqueReport) -> str:
     lines += ["", "## Raw findings", ""]
     for f in report.findings:
         lines += [
-            f"### [{f.lens}] {f.title}",
+            f"### [{f.lens} @ {f.model}] {f.title}",
             f"- evidence: {f.evidence}",
             f"- artifact: {f.artifact}",
             f"- severity {f.severity}, {f.reversibility} to reverse",

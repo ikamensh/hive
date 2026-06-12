@@ -1,10 +1,10 @@
 """Run the spec critique (wiki/spec-critique.md) locally with CLI agents.
 
-Critics run in parallel on codex; the adjudicator runs cross-model on cursor
-to counter self-bias. CLIs are invoked directly (subprocess) rather than via
-kodo: kodo 0.5.0's codex parser predates the codex 0.139 JSON event format
-and drops the agent's reply. Writes a markdown report and prints the batched
-inbox question. Usage: `uv run python scripts/spec_critique.py`.
+All models propose findings (every lens x every model); the smartest model
+per hive/model_intel.py adjudicates. CLIs are invoked directly (subprocess)
+rather than via kodo: kodo 0.5.0's codex parser predates the codex 0.139
+JSON event format and drops the agent's reply. Writes a markdown report and
+prints the batched inbox question. Usage: `uv run python scripts/spec_critique.py`.
 """
 
 import logging
@@ -17,12 +17,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hive.critique import critique, report_markdown
+from hive.model_intel import smartest
 from hive.specrepo import digest_dir
 
 # -- inputs -------------------------------------------------------------------
 SPEC_DIR = Path(__file__).parent.parent  # hive is its own spec home
-CRITIC_MODEL = ""  # codex; empty = ~/.codex/config.toml default
-ADJUDICATOR_MODEL = "composer-2.5"  # cursor-agent
+CODEX_MODEL = "gpt-5.5"  # what ~/.codex/config.toml runs; passed as -m
+CURSOR_MODEL = "composer-2.5"
 GUESS_PROPENSITY = "sometimes"
 MAX_QUESTIONS = 7
 AGENT_TIMEOUT_S = 900
@@ -49,18 +50,18 @@ def run_cli(cmd: list[str]) -> subprocess.CompletedProcess:
 
 def codex_llm(prompt: str) -> str:
     with tempfile.NamedTemporaryFile(suffix=".md") as out:
-        cmd = ["codex", "exec", prompt, "--skip-git-repo-check", "--sandbox", "read-only",
-               "--cd", str(SPEC_DIR), "-o", out.name]
-        if CRITIC_MODEL:
-            cmd += ["-m", CRITIC_MODEL]
-        run_cli(cmd)
+        run_cli(["codex", "exec", prompt, "--skip-git-repo-check", "--sandbox", "read-only",
+                 "--cd", str(SPEC_DIR), "-m", CODEX_MODEL, "-o", out.name])
         return Path(out.name).read_text()
 
 
 def cursor_llm(prompt: str) -> str:
-    proc = run_cli(["cursor-agent", "-p", "-f", "--model", ADJUDICATOR_MODEL,
+    proc = run_cli(["cursor-agent", "-p", "-f", "--model", CURSOR_MODEL,
                     "--workspace", str(SPEC_DIR), prompt])
     return proc.stdout
+
+
+LLMS = {CODEX_MODEL: codex_llm, CURSOR_MODEL: cursor_llm}
 
 
 def main() -> None:
@@ -68,11 +69,14 @@ def main() -> None:
     digest = digest_dir(SPEC_DIR)
     log.info("spec digest: %d chars from %s", len(digest), SPEC_DIR)
 
+    adjudicator = smartest(list(LLMS))
+    log.info("critics: %s; adjudicator: %s", ", ".join(LLMS), adjudicator)
+
     start = time.time()
     report = critique(
         digest,
-        critic_llm=codex_llm,
-        adjudicator_llm=cursor_llm,
+        critic_llms=LLMS,
+        adjudicator_llm=LLMS[adjudicator],
         guess_propensity=GUESS_PROPENSITY,
         max_questions=MAX_QUESTIONS,
     )

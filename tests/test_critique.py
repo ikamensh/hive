@@ -36,16 +36,20 @@ def test_critique_end_to_end():
         adjudicator_prompts.append(prompt)
         return ADJUDICATOR_REPLY
 
-    report = critique("THE-DIGEST", critic, adjudicator, guess_propensity="often")
+    report = critique(
+        "THE-DIGEST", {"model-a": critic, "model-b": critic}, adjudicator,
+        guess_propensity="often",
+    )
 
-    # one critic call per lens, each carrying the digest and its lens instruction
-    assert len(critic_prompts) == len(LENSES)
+    # every model critiques through every lens, each prompt carrying the digest
+    assert len(critic_prompts) == 2 * len(LENSES)
     assert all("THE-DIGEST" in p for p in critic_prompts)
     assert {lens for lens in LENSES if any(lens in p for p in critic_prompts)} == set(LENSES)
 
-    # findings parsed and tagged with their lens
-    assert len(report.findings) == len(LENSES)
-    assert sorted(f.lens for f in report.findings) == sorted(LENSES)
+    # findings parsed and tagged with lens + proposing model
+    assert len(report.findings) == 2 * len(LENSES)
+    assert sorted({f.lens for f in report.findings}) == sorted(LENSES)
+    assert {f.model for f in report.findings} == {"model-a", "model-b"}
     assert report.findings[0].severity == 3
 
     # adjudicator saw the findings, the digest, and the propensity
@@ -68,7 +72,7 @@ def test_no_findings_skips_adjudicator():
     def boom(prompt: str) -> str:
         raise AssertionError("adjudicator must not run")
 
-    report = critique("d", empty_critic, boom)
+    report = critique("d", {"m": empty_critic}, boom)
     assert report.findings == [] and report.verdicts == [] and report.inbox_markdown == ""
 
 
@@ -87,7 +91,16 @@ def test_malformed_critic_output_raises():
         return "```json\n[{broken\n```"
 
     with pytest.raises(json.JSONDecodeError):
-        critique("d", bad_critic, bad_critic)
+        critique("d", {"m": bad_critic}, bad_critic)
+
+
+def test_smartest():
+    from hive.model_intel import smartest
+
+    assert smartest(["composer-2.5", "gpt-5.5"]) == "gpt-5.5"
+    assert smartest(["composer-2.5"]) == "composer-2.5"
+    with pytest.raises(KeyError):
+        smartest(["unknown-model-9000"])
 
 
 def test_report_roundtrips_as_model():

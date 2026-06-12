@@ -4,9 +4,12 @@ import { ago, api, countdown, money, usePoll } from "../api";
 
 function HumanTasks() {
   const { data, refresh } = usePoll(() => api.humanTasks(), []);
+  const { data: projects } = usePoll(() => api.projects(), [], 30000);
   if (!data) return null;
   const open = data.filter((t) => t.status === "open");
   const done = data.filter((t) => t.status === "done");
+  const scopeTag = (projectId: string) =>
+    projectId === "" ? "org-wide" : (projects?.find((p) => p.id === projectId)?.name ?? projectId);
   return (
     <section className="human-tasks">
       <h2 className="col-title">
@@ -18,6 +21,7 @@ function HumanTasks() {
         <article key={t.id} className="todo-card">
           <header>
             <h3>{t.title}</h3>
+            <span className="chip">{scopeTag(t.project_id)}</span>
             <span className="muted">{ago(t.created_at)}</span>
           </header>
           <div className="md" dangerouslySetInnerHTML={{ __html: marked.parse(t.instructions) as string }} />
