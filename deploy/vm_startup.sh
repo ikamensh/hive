@@ -68,6 +68,13 @@ git config --global user.name "hive-bot"
 git config --global user.email "hive-bot@users.noreply.github.com"
 git config --global credential.helper '!gh auth git-credential'
 
+# --- agent CLI auth/config for the runner ---
+mkdir -p /root/.gemini
+cat > /root/.gemini/settings.json <<'EOF'
+{"security": {"folderTrust": {"enabled": false}}}
+EOF
+printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key || true
+
 # --- control plane (docker compose) ---
 cd /opt/hive
 docker compose -f deploy/compose.yaml up -d --build
