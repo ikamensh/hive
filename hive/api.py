@@ -58,6 +58,8 @@ class ProjectCreate(BaseModel):
     name: str
     spec_repo: str
     member_repos: list[str] = []
+    mission: str = ""
+    iteration_goal: str = ""
     mode: Mode = Mode.build
     autonomy: Autonomy = Autonomy.direct_push
     guess_propensity: GuessPropensity = GuessPropensity.sometimes
@@ -140,8 +142,21 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
 
     @app.post("/api/projects")
     def create_project(body: ProjectCreate):
-        project = store.put(Project(**body.model_dump()))
-        supervisor.wake(project.id, "Project created. Plan the opening workstreams.")
+        project = store.put(Project(**body.model_dump(exclude={"mission", "iteration_goal"})))
+        mission = body.mission.strip()
+        iteration_goal = body.iteration_goal.strip()
+        if mission or iteration_goal:
+            event = (
+                "Project created with an initial brief from the user.\n\n"
+                f"Mission:\n{mission or '(not provided)'}\n\n"
+                f"Initial iteration goal:\n{iteration_goal or '(not provided)'}\n\n"
+                "Your FIRST action must be commit_to_spec: write the mission to mission.md "
+                "and the iteration goal to iteration.md, preserving any existing useful spec "
+                "context. Only then plan the opening workstreams."
+            )
+        else:
+            event = "Project created. Plan the opening workstreams."
+        supervisor.wake(project.id, event)
         return project.model_dump()
 
     @app.get("/api/projects/{project_id}")
@@ -154,6 +169,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
             "workstreams": [w.model_dump() for w in store.list(Workstream, project_id=project_id)],
             "tasks": [t.model_dump() for t in store.list(Task, project_id=project_id)[-50:]],
             "questions": [q.model_dump() for q in store.list(Question, project_id=project_id)],
+            "human_tasks": [t.model_dump() for t in store.list(HumanTask, project_id=project_id)],
         }
 
     @app.patch("/api/projects/{project_id}")

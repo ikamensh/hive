@@ -5,9 +5,11 @@ layer: state is computed purely from facts, dispatch serializes per repo,
 and orphaned tasks fail instead of hanging forever.
 """
 
+import asyncio
 import time
 
 from hive.models import (
+    HumanTask,
     Project,
     ProjectState,
     Resource,
@@ -188,3 +190,21 @@ def test_orphaned_task_fails_when_runner_vanishes():
     sup.fail_orphaned_tasks()
     assert store.get(Task, task.id).status == TaskStatus.failed
     assert sup._events[project.id]  # orchestrator gets woken about it
+
+
+def test_orchestrator_failure_files_project_todo():
+    store = MemoryStore()
+    project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
+
+    def boom(_project_id, _events):
+        raise RuntimeError("No API key was provided")
+
+    sup = Supervisor(store, orchestrate=boom)
+    asyncio.run(sup._orchestrate(project.id, ["Project created"]))
+    tasks = store.list(HumanTask, project_id=project.id)
+    assert len(tasks) == 1
+    assert tasks[0].title == "Fix Hive orchestrator for p"
+    assert "No API key was provided" in tasks[0].instructions
+
+    asyncio.run(sup._orchestrate(project.id, ["Project created again"]))
+    assert len(store.list(HumanTask, project_id=project.id)) == 1

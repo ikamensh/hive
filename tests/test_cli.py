@@ -38,7 +38,8 @@ def test_cli_drives_full_loop(harness):
     client, store = harness
 
     project = cli(client, "create", "demo", "https://example.com/spec.git",
-                  "--member-repos", "https://example.com/app.git")
+                  "--member-repos", "https://example.com/app.git",
+                  "--mission", "Ship the demo", "--iteration-goal", "Build the first loop")
     pid = project["id"]
     assert cli(client, "projects")[0]["id"] == pid
     _pump(client, store)

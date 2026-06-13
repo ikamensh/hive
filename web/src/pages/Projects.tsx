@@ -50,6 +50,8 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("");
   const [specRepo, setSpecRepo] = useState("");
   const [memberRepos, setMemberRepos] = useState("");
+  const [mission, setMission] = useState("");
+  const [iterationGoal, setIterationGoal] = useState("");
   const [mode, setMode] = useState<Mode>("build");
   const [autonomy, setAutonomy] = useState<Autonomy>("direct_push");
   const [guess, setGuess] = useState<GuessPropensity>("sometimes");
@@ -68,6 +70,8 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
           .split("\n")
           .map((s) => s.trim())
           .filter(Boolean),
+        mission: mission.trim(),
+        iteration_goal: iterationGoal.trim(),
         mode,
         autonomy,
         guess_propensity: guess,
@@ -99,6 +103,26 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
         <label>
           member repos (one per line)
           <textarea value={memberRepos} onChange={(e) => setMemberRepos(e.target.value)} rows={3} />
+        </label>
+        <label>
+          mission
+          <textarea
+            value={mission}
+            onChange={(e) => setMission(e.target.value)}
+            rows={3}
+            required
+            placeholder="What should Hive understand about this project?"
+          />
+        </label>
+        <label>
+          first iteration goal
+          <textarea
+            value={iterationGoal}
+            onChange={(e) => setIterationGoal(e.target.value)}
+            rows={3}
+            required
+            placeholder="What should agents accomplish first?"
+          />
         </label>
         <div className="dial-grid">
           <label>
@@ -133,8 +157,9 @@ export default function Projects() {
   const [showNew, setShowNew] = useState(false);
 
   // Soonest backend cooldown to expire, shown on blocked_resources badges.
+  const now = Date.now() / 1000;
   const cooldowns = (data?.resources.resources ?? [])
-    .filter((r) => !r.available)
+    .filter((r) => !r.available && r.cooldown_until > now)
     .map((r) => r.cooldown_until);
   const cooldownHint = cooldowns.length ? countdown(Math.min(...cooldowns)) : undefined;
 

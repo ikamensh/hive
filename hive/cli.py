@@ -26,6 +26,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("name")
     p.add_argument("spec_repo")
     p.add_argument("--member-repos", default="", help="comma-separated git URLs")
+    p.add_argument("--mission", default="", help="initial mission to write into the spec repo")
+    p.add_argument("--iteration-goal", default="", help="first iteration goal to write into the spec repo")
     p.add_argument("--mode", default="build")
     p.add_argument("--autonomy", default="direct_push")
     p.add_argument("--guess-propensity", default="sometimes")
@@ -110,7 +112,8 @@ def run(args: argparse.Namespace, client) -> dict | list:
     elif c == "create":
         r = client.post("/api/projects", json={
             "name": args.name, "spec_repo": args.spec_repo,
-            "member_repos": _csv(args.member_repos), "mode": args.mode,
+            "member_repos": _csv(args.member_repos), "mission": args.mission,
+            "iteration_goal": args.iteration_goal, "mode": args.mode,
             "autonomy": args.autonomy, "guess_propensity": args.guess_propensity,
         })
     elif c == "show":

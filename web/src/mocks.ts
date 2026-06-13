@@ -236,7 +236,12 @@ export const api = {
   createProject: async (body: ProjectCreate): Promise<Project> => {
     const p: Project = {
       id: `p-${Math.random().toString(36).slice(2, 8)}`,
-      ...body,
+      name: body.name,
+      spec_repo: body.spec_repo,
+      member_repos: body.member_repos,
+      mode: body.mode,
+      autonomy: body.autonomy,
+      guess_propensity: body.guess_propensity,
       prod_deploys: false,
       paused: false,
       daily_budget_usd: 0,
@@ -257,6 +262,7 @@ export const api = {
       workstreams: workstreams.filter((w) => w.project_id === id),
       tasks: tasks.filter((t) => t.project_id === id),
       questions: questions.filter((q) => q.project_id === id),
+      human_tasks: humanTasks.filter((t) => t.project_id === id),
     });
   },
 
@@ -347,6 +353,16 @@ const humanTasks: HumanTask[] = [
       "Run on your laptop:\n\n```\ngcloud compute ssh hive-vm -- -L 1455:localhost:1455\nsudo HOME=/root codex login\n```\n\nOpen the printed URL in your local browser.",
     status: "open",
     created_at: now - 3600,
+    done_at: 0,
+  },
+  {
+    id: "ht2",
+    project_id: "p-probe",
+    title: "Fix Hive orchestrator for probe",
+    instructions:
+      "The supervisor tried to wake the LLM orchestrator, but the invocation failed before it could plan work.\n\n```\nValueError: No API key was provided\n```",
+    status: "open",
+    created_at: now - 1200,
     done_at: 0,
   },
 ];

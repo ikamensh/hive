@@ -15,7 +15,7 @@ from hive.agent_probe import PROBE_MARKER
 from hive.blobstore import LocalBlobStore
 from hive.config import Config
 from hive.models import HumanTask, Project, Question, Resource, Task, TaskKind, TaskStatus, Workstream
-from hive.orchestrator import Tools
+from hive.orchestrator import Orchestrator, Tools
 from hive.store import MemoryStore
 from hive.supervisor import Supervisor
 
@@ -123,6 +123,39 @@ def test_full_loop(harness):
     assert resources["resources"][0]["total_cost_usd"] == 0.5
 
 
+def test_create_project_brief_wakes_orchestrator(harness):
+    client, store, orch = harness
+
+    project = client.post(
+        "/api/projects",
+        json={
+            "name": "briefed",
+            "spec_repo": "https://example.com/spec.git",
+            "mission": "Make local Hive setup dependable.",
+            "iteration_goal": "Prove agents can register and run a probe.",
+        },
+    ).json()
+    _pump(client, store)
+
+    event = orch.invocations[0][0]
+    assert "Make local Hive setup dependable" in event
+    assert "Prove agents can register" in event
+    assert "commit_to_spec" in event
+    assert store.get(Project, project["id"]).name == "briefed"
+
+
+def test_orchestrator_requires_api_key_before_client(tmp_path):
+    store = MemoryStore()
+    project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
+    config = Config(
+        gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
+        orch_model="gemini-3-flash-preview", runner_token="test-token", data_dir=tmp_path,
+    )
+    orch = Orchestrator(store, LocalBlobStore(tmp_path / "blobs"), config)
+    with pytest.raises(ValueError, match="GEMINI_API_KEY"):
+        orch._generate(project, [], "event", Tools(store, project, spec=None))
+
+
 def test_human_task_tool_and_api(harness):
     client, store, _orch = harness
     project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
@@ -141,6 +174,8 @@ def test_human_task_tool_and_api(harness):
 
     assert client.post(f"/api/human-tasks/{task_id}/done").json()["status"] == "done"
     assert "Log in codex" not in tools.snapshot()  # only open todos are shown
+    detail = client.get(f"/api/projects/{other.id}").json()
+    assert detail["human_tasks"][0]["title"] == "Grant repo access"
 
 
 def test_rate_limited_result_sets_cooldown(harness):

@@ -76,6 +76,7 @@ export interface ProjectDetail {
   workstreams: Workstream[];
   tasks: Task[];
   questions: Question[];
+  human_tasks: HumanTask[];
 }
 
 export interface RunnerInfo {
@@ -127,6 +128,8 @@ export interface ProjectCreate {
   name: string;
   spec_repo: string;
   member_repos: string[];
+  mission: string;
+  iteration_goal: string;
   mode: Mode;
   autonomy: Autonomy;
   guess_propensity: GuessPropensity;

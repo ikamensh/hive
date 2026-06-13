@@ -18,6 +18,8 @@ from collections import defaultdict
 from typing import Callable
 
 from hive.models import (
+    HumanTask,
+    HumanTaskStatus,
     Project,
     ProjectState,
     Resource,
@@ -259,8 +261,40 @@ class Supervisor:
     async def _orchestrate(self, project_id: str, events: list[str]) -> None:
         try:
             await asyncio.to_thread(self.orchestrate, project_id, events)
-        except Exception:
+        except Exception as exc:
             log.exception("orchestrator invocation failed for %s", project_id)
+            self._file_orchestrator_failure(project_id, events, exc)
         finally:
             self._busy.discard(project_id)
             self._wakeup.set()
+
+    def _file_orchestrator_failure(self, project_id: str, events: list[str], exc: Exception) -> None:
+        project = self.store.get(Project, project_id)
+        project_name = project.name if project else project_id
+        title = f"Fix Hive orchestrator for {project_name}"
+        already_open = any(
+            task.status == HumanTaskStatus.open
+            and task.project_id == project_id
+            and task.title == title
+            for task in self.store.list(HumanTask)
+        )
+        if already_open:
+            return
+        detail = f"{type(exc).__name__}: {exc}"
+        hint = ""
+        if "api key" in detail.lower():
+            hint = "\n\nThis often means `GEMINI_API_KEY` or the configured orchestrator credential is missing."
+        self.store.put(
+            HumanTask(
+                project_id=project_id,
+                title=title,
+                instructions=(
+                    "The supervisor tried to wake the LLM orchestrator, but the invocation failed before it "
+                    "could plan work.\n\n"
+                    f"Recent event(s):\n\n```\n{chr(10).join(events)[:1500]}\n```\n\n"
+                    f"Error:\n\n```\n{detail[:1500]}\n```"
+                    f"{hint}\n\n"
+                    "Fix the orchestrator configuration, then mark this todo done so Hive re-evaluates the project."
+                ),
+            )
+        )

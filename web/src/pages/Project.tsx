@@ -9,7 +9,7 @@ import {
   SegPicker,
   StateBadge,
 } from "../components/shared";
-import type { Project, ProjectPatch, Question, Task, Workstream } from "../types";
+import type { HumanTask, Project, ProjectPatch, Question, Task, Workstream } from "../types";
 
 function TogglesBar({ project, onPatch }: { project: Project; onPatch: (p: ProjectPatch) => void }) {
   return (
@@ -153,6 +153,34 @@ function AnsweredQuestion({ q }: { q: Question }) {
   );
 }
 
+function HumanTaskCard({ task, onDone }: { task: HumanTask; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const done = async () => {
+    setBusy(true);
+    try {
+      await api.completeHumanTask(task.id);
+      onDone();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <article className="todo-card project-todo reveal">
+      <header>
+        <h3>{task.title}</h3>
+        <span className="muted">{ago(task.created_at)}</span>
+      </header>
+      <Markdown text={task.instructions} />
+      <div className="todo-actions">
+        <button onClick={done} disabled={busy}>
+          {busy ? "marking…" : "mark done"}
+        </button>
+      </div>
+    </article>
+  );
+}
+
 function FeedbackButtons({ projectId, targetId }: { projectId: string; targetId: string }) {
   const [verdict, setVerdict] = useState<"up" | "down" | null>(null);
   const [comment, setComment] = useState("");
@@ -249,9 +277,11 @@ export default function ProjectPage() {
     return <div className="page">{failed ? <p className="muted">project unreachable</p> : <p className="muted">loading…</p>}</div>;
   }
 
-  const { project, workstreams, tasks, questions } = data;
+  const { project, workstreams, tasks, questions, human_tasks } = data;
   const openQs = questions.filter((q) => q.status === "open").sort((a, b) => b.created_at - a.created_at);
   const answeredQs = questions.filter((q) => q.status === "answered").sort((a, b) => b.answered_at - a.answered_at);
+  const openTodos = human_tasks.filter((t) => t.status === "open").sort((a, b) => b.created_at - a.created_at);
+  const inboxCount = openQs.length + openTodos.length;
   const sortedTasks = [...tasks].sort((a, b) => b.created_at - a.created_at);
   const wsOrder = { active: 0, parked: 1, done: 2 };
   const sortedWs = [...workstreams].sort((a, b) => wsOrder[a.status] - wsOrder[b.status]);
@@ -287,9 +317,12 @@ export default function ProjectPage() {
 
         <section className="col col-inbox">
           <h2 className="col-title">
-            inbox <span className="col-count">{openQs.length}</span>
+            inbox <span className="col-count">{inboxCount}</span>
           </h2>
-          {openQs.length === 0 && <p className="muted">no open questions — the hive is unblocked</p>}
+          {inboxCount === 0 && <p className="muted">no open questions or todos — the hive is unblocked</p>}
+          {openTodos.map((t) => (
+            <HumanTaskCard key={t.id} task={t} onDone={refresh} />
+          ))}
           {openQs.map((q) => (
             <QuestionCard key={q.id} q={q} onAnswered={refresh} />
           ))}

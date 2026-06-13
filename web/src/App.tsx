@@ -6,17 +6,23 @@ import type { ProjectDetail, ResourcesPayload } from "./types";
 export interface Overview {
   details: ProjectDetail[];
   openQuestions: number;
+  openTodos: number;
   resources: ResourcesPayload;
 }
 
 async function fetchOverview(): Promise<Overview> {
-  const [projects, resources] = await Promise.all([api.projects(), api.resources()]);
+  const [projects, resources, humanTasks] = await Promise.all([
+    api.projects(),
+    api.resources(),
+    api.humanTasks(),
+  ]);
   const details = await Promise.all(projects.map((p) => api.project(p.id)));
   const openQuestions = details.reduce(
     (n, d) => n + d.questions.filter((q) => q.status === "open").length,
     0,
   );
-  return { details, openQuestions, resources };
+  const openTodos = humanTasks.filter((t) => t.status === "open").length;
+  return { details, openQuestions, openTodos, resources };
 }
 
 export function useOverview() {
@@ -27,6 +33,8 @@ export default function App() {
   const poll = usePoll(fetchOverview, []);
   const { theme, toggle } = useTheme();
   const open = poll.data?.openQuestions ?? 0;
+  const todos = poll.data?.openTodos ?? 0;
+  const attention = open + todos;
 
   return (
     <div className="shell">
@@ -76,9 +84,12 @@ export default function App() {
             </svg>
           )}
         </button>
-        <div className={`q-counter ${open > 0 ? "hot" : ""}`} title="open questions across all projects">
-          <span className="q-num">{poll.data ? open : "–"}</span>
-          <span className="q-label">open questions</span>
+        <div
+          className={`q-counter ${attention > 0 ? "hot" : ""}`}
+          title={`${open} open questions, ${todos} human todos`}
+        >
+          <span className="q-num">{poll.data ? attention : "–"}</span>
+          <span className="q-label">need attention</span>
         </div>
       </header>
 

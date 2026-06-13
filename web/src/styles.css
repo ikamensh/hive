@@ -1167,5 +1167,9 @@ textarea:focus {
 .todo-card header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.4rem; }
 .todo-card h3 { margin: 0; font-size: 1rem; }
 .todo-card .md pre { overflow-x: auto; padding: 0.6rem 0.8rem; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); }
+.project-todo { border-color: #e8a93d3a; border-radius: 6px; margin-bottom: 14px; }
+.project-todo header { gap: 10px; }
+.project-todo h3 { font-size: 0.98rem; line-height: 1.3; }
+.todo-actions { display: flex; justify-content: flex-end; margin-top: 0.7rem; }
 .sub-add { display: flex; gap: 0.5rem; margin-top: 0.7rem; flex-wrap: wrap; }
 .sub-add input { flex: 1 1 180px; }

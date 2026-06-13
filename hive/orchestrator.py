@@ -398,6 +398,9 @@ class Orchestrator:
         from google import genai
         from google.genai import types
 
+        if not self.config.gemini_api_key.strip():
+            raise ValueError("GEMINI_API_KEY is required for the Hive orchestrator.")
+
         base_prompt, _version = load_prompt("orchestrator")
         org_context = self.store.get_org_context()
         system = base_prompt + (f"\n\nORG CONTEXT:\n{org_context}" if org_context else "")
