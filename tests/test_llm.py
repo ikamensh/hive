@@ -4,7 +4,7 @@ adapter's translation, all without a network or real provider call."""
 import pytest
 
 from hive.config import Config
-from hive.llm import Completion, ToolCall, ToolLoop, ToolResult, ToolSet, build_adapter
+from hive.llm import Completion, ToolCall, ToolLoop, ToolSet, build_adapter
 from hive.llm.gemini import GeminiAdapter
 
 

@@ -166,15 +166,27 @@ class Supervisor:
                 continue
             for runner in runners:
                 if task.backend in runner.backends and (runner.id, task.backend) in resources:
-                    task.status = TaskStatus.running
-                    task.runner_id = runner.id
-                    task.started_at = time.time()
-                    self.store.put(task)
-                    busy_repos.add(task.repo)
-                    dispatched += 1
-                    log.info("dispatched task %s to runner %s", task.id, runner.name)
-                    break
+                    if self._claim(task.id, runner):
+                        busy_repos.add(task.repo)
+                        dispatched += 1
+                        log.info("dispatched task %s to runner %s", task.id, runner.name)
+                    break  # this task is decided (claimed, or taken by someone else)
         return dispatched
+
+    def _claim(self, task_id: str, runner: Runner) -> bool:
+        """Atomically move a still-pending task to running on this runner. Loses
+        the race gracefully if it was cancelled or claimed concurrently."""
+        claimed: list[bool] = []
+
+        def claim(task: Task) -> None:
+            if task.status == TaskStatus.pending:
+                task.status = TaskStatus.running
+                task.runner_id = runner.id
+                task.started_at = time.time()
+                claimed.append(True)
+
+        self.store.update(Task, task_id, claim)
+        return bool(claimed)
 
     def fail_orphaned_tasks(self) -> None:
         """Tasks running on runners that vanished come back as failures."""
@@ -182,12 +194,20 @@ class Supervisor:
         for task in self.store.list(Task, status=TaskStatus.running):
             runner = runners.get(task.runner_id)
             offline_s = time.time() - runner.last_seen if runner else float("inf")
-            if offline_s > RUNNER_OFFLINE_TASK_FAIL_S:
-                task.status = TaskStatus.failed
-                task.is_error = True
-                task.result_text = f"Runner {task.runner_id} went offline mid-task."
-                task.finished_at = time.time()
-                self.store.put(task)
+            if offline_s <= RUNNER_OFFLINE_TASK_FAIL_S:
+                continue
+            failed: list[bool] = []
+
+            def fail(t: Task) -> None:
+                if t.status == TaskStatus.running:  # not already finished by a late result
+                    t.status = TaskStatus.failed
+                    t.is_error = True
+                    t.result_text = f"Runner {t.runner_id} went offline mid-task."
+                    t.finished_at = time.time()
+                    failed.append(True)
+
+            self.store.update(Task, task.id, fail)
+            if failed:
                 self.wake(task.project_id, f"Task {task.id} failed: runner went offline.")
 
     # -- loop -----------------------------------------------------------------

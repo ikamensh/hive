@@ -232,7 +232,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         return {
             "project": project.model_dump(),
             "workstreams": [w.model_dump() for w in store.list(Workstream, project_id=project_id)],
-            "tasks": [t.model_dump() for t in store.list(Task, project_id=project_id)[-50:]],
+            "tasks": [t.model_dump() for t in store.list(Task, project_id=project_id, limit=50)],
             "questions": [q.model_dump() for q in store.list(Question, project_id=project_id)],
             "human_tasks": [t.model_dump() for t in store.list(HumanTask, project_id=project_id)],
         }
@@ -479,11 +479,13 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         if body.boot:
             # A booting daemon executes nothing: whatever was in flight on this
             # runner died with the previous process — requeue it.
-            for task in store.list(Task, status=TaskStatus.running, runner_id=runner.id):
+            def requeue(task: Task) -> None:
                 task.status = TaskStatus.pending
                 task.runner_id = ""
                 task.delivered = False
-                store.put(task)
+
+            for task in store.list(Task, status=TaskStatus.running, runner_id=runner.id):
+                store.update(Task, task.id, requeue)
                 log.info("requeued task %s after runner %s reboot", task.id, runner.name)
         return {"runner_id": runner.id}
 
@@ -507,24 +509,25 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
 
     @app.post("/api/tasks/{task_id}/result", dependencies=[Depends(runner_auth)])
     def task_result(task_id: str, body: TaskResult):
-        task = store.get(Task, task_id)
-        if not task:
-            raise HTTPException(404)
-        if body.cancelled:
-            task.status = TaskStatus.cancelled
-        else:
-            task.status = TaskStatus.failed if body.is_error else TaskStatus.done
-        if task.kind == TaskKind.verify and not body.cancelled:
-            task.verdict = parse_verdict(body.text)
-        task.result_text = body.text
-        task.is_error = body.is_error
-        task.cost_usd = body.cost_usd
-        task.input_tokens = body.input_tokens
-        task.output_tokens = body.output_tokens
-        task.finished_at = time.time()
-        store.put(task)
+        def record(task: Task) -> None:
+            if body.cancelled:
+                task.status = TaskStatus.cancelled
+            else:
+                task.status = TaskStatus.failed if body.is_error else TaskStatus.done
+            if task.kind == TaskKind.verify and not body.cancelled:
+                task.verdict = parse_verdict(body.text)
+            task.result_text = body.text
+            task.is_error = body.is_error
+            task.cost_usd = body.cost_usd
+            task.input_tokens = body.input_tokens
+            task.output_tokens = body.output_tokens
+            task.finished_at = time.time()
 
-        for resource in store.list(Resource, runner_id=task.runner_id, backend=task.backend):
+        task = store.update(Task, task_id, record)
+        if task is None:
+            raise HTTPException(404)
+
+        def account(resource: Resource) -> None:
             resource.total_tasks += 1
             resource.total_cost_usd += body.cost_usd
             if task.kind == TaskKind.probe and resource.last_probe_task_id == task.id:
@@ -538,7 +541,9 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
                     resource.usability_status = ResourceUsability.usable
             if body.resource_exhausted:
                 resource.cooldown_until = time.time() + RATE_LIMIT_COOLDOWN_S
-            store.put(resource)
+
+        for resource in store.list(Resource, runner_id=task.runner_id, backend=task.backend):
+            store.update(Resource, resource.id, account)
 
         if task.kind == TaskKind.probe:
             if body.is_error and HUMAN_FIX_PATTERNS.search(body.text):

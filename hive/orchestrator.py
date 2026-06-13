@@ -280,8 +280,7 @@ class Tools:
                 line += f" (parked: {ws.parked_reason})"
             ws_lines.append(line)
         task_lines = []
-        tasks = self.store.list(Task, project_id=self.project.id)
-        for t in tasks[-15:]:
+        for t in self.store.list(Task, project_id=self.project.id, limit=15):
             line = f"- [{t.status}] {t.kind} task {t.id} ws={t.workstream_id} repo={t.repo} backend={t.backend}"
             if t.branch:
                 line += f" branch={t.branch}"
@@ -292,7 +291,7 @@ class Tools:
             task_lines.append(line)
         q_lines = [
             f"- [{q.status}] {q.id}: {q.text[:500]}" + (f"\n  answer: {q.answer}" if q.answer else "")
-            for q in self.store.list(Question, project_id=self.project.id)[-10:]
+            for q in self.store.list(Question, project_id=self.project.id, limit=10)
         ]
         runner_lines = [
             f"- {r.name}: backends={','.join(r.backends)} {'online' if r.online() else 'OFFLINE'}"
@@ -318,7 +317,7 @@ class Tools:
         ]
         feedback_lines = [
             f"- {f.verdict} on {f.target_id}: {f.comment}"
-            for f in self.store.list(Feedback, project_id=self.project.id)[-5:]
+            for f in self.store.list(Feedback, project_id=self.project.id, limit=5)
         ]
         p = self.project
         return "\n".join(
