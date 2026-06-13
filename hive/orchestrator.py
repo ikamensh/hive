@@ -20,6 +20,7 @@ from hive.models import (
     HumanTaskStatus,
     Project,
     Question,
+    Resource,
     Runner,
     Subscription,
     Task,
@@ -295,6 +296,16 @@ class Tools:
             f"- {r.name}: backends={','.join(r.backends)} {'online' if r.online() else 'OFFLINE'}"
             for r in self.store.list(Runner)
         ]
+        runners_by_id = {r.id: r for r in self.store.list(Runner)}
+        resource_lines = []
+        for res in self.store.list(Resource):
+            runner = runners_by_id.get(res.runner_id)
+            runner_name = runner.name if runner else res.runner_id
+            cooldown = f", cooldown_until={res.cooldown_until:.0f}" if res.cooldown_until else ""
+            resource_lines.append(
+                f"- {runner_name}/{res.backend}: usability={res.usability_status}, "
+                f"available={res.available()}{cooldown}"
+            )
         todo_lines = [
             f"- {t.id} [{'org-wide' if not t.project_id else 'this project'}]: {t.title}"
             for t in self.store.list(HumanTask, status=HumanTaskStatus.open)
@@ -326,6 +337,9 @@ class Tools:
                 "",
                 "RUNNERS:",
                 *(runner_lines or ["(none online — tasks will wait)"]),
+                "",
+                "BACKEND RESOURCES:",
+                *(resource_lines or ["(none registered — tasks will wait)"]),
                 "",
                 "OPEN HUMAN TODOS (yours + org-wide):",
                 *(todo_lines or ["(none)"]),

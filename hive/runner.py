@@ -11,11 +11,14 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
 import httpx
+
+from hive.agent_probe import PROBE_MARKER, SUPPORTED_BACKENDS
 
 HIVE_URL = os.environ.get("HIVE_URL", "http://localhost:8000")
 HIVE_BASIC_AUTH = os.environ.get("HIVE_BASIC_AUTH", "")  # "user:pass" when behind Caddy
@@ -36,8 +39,7 @@ EXHAUSTED_PATTERNS = re.compile(
 def detect_backends() -> list[str]:
     from kodo.factory import available_backends
 
-    ours = ("claude", "cursor", "codex", "gemini-cli")
-    return [name for name, ok in available_backends().items() if ok and name in ours]
+    return [name for name, ok in available_backends().items() if ok and name in SUPPORTED_BACKENDS]
 
 
 def make_session(backend: str, model: str):
@@ -151,23 +153,72 @@ def execute(task: dict, headers: dict, auth) -> dict:
     if cancelled.is_set():
         return {"text": "Task cancelled by operator.", "cancelled": True}
     query = result.query
+    text = result.text
+    is_error = result.is_error
+    if task["kind"] == "probe":
+        text, is_error = validate_probe_result(project_dir, text, is_error)
     return {
-        "text": result.text,
-        "is_error": result.is_error,
+        "text": text,
+        "is_error": is_error,
         "cost_usd": query.cost_usd or 0.0,
         "input_tokens": query.input_tokens or 0,
         "output_tokens": query.output_tokens or 0,
-        "resource_exhausted": bool(result.is_error and EXHAUSTED_PATTERNS.search(result.text)),
+        "resource_exhausted": bool(is_error and EXHAUSTED_PATTERNS.search(text)),
     }
 
 
-def main() -> None:
+def validate_probe_result(project_dir: Path, text: str, is_error: bool) -> tuple[str, bool]:
+    diagnostics = []
+    if PROBE_MARKER not in text:
+        diagnostics.append(f"probe marker {PROBE_MARKER!r} was not found in the agent reply")
+    dirty = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout.strip()
+    if dirty:
+        diagnostics.append(f"probe left repository changes:\n{dirty}")
+    if diagnostics:
+        return f"{text}\n\nHIVE PROBE FAILED:\n" + "\n".join(f"- {d}" for d in diagnostics), True
+    if not is_error:
+        text = f"{text}\n\nHIVE PROBE PASSED: backend replied with {PROBE_MARKER} and left the repo clean."
+    return text, is_error
+
+
+def main(argv: list[str] | None = None) -> None:
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv == ["--list-backends"]:
+        import json
+
+        detected = detect_backends()
+        print(
+            json.dumps(
+                {
+                    "supported": list(SUPPORTED_BACKENDS),
+                    "detected": detected,
+                    "message": (
+                        "supported agents detected"
+                        if detected
+                        else "no supported agents found; install or log in to claude, cursor, codex, or gemini-cli"
+                    ),
+                },
+                indent=2,
+            )
+        )
+        return
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     headers = {"X-Hive-Token": RUNNER_TOKEN}
     auth = tuple(HIVE_BASIC_AUTH.split(":", 1)) if HIVE_BASIC_AUTH else None
     client = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=40.0, auth=auth)
 
     backends = detect_backends()
+    if not backends:
+        log.error("no supported agents found; not registering empty runner capacity")
+        return
     runner_id = client.post(
         "/api/runners/register", json={"name": RUNNER_NAME, "backends": backends, "boot": True}
     ).raise_for_status().json()["runner_id"]

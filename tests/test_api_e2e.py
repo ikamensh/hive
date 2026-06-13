@@ -11,9 +11,10 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from hive.agent_probe import PROBE_MARKER
 from hive.blobstore import LocalBlobStore
 from hive.config import Config
-from hive.models import Project, Question, Task, TaskKind, TaskStatus, Workstream
+from hive.models import HumanTask, Project, Question, Resource, Task, TaskKind, TaskStatus, Workstream
 from hive.orchestrator import Tools
 from hive.store import MemoryStore
 from hive.supervisor import Supervisor
@@ -81,11 +82,7 @@ def test_full_loop(harness):
     assert len(detail["tasks"]) == 1
 
     # 2. runner registers and polls — gets the task after dispatch
-    rid = client.post(
-        "/api/runners/register",
-        json={"name": "fake-runner", "backends": ["cursor"]},
-        headers=RUNNER_HEADERS,
-    ).json()["runner_id"]
+    rid = _register_usable_runner(client)
     _pump(client, store)
     task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
     assert task is not None and task["kind"] == "work"
@@ -122,7 +119,7 @@ def test_full_loop(harness):
     assert project["state"] == "idle_goal_complete"
 
     resources = client.get("/api/resources").json()
-    assert resources["resources"][0]["total_tasks"] == 2
+    assert resources["resources"][0]["total_tasks"] == 3
     assert resources["resources"][0]["total_cost_usd"] == 0.5
 
 
@@ -150,11 +147,7 @@ def test_rate_limited_result_sets_cooldown(harness):
     client, store, orch = harness
     client.post("/api/projects", json={"name": "p2", "spec_repo": "https://example.com/s.git"})
     _pump(client, store)
-    rid = client.post(
-        "/api/runners/register",
-        json={"name": "r2", "backends": ["cursor"]},
-        headers=RUNNER_HEADERS,
-    ).json()["runner_id"]
+    rid = _register_usable_runner(client, name="r2")
     _pump(client, store)
     task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
     client.post(
@@ -165,11 +158,49 @@ def test_rate_limited_result_sets_cooldown(harness):
     res = client.get("/api/resources").json()["resources"][0]
     assert not res["available"]
     assert res["cooldown_until"] > time.time()
+    assert res["usability_status"] == "usable"
 
 
 def test_runner_auth_required(harness):
     client, *_ = harness
     assert client.post("/api/runners/register", json={"name": "x", "backends": []}).status_code == 401
+
+
+def test_resource_probe_marks_usable_and_failed(harness):
+    client, store, _orch = harness
+    rid = client.post(
+        "/api/runners/register",
+        json={"name": "probe-runner", "backends": ["cursor"]},
+        headers=RUNNER_HEADERS,
+    ).json()["runner_id"]
+    resource = client.get("/api/resources").json()["resources"][0]
+    assert resource["usability_status"] == "unknown"
+    assert not resource["available"]
+
+    queued = client.post(f"/api/resources/{resource['id']}/probe").json()
+    assert queued["task"]["kind"] == "probe"
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert task["id"] == queued["task"]["id"]
+    client.post(
+        f"/api/tasks/{task['id']}/result",
+        json={"text": PROBE_MARKER},
+        headers=RUNNER_HEADERS,
+    )
+    resource = store.get(Resource, resource["id"])
+    assert resource.usability_status == "usable"
+    assert resource.available()
+
+    queued = client.post(f"/api/resources/{resource.id}/probe").json()
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    client.post(
+        f"/api/tasks/{task['id']}/result",
+        json={"text": "codex login required", "is_error": True},
+        headers=RUNNER_HEADERS,
+    )
+    resource = store.get(Resource, resource.id)
+    assert resource.usability_status == "failed"
+    assert not resource.available()
+    assert store.list(HumanTask)[0].title == "Fix cursor login on probe-runner"
 
 
 def test_cancel_pending_task(harness):
@@ -242,3 +273,21 @@ def _pump(client, store, rounds: int = 4):
         for project in store.list(Project):
             app_supervisor.dispatch(project)
             app_supervisor.refresh_state(project)
+
+
+def _register_usable_runner(client, name: str = "fake-runner", backend: str = "cursor") -> str:
+    rid = client.post(
+        "/api/runners/register",
+        json={"name": name, "backends": [backend]},
+        headers=RUNNER_HEADERS,
+    ).json()["runner_id"]
+    resource = client.get("/api/resources").json()["resources"][-1]
+    queued = client.post(f"/api/resources/{resource['id']}/probe").json()
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert task["id"] == queued["task"]["id"]
+    client.post(
+        f"/api/tasks/{task['id']}/result",
+        json={"text": PROBE_MARKER},
+        headers=RUNNER_HEADERS,
+    )
+    return rid

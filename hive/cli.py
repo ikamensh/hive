@@ -69,7 +69,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("trace", help="print a task's raw kodo JSONL run trace")
     p.add_argument("task_id")
 
+    sub.add_parser("agents", help="list locally detected supported agent backends")
     sub.add_parser("resources", help="runners and backend resources")
+    p = sub.add_parser("probe", help="probe one registered backend resource")
+    p.add_argument("resource_id")
 
     sub.add_parser("subs", help="list subscriptions")
     p = sub.add_parser("sub-add", help="add a subscription")
@@ -142,8 +145,24 @@ def run(args: argparse.Namespace, client) -> dict | list:
         r = client.get(f"/api/tasks/{args.task_id}")
     elif c == "cancel":
         r = client.post(f"/api/tasks/{args.task_id}/cancel")
+    elif c == "agents":
+        from hive.agent_probe import SUPPORTED_BACKENDS
+        from hive.runner import detect_backends
+
+        detected = detect_backends()
+        return {
+            "supported": list(SUPPORTED_BACKENDS),
+            "detected": detected,
+            "message": (
+                "supported agents detected"
+                if detected
+                else "no supported agents found; install or log in to claude, cursor, codex, or gemini-cli"
+            ),
+        }
     elif c == "resources":
         r = client.get("/api/resources")
+    elif c == "probe":
+        r = client.post(f"/api/resources/{args.resource_id}/probe")
     elif c == "subs":
         r = client.get("/api/subscriptions")
     elif c == "sub-add":

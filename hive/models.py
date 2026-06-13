@@ -88,6 +88,7 @@ class TaskStatus(StrEnum):
 class TaskKind(StrEnum):
     work = "work"
     verify = "verify"
+    probe = "probe"
 
 
 class Verdict(StrEnum):
@@ -166,18 +167,29 @@ class Runner(BaseModel):
         return now() - self.last_seen < self.ONLINE_WINDOW_S
 
 
+class ResourceUsability(StrEnum):
+    unknown = "unknown"  # detected but never proven by a probe
+    probing = "probing"
+    usable = "usable"
+    failed = "failed"
+
+
 class Resource(BaseModel):
     """One (runner, backend) capacity unit with observed-usage accounting."""
 
     id: str = Field(default_factory=new_id)
     runner_id: str
     backend: str
+    usability_status: ResourceUsability = ResourceUsability.unknown
+    last_probe_at: float = 0.0
+    last_probe_task_id: str = ""
+    last_probe_text: str = ""
     cooldown_until: float = 0.0  # epoch; >now means exhausted
     total_cost_usd: float = 0.0
     total_tasks: int = 0
 
     def available(self) -> bool:
-        return now() >= self.cooldown_until
+        return self.usability_status == ResourceUsability.usable and now() >= self.cooldown_until
 
 
 class Subscription(BaseModel):

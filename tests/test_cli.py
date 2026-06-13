@@ -7,7 +7,7 @@ CLI can fully replace the UI.
 
 import pytest
 from fastapi.testclient import TestClient
-from test_api_e2e import ScriptedOrchestrator, _pump
+from test_api_e2e import ScriptedOrchestrator, _pump, _register_usable_runner
 
 from hive.cli import build_parser, run
 from hive.config import Config
@@ -47,9 +47,7 @@ def test_cli_drives_full_loop(harness):
     assert len(detail["workstreams"]) == 1 and len(detail["tasks"]) == 1
 
     # fake runner executes work + verify tasks over the real protocol
-    rid = client.post("/api/runners/register",
-                      json={"name": "fake", "backends": ["cursor"]},
-                      headers=RUNNER_HEADERS).json()["runner_id"]
+    rid = _register_usable_runner(client, name="fake")
     for text in ("implemented, tests pass", "VERDICT: ACCEPT"):
         _pump(client, store)
         task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
@@ -69,6 +67,21 @@ def test_cli_drives_full_loop(harness):
     cli(client, "iterate", pid, "now add C")
     _pump(client, store)
     assert not cli(client, "show", pid)["project"]["goal_complete"]
+
+
+def test_cli_agents_and_probe(harness):
+    client, _store = harness
+    agents = cli(client, "agents")
+    assert "cursor" in agents["supported"]
+    assert isinstance(agents["detected"], list)
+
+    rid = client.post("/api/runners/register",
+                      json={"name": "fake", "backends": ["cursor"]},
+                      headers=RUNNER_HEADERS).json()["runner_id"]
+    resource = cli(client, "resources")["resources"][0]
+    queued = cli(client, "probe", resource["id"])
+    assert queued["task"]["kind"] == "probe"
+    assert client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]["id"] == queued["task"]["id"]
 
 
 def test_cli_settings_and_admin(harness):

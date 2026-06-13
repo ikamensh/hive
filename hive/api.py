@@ -10,12 +10,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
+import subprocess
 import time
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+from hive.agent_probe import probe_instructions
 from hive.config import Config
 from hive.models import (
     Autonomy,
@@ -28,6 +32,7 @@ from hive.models import (
     Question,
     QuestionStatus,
     Resource,
+    ResourceUsability,
     Runner,
     Subscription,
     Task,
@@ -42,6 +47,11 @@ log = logging.getLogger("hive.api")
 
 RUNNER_POLL_WAIT_S = 25.0
 RATE_LIMIT_COOLDOWN_S = 3600.0
+PROBE_REPO_DIR = "agent-probe-repo"
+HUMAN_FIX_PATTERNS = re.compile(
+    r"auth|login|credential|api.?key|not authenticated|forbidden|permission|subscription|billing",
+    re.IGNORECASE,
+)
 
 
 class ProjectCreate(BaseModel):
@@ -89,6 +99,19 @@ class TaskResult(BaseModel):
     output_tokens: int = 0
     resource_exhausted: bool = False  # rate limit / quota detected by runner
     cancelled: bool = False  # runner stopped the task on an operator cancel request
+
+
+def _ensure_probe_repo(data_dir: Path) -> Path:
+    repo = data_dir / PROBE_REPO_DIR
+    repo.mkdir(parents=True, exist_ok=True)
+    if not (repo / ".git").exists():
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, timeout=60)
+        subprocess.run(["git", "config", "user.email", "hive-probe@example.invalid"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Hive Probe"], cwd=repo, check=True)
+        (repo / "README.md").write_text("# Hive agent probe\n\nThis repository is only for backend usability checks.\n")
+        subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, timeout=60)
+        subprocess.run(["git", "commit", "-m", "Initial probe repo"], cwd=repo, check=True, timeout=60)
+    return repo
 
 
 def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> FastAPI:
@@ -249,6 +272,37 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
             ],
         }
 
+    @app.post("/api/resources/{resource_id}/probe")
+    def probe_resource(resource_id: str):
+        resource = store.get(Resource, resource_id)
+        if not resource:
+            raise HTTPException(404)
+        runner = store.get(Runner, resource.runner_id)
+        if not runner or not runner.online():
+            raise HTTPException(409, "runner is offline")
+        if resource.backend not in runner.backends:
+            raise HTTPException(409, "runner no longer advertises this backend")
+
+        repo = _ensure_probe_repo(Path(config.data_dir or "/tmp/hive-data"))
+        task = store.put(
+            Task(
+                project_id="",
+                workstream_id="",
+                repo=str(repo),
+                kind=TaskKind.probe,
+                instructions=probe_instructions(resource.backend),
+                backend=resource.backend,
+                status=TaskStatus.running,
+                runner_id=runner.id,
+            )
+        )
+        resource.usability_status = ResourceUsability.probing
+        resource.last_probe_at = time.time()
+        resource.last_probe_task_id = task.id
+        resource.last_probe_text = "Probe queued."
+        store.put(resource)
+        return {"task": task.model_dump(), "resource": {**resource.model_dump(), "available": resource.available()}}
+
     @app.get("/api/subscriptions")
     def list_subscriptions():
         return [s.model_dump() for s in store.list(Subscription)]
@@ -373,9 +427,39 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         for resource in store.list(Resource, runner_id=task.runner_id, backend=task.backend):
             resource.total_tasks += 1
             resource.total_cost_usd += body.cost_usd
+            if task.kind == TaskKind.probe and resource.last_probe_task_id == task.id:
+                resource.last_probe_at = task.finished_at
+                resource.last_probe_text = body.text[:2000]
+                if body.cancelled:
+                    resource.usability_status = ResourceUsability.unknown
+                elif body.is_error:
+                    resource.usability_status = ResourceUsability.failed
+                else:
+                    resource.usability_status = ResourceUsability.usable
             if body.resource_exhausted:
                 resource.cooldown_until = time.time() + RATE_LIMIT_COOLDOWN_S
             store.put(resource)
+
+        if task.kind == TaskKind.probe:
+            if body.is_error and HUMAN_FIX_PATTERNS.search(body.text):
+                runner = store.get(Runner, task.runner_id)
+                title = f"Fix {task.backend} login on {runner.name if runner else task.runner_id}"
+                already_open = any(
+                    t.status == HumanTaskStatus.open and t.title == title
+                    for t in store.list(HumanTask)
+                )
+                if not already_open:
+                    store.put(
+                        HumanTask(
+                            title=title,
+                            instructions=(
+                                f"Refresh or repair the `{task.backend}` CLI login on runner "
+                                f"`{runner.name if runner else task.runner_id}`, then rerun the resource probe.\n\n"
+                                f"Recent probe output:\n\n```\n{body.text[:1500]}\n```"
+                            ),
+                        )
+                    )
+            return {"ok": True}
 
         outcome = "cancelled" if body.cancelled else ("failed" if body.is_error else "finished")
         verdict_note = (

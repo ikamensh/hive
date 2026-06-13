@@ -11,6 +11,7 @@ from hive.models import (
     Project,
     ProjectState,
     Resource,
+    ResourceUsability,
     Runner,
     Task,
     TaskStatus,
@@ -29,7 +30,8 @@ def seed(store, *, with_runner=True) -> Project:
     project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
     if with_runner:
         runner = store.put(Runner(name="r1", backends=["cursor"]))
-        store.put(Resource(runner_id=runner.id, backend="cursor"))
+        store.put(Resource(runner_id=runner.id, backend="cursor",
+                           usability_status=ResourceUsability.usable))
     return project
 
 
@@ -107,7 +109,8 @@ def test_dispatch_requires_backend_and_resource():
                    instructions="i", backend="claude"))
     sup = make_supervisor(store)
     assert sup.dispatch(project) == 0
-    store.put(Resource(runner_id=runner.id, backend="claude"))
+    store.put(Resource(runner_id=runner.id, backend="claude",
+                       usability_status=ResourceUsability.usable))
     assert sup.dispatch(project) == 1
 
 
@@ -116,6 +119,7 @@ def test_cooldown_resource_not_used():
     project = store.put(Project(name="p", spec_repo="x"))
     runner = store.put(Runner(name="r", backends=["cursor"]))
     store.put(Resource(runner_id=runner.id, backend="cursor",
+                       usability_status=ResourceUsability.usable,
                        cooldown_until=time.time() + 3600))
     ws = store.put(Workstream(project_id=project.id, title="w"))
     store.put(Task(project_id=project.id, workstream_id=ws.id, repo="r", instructions="i"))
@@ -159,11 +163,16 @@ def test_available_backends_tracks_online_and_cooldown():
     store = MemoryStore()
     online = store.put(Runner(name="on", backends=["cursor"]))
     offline = store.put(Runner(name="off", backends=["claude"], last_seen=time.time() - 9999))
-    store.put(Resource(runner_id=online.id, backend="cursor"))
-    store.put(Resource(runner_id=offline.id, backend="claude"))
-    store.put(Resource(runner_id=online.id, backend="codex", cooldown_until=time.time() + 3600))
+    store.put(Resource(runner_id=online.id, backend="cursor",
+                       usability_status=ResourceUsability.usable))
+    store.put(Resource(runner_id=offline.id, backend="claude",
+                       usability_status=ResourceUsability.usable))
+    store.put(Resource(runner_id=online.id, backend="codex",
+                       usability_status=ResourceUsability.usable,
+                       cooldown_until=time.time() + 3600))
+    store.put(Resource(runner_id=online.id, backend="gemini-cli"))
     sup = make_supervisor(store)
-    assert sup.available_backends() == {"cursor"}  # offline + cooled-down excluded
+    assert sup.available_backends() == {"cursor"}  # offline + cooled-down + unprobed excluded
 
 
 def test_orphaned_task_fails_when_runner_vanishes():

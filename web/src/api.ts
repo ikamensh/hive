@@ -40,6 +40,8 @@ const realApi = {
   },
   task: (id: string) => http<Task>(`/api/tasks/${id}`),
   resources: () => http<ResourcesPayload>("/api/resources"),
+  probeResource: (id: string) =>
+    http(`/api/resources/${id}/probe`, { method: "POST" }),
   subscriptions: () => http<Subscription[]>("/api/subscriptions"),
   addSubscription: (provider: string, plan: string, notes: string) =>
     http<Subscription>("/api/subscriptions", {

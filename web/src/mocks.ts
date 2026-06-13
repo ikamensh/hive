@@ -220,10 +220,10 @@ const resourcesPayload: ResourcesPayload = {
     { id: "r-hex2", name: "hex-2", backends: ["cursor", "gemini-cli"], last_seen: now - 60 * 47, online: false },
   ],
   resources: [
-    { id: "res-1", runner_id: "r-hex1", backend: "claude", cooldown_until: 0, total_cost_usd: 214.6, total_tasks: 131, available: true },
-    { id: "res-2", runner_id: "r-hex1", backend: "codex", cooldown_until: 0, total_cost_usd: 88.1, total_tasks: 64, available: true },
-    { id: "res-3", runner_id: "r-hex2", backend: "cursor", cooldown_until: now + 1860, total_cost_usd: 41.9, total_tasks: 23, available: false },
-    { id: "res-4", runner_id: "r-hex2", backend: "gemini-cli", cooldown_until: 0, total_cost_usd: 3.2, total_tasks: 4, available: true },
+    { id: "res-1", runner_id: "r-hex1", backend: "claude", usability_status: "usable", last_probe_at: now - 3600, last_probe_task_id: "probe-1", last_probe_text: "HIVE PROBE PASSED", cooldown_until: 0, total_cost_usd: 214.6, total_tasks: 131, available: true },
+    { id: "res-2", runner_id: "r-hex1", backend: "codex", usability_status: "unknown", last_probe_at: 0, last_probe_task_id: "", last_probe_text: "", cooldown_until: 0, total_cost_usd: 88.1, total_tasks: 64, available: false },
+    { id: "res-3", runner_id: "r-hex2", backend: "cursor", usability_status: "failed", last_probe_at: now - 900, last_probe_task_id: "probe-3", last_probe_text: "not authenticated", cooldown_until: now + 1860, total_cost_usd: 41.9, total_tasks: 23, available: false },
+    { id: "res-4", runner_id: "r-hex2", backend: "gemini-cli", usability_status: "usable", last_probe_at: now - 7200, last_probe_task_id: "probe-4", last_probe_text: "HIVE PROBE PASSED", cooldown_until: 0, total_cost_usd: 3.2, total_tasks: 4, available: true },
   ],
 };
 
@@ -284,6 +284,19 @@ export const api = {
   task: async (id: string): Promise<Task> => structuredClone(tasks.find((t) => t.id === id)!),
 
   resources: async (): Promise<ResourcesPayload> => structuredClone(resourcesPayload),
+  probeResource: async (id: string) => {
+    const res = resourcesPayload.resources.find((r) => r.id === id);
+    if (!res) throw new Error("not found");
+    res.usability_status = "probing";
+    res.last_probe_at = Date.now() / 1000;
+    res.last_probe_task_id = `probe-${Math.random().toString(36).slice(2, 8)}`;
+    res.last_probe_text = "Probe queued.";
+    res.usability_status = "usable";
+    res.available = res.cooldown_until <= Date.now() / 1000;
+    res.total_tasks += 1;
+    res.last_probe_text = "HIVE PROBE PASSED";
+    return structuredClone({ resource: res });
+  },
 
   subscriptions: async (): Promise<Subscription[]> => structuredClone(subscriptions),
 

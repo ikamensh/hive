@@ -174,7 +174,8 @@ function OrgContext() {
 }
 
 export default function Resources() {
-  const { data, failed } = usePoll(() => api.resources(), []);
+  const { data, failed, refresh } = usePoll(() => api.resources(), []);
+  const [probing, setProbing] = useState<string | null>(null);
   // 1s ticker so cooldown countdowns feel live between polls.
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -183,6 +184,17 @@ export default function Resources() {
   }, []);
 
   const runnerName = (id: string) => data?.runners.find((r) => r.id === id)?.name ?? id;
+  const runnerOnline = (id: string) => data?.runners.find((r) => r.id === id)?.online ?? false;
+
+  const probe = async (id: string) => {
+    setProbing(id);
+    try {
+      await api.probeResource(id);
+      await refresh();
+    } finally {
+      setProbing(null);
+    }
+  };
 
   return (
     <div className="page page-resources">
@@ -218,9 +230,11 @@ export default function Resources() {
               <tr>
                 <th>backend</th>
                 <th>runner</th>
+                <th>usability</th>
                 <th>availability</th>
                 <th className="num">tasks</th>
                 <th className="num">total cost</th>
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -229,19 +243,36 @@ export default function Resources() {
                   <td className="mono">{res.backend}</td>
                   <td>{runnerName(res.runner_id)}</td>
                   <td>
+                    <span className={`probe-status probe-${res.usability_status}`} title={res.last_probe_text || "not probed yet"}>
+                      {res.usability_status === "unknown" ? "probe required" : res.usability_status}
+                    </span>
+                    {res.last_probe_at > 0 && <span className="probe-age">{ago(res.last_probe_at)}</span>}
+                  </td>
+                  <td>
                     {res.available ? (
                       <span className="avail ok">available</span>
-                    ) : (
+                    ) : res.cooldown_until > Date.now() / 1000 ? (
                       <span className="avail cool">cooldown {countdown(res.cooldown_until)}</span>
+                    ) : (
+                      <span className="avail wait">not dispatchable</span>
                     )}
                   </td>
                   <td className="num">{res.total_tasks}</td>
                   <td className="num">{money(res.total_cost_usd)}</td>
+                  <td className="num">
+                    <button
+                      className="ghost"
+                      disabled={!runnerOnline(res.runner_id) || res.usability_status === "probing" || probing === res.id}
+                      onClick={() => probe(res.id)}
+                    >
+                      {probing === res.id || res.usability_status === "probing" ? "probing" : "probe"}
+                    </button>
+                  </td>
                 </tr>
               ))}
               {data.resources.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="muted">
+                  <td colSpan={7} className="muted">
                     no resources
                   </td>
                 </tr>

@@ -90,6 +90,10 @@ export interface ResourceInfo {
   id: string;
   runner_id: string;
   backend: string;
+  usability_status: "unknown" | "probing" | "usable" | "failed";
+  last_probe_at: number;
+  last_probe_task_id: string;
+  last_probe_text: string;
   cooldown_until: number;
   total_cost_usd: number;
   total_tasks: number;

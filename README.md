@@ -29,7 +29,9 @@ hive iterate <project_id> "next goal: ..."
 hive set <project_id> --paused true --autonomy pr --daily-budget 25
 hive cancel <task_id>                # dequeue if pending, stop the agent if running
 hive trace <task_id>                 # raw kodo JSONL run trace (pipe into jq / kodo's viewer)
-hive resources | hive subs | hive todos | hive org-context
+hive agents                          # local supported agent CLIs detected on this machine
+hive resources | hive probe <resource_id>
+hive subs | hive todos | hive org-context
 ```
 
 The iteration goal is set through hive (`hive iterate`), which is authoritative; the orchestrator distills it into the spec home's `iteration.md`. Don't hand-edit `iteration.md` via git — that path isn't observed yet (no webhook).
@@ -48,6 +50,17 @@ uv run python -m hive.runner       # defaults already point at localhost:8000
 ```
 
 Omit `HIVE_GCP_PROJECT` for a throwaway in-memory run.
+
+Before sending real project work to a laptop runner, run the basics preflight:
+
+```bash
+uv run python -m hive.runner --list-backends
+uv run python -m hive.runner
+hive resources
+hive probe <resource_id>            # repeat for each backend you want hive to use
+```
+
+Registered backends start as `unknown`; a successful probe marks the resource usable. Failed auth/quota/login probes stay non-dispatchable and surface a human todo when the operator needs to fix the local CLI.
 
 ## Web UI
 
