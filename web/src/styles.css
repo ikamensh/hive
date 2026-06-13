@@ -470,6 +470,10 @@ textarea:focus {
   color: #7fb8e8;
   border-color: #7fb8e833;
 }
+.chip-kind-probe {
+  color: var(--ink-dim);
+  border-color: var(--line);
+}
 
 /* ---- modal ------------------------------------------------------------------- */
 
@@ -872,6 +876,10 @@ textarea:focus {
 .st-pending {
   color: var(--ink-faint);
 }
+.st-cancelled {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
 .task-repo {
   font-size: 12.5px;
   color: var(--ink);
@@ -917,6 +925,74 @@ textarea:focus {
 }
 .task-card.task-failed .task-result {
   border-color: #f0786133;
+}
+
+.trace-panel {
+  margin-top: 10px;
+}
+.trace-toggle {
+  padding: 5px 12px;
+  font-size: 12px;
+}
+.trace-body {
+  margin-top: 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 5px;
+  background: var(--surface-inset);
+  overflow: hidden;
+}
+.trace-tools {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.trace-tools a {
+  color: var(--ink-faint);
+  text-decoration: none;
+}
+.trace-tools a:hover {
+  color: var(--honey);
+}
+.trace-rows {
+  max-height: 240px;
+  overflow: auto;
+}
+.trace-row {
+  display: grid;
+  grid-template-columns: 42px minmax(110px, 160px) minmax(0, 1fr);
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.trace-line {
+  color: var(--ink-faint);
+  text-align: right;
+}
+.trace-event {
+  color: var(--honey);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trace-detail {
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+.trace-raw {
+  margin: 0;
+  max-height: 280px;
+  overflow: auto;
+  border-top: 1px solid var(--line-soft);
+  padding: 10px 12px;
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
 }
 
 /* feedback */

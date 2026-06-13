@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime
 import logging
 import re
 import subprocess
@@ -41,6 +42,7 @@ from hive.models import (
     Workstream,
     parse_verdict,
 )
+from hive.specrepo import SpecRepo
 from hive.supervisor import Supervisor
 
 log = logging.getLogger("hive.api")
@@ -52,6 +54,10 @@ HUMAN_FIX_PATTERNS = re.compile(
     r"auth|login|credential|api.?key|not authenticated|forbidden|permission|subscription|billing",
     re.IGNORECASE,
 )
+
+
+def _iso_utc(epoch: float) -> str:
+    return datetime.datetime.fromtimestamp(epoch, datetime.UTC).isoformat()
 
 
 class ProjectCreate(BaseModel):
@@ -118,6 +124,74 @@ def _ensure_probe_repo(data_dir: Path) -> Path:
 
 def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> FastAPI:
     app = FastAPI(title="hive")
+
+    def can_write_spec_repo(project: Project) -> bool:
+        """Avoid slow surprise network attempts in throwaway/local runs.
+
+        Production has HIVE_GH_TOKEN; tests and local smoke runs often use a
+        filesystem path. Other remotes can still be handled by the orchestrator
+        via commit_to_spec, but the control plane only auto-writes when it has
+        an obvious write path.
+        """
+        url = project.spec_repo
+        return bool(config.gh_token.strip()) or url.startswith("file://") or Path(url).exists()
+
+    def record_answer_input_log(
+        project: Project, question: Question, answer: str, answered_at: float
+    ) -> str:
+        stamp = datetime.datetime.fromtimestamp(answered_at, datetime.UTC)
+        path = f"input-log/{stamp:%Y-%m-%d-%H%M%S}-{question.id}.md"
+        body = "\n".join(
+            [
+                f"# Clarification answer {question.id}",
+                "",
+                f"- Answered: {_iso_utc(answered_at)}",
+                f"- Project: {project.name} ({project.id})",
+                f"- Workstream: {question.workstream_id or 'project-level'}",
+                "",
+                "## Question",
+                "",
+                question.text.strip(),
+                "",
+                "## Answer",
+                "",
+                answer.strip(),
+                "",
+            ]
+        )
+        spec = SpecRepo(
+            project.spec_repo,
+            Path(config.data_dir or "/tmp/hive-data") / "specs",
+            config.gh_token,
+        )
+        sha = spec.commit_files({path: body}, f"Record clarification answer {question.id}")
+        return f"{path} @ {sha[:8]}"
+
+    def file_spec_log_failure(project: Project, question: Question, exc: Exception) -> None:
+        title = f"Repair spec logging for {project.name}"
+        already_open = any(
+            task.status == HumanTaskStatus.open
+            and task.project_id == project.id
+            and task.title == title
+            for task in store.list(HumanTask)
+        )
+        if already_open:
+            return
+        store.put(
+            HumanTask(
+                project_id=project.id,
+                title=title,
+                instructions=(
+                    "Hive saved a clarification answer in the control-plane DB, but could not "
+                    "append the raw answer to the spec repo input log.\n\n"
+                    f"Question: `{question.id}`\n\n"
+                    f"Spec repo: `{project.spec_repo}`\n\n"
+                    f"Error:\n\n```\n{type(exc).__name__}: {str(exc)[:1500]}\n```\n\n"
+                    "Fix spec-repo write access, then ask Hive to distill or replay the answer "
+                    "from the project question history."
+                ),
+            )
+        )
 
     def runner_auth(x_hive_token: str = Header(default="")) -> None:
         if x_hive_token != config.runner_token:
@@ -200,14 +274,33 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         question = store.get(Question, question_id)
         if not question:
             raise HTTPException(404)
+        project = store.get(Project, question.project_id)
+        if not project:
+            raise HTTPException(404, "question project not found")
+        answered_at = time.time()
+        input_log_note = ""
+        if can_write_spec_repo(project):
+            try:
+                input_log_note = (
+                    "Control plane already appended the raw answer to "
+                    f"{record_answer_input_log(project, question, body.answer, answered_at)}.\n"
+                )
+            except Exception as exc:
+                log.warning("failed to append question %s to spec input-log: %s", question.id, exc)
+                file_spec_log_failure(project, question, exc)
+                input_log_note = (
+                    "Control plane could not append the raw answer to input-log automatically; "
+                    "a human todo was filed with the write error.\n"
+                )
         question.status = QuestionStatus.answered
         question.answer = body.answer
-        question.answered_at = time.time()
+        question.answered_at = answered_at
         store.put(question)
         supervisor.wake(
             question.project_id,
             f"User answered question {question.id}.\nQ: {question.text}\nA: {body.answer}\n"
-            "Distill this into the spec repo and continue.",
+            f"{input_log_note}"
+            "Distill this into the wiki/spec and continue.",
         )
         return question.model_dump()
 

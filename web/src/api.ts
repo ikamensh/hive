@@ -23,6 +23,12 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
+async function httpText(path: string, init?: RequestInit): Promise<string> {
+  const res = await fetch(new URL(path, window.location.origin), init);
+  if (!res.ok) throw new Error(`${res.status} on ${path}`);
+  return res.text();
+}
+
 const realApi = {
   projects: () => http<Project[]>("/api/projects"),
   createProject: (body: ProjectCreate) =>
@@ -39,6 +45,7 @@ const realApi = {
     });
   },
   task: (id: string) => http<Task>(`/api/tasks/${id}`),
+  trace: (id: string) => httpText(`/api/tasks/${id}/trace`),
   resources: () => http<ResourcesPayload>("/api/resources"),
   probeResource: (id: string) =>
     http(`/api/resources/${id}/probe`, { method: "POST" }),

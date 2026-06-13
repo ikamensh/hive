@@ -43,18 +43,23 @@ export interface Task {
   project_id: string;
   workstream_id: string;
   repo: string;
-  kind: "work" | "verify";
+  branch: string;
+  kind: "work" | "verify" | "probe";
   instructions: string;
   backend: string;
   model: string;
-  status: "pending" | "running" | "done" | "failed";
+  status: "pending" | "running" | "done" | "failed" | "cancelled";
   runner_id: string;
   delivered: boolean;
+  cancel_requested: boolean;
+  verdict: "none" | "accept" | "reject";
+  trace_blob: string;
   result_text: string;
   is_error: boolean;
   cost_usd: number;
   input_tokens: number;
   output_tokens: number;
+  prompt_versions: Record<string, string>;
   created_at: number;
   started_at: number;
   finished_at: number;
@@ -65,7 +70,7 @@ export interface Question {
   project_id: string;
   workstream_id: string;
   text: string;
-  status: "open" | "answered";
+  status: "open" | "answered" | "dismissed";
   answer: string;
   created_at: number;
   answered_at: number;
@@ -141,6 +146,7 @@ export interface ProjectPatch {
   guess_propensity?: GuessPropensity;
   prod_deploys?: boolean;
   paused?: boolean;
+  daily_budget_usd?: number;
   member_repos?: string[];
   new_iteration_note?: string;
 }

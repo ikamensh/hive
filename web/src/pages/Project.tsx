@@ -223,6 +223,92 @@ function FeedbackButtons({ projectId, targetId }: { projectId: string; targetId:
   );
 }
 
+type TraceRow = {
+  line: number;
+  event: string;
+  detail: string;
+  raw: string;
+};
+
+function traceRows(text: string): TraceRow[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line, index) => {
+      try {
+        const parsed = JSON.parse(line) as Record<string, unknown>;
+        const event = String(parsed.event ?? parsed.type ?? parsed.role ?? "event");
+        const detailKeys = ["cmd", "text", "message", "agent_name", "backend", "exit_code", "cost_usd"];
+        const detail = detailKeys
+          .filter((key) => parsed[key] !== undefined && parsed[key] !== null && parsed[key] !== "")
+          .map((key) => `${key}=${String(parsed[key]).slice(0, 220)}`)
+          .join(" · ");
+        return { line: index + 1, event, detail: detail || JSON.stringify(parsed).slice(0, 320), raw: line };
+      } catch {
+        return { line: index + 1, event: "raw", detail: line.slice(0, 320), raw: line };
+      }
+    });
+}
+
+function TracePanel({ taskId }: { taskId: string }) {
+  const [open, setOpen] = useState(false);
+  const [trace, setTrace] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const toggle = async () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setOpen(true);
+    if (trace !== null) return;
+    setBusy(true);
+    setError("");
+    try {
+      setTrace(await api.trace(taskId));
+    } catch {
+      setError("trace unavailable");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rows = trace ? traceRows(trace).slice(-80) : [];
+  const rawTrace = trace && trace.length > 40000 ? trace.slice(-40000) : trace;
+
+  return (
+    <div className="trace-panel">
+      <button className="ghost trace-toggle" onClick={toggle} disabled={busy}>
+        {open ? "hide trace" : busy ? "loading trace" : "trace"}
+      </button>
+      {open && (
+        <div className="trace-body">
+          <div className="trace-tools">
+            <a href={`/api/tasks/${taskId}/trace`} target="_blank" rel="noreferrer">
+              raw
+            </a>
+          </div>
+          {error && <p className="form-error">{error}</p>}
+          {rows.length > 0 && (
+            <div className="trace-rows">
+              {rows.map((row) => (
+                <div className="trace-row" key={`${row.line}-${row.event}`}>
+                  <span className="trace-line">{row.line}</span>
+                  <span className="trace-event">{row.event}</span>
+                  <span className="trace-detail">{row.detail}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {rawTrace && <pre className="trace-raw">{rawTrace}</pre>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TaskCard({ task, projectId }: { task: Task; projectId: string }) {
   const [open, setOpen] = useState(false);
   const [full, setFull] = useState<Task | null>(null);
@@ -240,6 +326,7 @@ function TaskCard({ task, projectId }: { task: Task; projectId: string }) {
   };
 
   const result = (full ?? task).result_text;
+  const hasTrace = Boolean((full ?? task).trace_blob);
 
   return (
     <article className={`task-card task-${task.status}`}>
@@ -262,6 +349,7 @@ function TaskCard({ task, projectId }: { task: Task; projectId: string }) {
           ) : (
             <p className="muted">no result yet</p>
           )}
+          {hasTrace && <TracePanel taskId={task.id} />}
           <FeedbackButtons projectId={projectId} targetId={task.id} />
         </div>
       )}

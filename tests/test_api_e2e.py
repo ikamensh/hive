@@ -7,6 +7,7 @@ question → answer → goal complete.
 """
 
 import time
+import subprocess
 
 import pytest
 from fastapi.testclient import TestClient
@@ -159,6 +160,48 @@ def test_create_project_brief_wakes_orchestrator(harness):
     assert "Prove agents can register" in event
     assert "commit_to_spec" in event
     assert store.get(Project, project["id"]).name == "briefed"
+
+
+def test_answer_appends_raw_input_log_to_writable_spec_repo(harness, tmp_path):
+    client, store, _orch = harness
+    origin = tmp_path / "spec-origin.git"
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(origin)], check=True)
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "clone", str(origin), str(seed)], check=True, capture_output=True)
+    (seed / "mission.md").write_text("# Mission\nKeep answers durable.\n")
+    subprocess.run(["git", "add", "-A"], cwd=seed, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "seed"],
+        cwd=seed,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "push", "origin", "main"], cwd=seed, check=True, capture_output=True)
+
+    project = store.put(Project(name="durable", spec_repo=str(origin)))
+    question = store.put(Question(project_id=project.id, text="Which storage path should answers use?"))
+
+    assert client.post(
+        f"/api/questions/{question.id}/answer",
+        json={"answer": "Append raw answers to input-log before planning resumes."},
+    ).json()["status"] == "answered"
+
+    files = subprocess.run(
+        ["git", "--git-dir", str(origin), "ls-tree", "-r", "--name-only", "main"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    input_logs = [path for path in files if path.startswith("input-log/")]
+    assert len(input_logs) == 1
+    logged = subprocess.run(
+        ["git", "--git-dir", str(origin), "show", f"main:{input_logs[0]}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "Which storage path" in logged
+    assert "Append raw answers to input-log" in logged
 
 
 def test_orchestrator_requires_api_key_before_client(tmp_path):
