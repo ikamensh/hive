@@ -9,7 +9,10 @@ not idle, something must be running or the orchestrator must be thinking.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
+import os
+import socket
 import time
 from collections import defaultdict
 from typing import Callable
@@ -28,6 +31,15 @@ from hive.models import (
 log = logging.getLogger("hive.supervisor")
 
 RUNNER_OFFLINE_TASK_FAIL_S = 300.0
+LEASE_TTL_S = 60.0  # renewed every tick (15s); a dead leader is superseded within a minute
+
+
+def utc_day_start() -> float:
+    """Epoch seconds for 00:00 UTC today — the daily-budget window boundary."""
+    midnight = datetime.datetime.now(datetime.UTC).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return midnight.timestamp()
 
 
 def compute_state(
@@ -35,7 +47,8 @@ def compute_state(
     workstreams: list[Workstream],
     open_question_count: int,
     tasks: list[Task],
-    any_resource_available: bool,
+    available_backends: set[str],
+    over_budget: bool = False,
 ) -> ProjectState:
     if project.goal_complete:
         return ProjectState.idle_goal_complete
@@ -44,13 +57,21 @@ def compute_state(
     if running:
         return ProjectState.working
     if pending:
-        return ProjectState.working if any_resource_available else ProjectState.blocked_resources
+        if over_budget:
+            return ProjectState.blocked_budget
+        # Backend-aware: a pending task only counts as progressable if some
+        # online runner offers its backend with available quota. Otherwise the
+        # project is genuinely stuck on resources, not silently "working".
+        if any(t.backend in available_backends for t in pending):
+            return ProjectState.working
+        return ProjectState.blocked_resources
     active = [w for w in workstreams if w.status == WorkstreamStatus.active]
     if open_question_count and not active:
         return ProjectState.blocked_questions
     if active:
-        # Nothing queued but directions are open: the orchestrator owes a decision.
-        return ProjectState.working
+        # Nothing queued but directions are open: the orchestrator owes a
+        # decision — unless we've hit the daily budget and can't spend more.
+        return ProjectState.blocked_budget if over_budget else ProjectState.working
     if open_question_count:
         return ProjectState.blocked_questions
     return ProjectState.idle_no_workstreams
@@ -66,6 +87,7 @@ class Supervisor:
     def __init__(self, store, orchestrate: Callable[[str, list[str]], None]) -> None:
         self.store = store
         self.orchestrate = orchestrate
+        self.holder = f"{socket.gethostname()}:{os.getpid()}"
         self._events: dict[str, list[str]] = defaultdict(list)
         self._wakeup = asyncio.Event()
         self._busy: set[str] = set()  # projects with an orchestrator invocation in flight
@@ -75,7 +97,37 @@ class Supervisor:
         self._events[project_id].append(event)
         self._wakeup.set()
 
+    def acquire_leadership(self) -> None:
+        """Claim the single-control-plane lease or refuse to start. Two control
+        planes on one store would double-dispatch and double-wake."""
+        owner = self.store.claim_leader(self.holder, LEASE_TTL_S)
+        if owner != self.holder:
+            raise RuntimeError(
+                f"another control plane ({owner}) holds the leader lease — "
+                f"stop it or wait {LEASE_TTL_S:.0f}s for its lease to expire"
+            )
+
     # -- state & dispatch (pure store operations, callable from anywhere) ----
+
+    def available_backends(self) -> set[str]:
+        """Backends an online runner currently offers with available quota."""
+        online = {r.id for r in self.store.list(Runner) if r.online()}
+        return {
+            res.backend
+            for res in self.store.list(Resource)
+            if res.available() and res.runner_id in online
+        }
+
+    def spend_today(self, project_id: str) -> float:
+        start = utc_day_start()
+        return sum(
+            t.cost_usd
+            for t in self.store.list(Task, project_id=project_id)
+            if t.finished_at >= start
+        )
+
+    def over_budget(self, project: Project) -> bool:
+        return project.daily_budget_usd > 0 and self.spend_today(project.id) >= project.daily_budget_usd
 
     def refresh_state(self, project: Project) -> ProjectState:
         workstreams = self.store.list(Workstream, project_id=project.id)
@@ -84,11 +136,13 @@ class Supervisor:
             for t in self.store.list(Task, project_id=project.id)
             if t.status in (TaskStatus.pending, TaskStatus.running)
         ]
-        resources = [r for r in self.store.list(Resource) if r.available()]
-        online = {r.id for r in self.store.list(Runner) if r.online()}
-        any_available = any(r.runner_id in online for r in resources)
         state = compute_state(
-            project, workstreams, len(self.store.open_questions(project.id)), tasks, any_available
+            project,
+            workstreams,
+            len(self.store.open_questions(project.id)),
+            tasks,
+            self.available_backends(),
+            self.over_budget(project),
         )
         if state != project.state:
             project.state = state
@@ -97,6 +151,8 @@ class Supervisor:
 
     def dispatch(self, project: Project) -> int:
         """Assign pending tasks to runners. One task per repo at a time."""
+        if self.over_budget(project):
+            return 0  # daily soft cap reached; no new spend until UTC midnight
         tasks = self.store.list(Task, project_id=project.id)
         busy_repos = {t.repo for t in tasks if t.status == TaskStatus.running}
         runners = [r for r in self.store.list(Runner) if r.online()]
@@ -137,6 +193,12 @@ class Supervisor:
 
     async def run_forever(self) -> None:
         while True:
+            owner = self.store.claim_leader(self.holder, LEASE_TTL_S)
+            if owner != self.holder:
+                # Fenced out: keeping the process alive would leave a second
+                # API mutating tasks. Hard-exit so supervision restarts us cleanly.
+                log.critical("lost leader lease to %s — exiting", owner)
+                os._exit(1)
             try:
                 await self._step()
             except Exception:
@@ -149,6 +211,7 @@ class Supervisor:
 
     async def _step(self) -> None:
         self.fail_orphaned_tasks()
+        avail = self.available_backends()
         for project in self.store.list(Project):
             if project.paused:
                 continue
@@ -157,22 +220,41 @@ class Supervisor:
             if project.id in self._busy:
                 continue  # invocation in flight; events stay queued for the next step
             events = self._events.pop(project.id, [])
+            heartbeat_due = (
+                time.time() - self._last_heartbeat.get(project.id, 0)
+                > self.HEARTBEAT_MIN_INTERVAL_S
+            )
             needs_decision = (
                 state == ProjectState.working
                 and not self.store.tasks_in(project.id, TaskStatus.running)
                 and not self.store.tasks_in(project.id, TaskStatus.pending)
-                and time.time() - self._last_heartbeat.get(project.id, 0)
-                > self.HEARTBEAT_MIN_INTERVAL_S
+                and heartbeat_due
             )
-            if events or needs_decision:
+            # Pending work is stuck on a backend no online runner offers, but
+            # capacity exists elsewhere: nudge the orchestrator to replan onto
+            # an available backend instead of waiting forever.
+            replan = state == ProjectState.blocked_resources and bool(avail) and heartbeat_due
+            if events or needs_decision or replan:
                 if not events:
-                    events = [
-                        "Heartbeat: workstreams are active but nothing is queued or running. "
-                        "Queue the next task, or park workstreams that are genuinely waiting."
-                    ]
+                    events = [self._replan_note(avail) if replan else self._heartbeat_note()]
                     self._last_heartbeat[project.id] = time.time()
                 self._busy.add(project.id)
                 asyncio.get_running_loop().create_task(self._orchestrate(project.id, events))
+
+    @staticmethod
+    def _heartbeat_note() -> str:
+        return (
+            "Heartbeat: workstreams are active but nothing is queued or running. "
+            "Queue the next task, or park workstreams that are genuinely waiting."
+        )
+
+    @staticmethod
+    def _replan_note(avail: set[str]) -> str:
+        return (
+            "Pending tasks cannot dispatch: no online runner offers their backend. "
+            f"Available backends right now: {sorted(avail)}. Re-queue the next task on an "
+            "available backend, or file a human task to bring the needed runner online."
+        )
 
     async def _orchestrate(self, project_id: str, events: list[str]) -> None:
         try:

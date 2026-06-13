@@ -107,6 +107,7 @@ def test_full_loop(harness):
         headers=RUNNER_HEADERS,
     )
     _pump(client, store)
+    assert store.get(Task, verify["id"]).verdict == "accept"  # parsed deterministically
     detail = client.get(f"/api/projects/{pid}").json()
     assert len(detail["questions"]) == 1
     assert detail["workstreams"][0]["status"] == "parked"
@@ -168,6 +169,39 @@ def test_rate_limited_result_sets_cooldown(harness):
 def test_runner_auth_required(harness):
     client, *_ = harness
     assert client.post("/api/runners/register", json={"name": "x", "backends": []}).status_code == 401
+
+
+def test_cancel_pending_task(harness):
+    client, store, _orch = harness
+    client.post("/api/projects", json={"name": "c", "spec_repo": "https://example.com/s.git"})
+    _pump(client, store)  # orchestrator queues a work task; no runner online → stays pending
+    task = store.list(Task)[0]
+    assert task.status == "pending"
+    assert client.post(f"/api/tasks/{task.id}/cancel").json()["status"] == "cancelled"
+
+
+def test_dismiss_question_wakes(harness):
+    client, store, _orch = harness
+    pid = client.post(
+        "/api/projects", json={"name": "d", "spec_repo": "https://example.com/s.git"}
+    ).json()["id"]
+    sup = client.app.state.supervisor
+    q = store.put(Question(project_id=pid, text="pick A or B?"))
+    sup._events.clear()
+    assert client.post(f"/api/questions/{q.id}/dismiss").json()["status"] == "dismissed"
+    assert sup._events.get(pid)  # orchestrator is woken to reconsider the parked workstream
+
+
+def test_human_task_done_wakes_project(harness):
+    client, store, _orch = harness
+    pid = client.post(
+        "/api/projects", json={"name": "h", "spec_repo": "https://example.com/s.git"}
+    ).json()["id"]
+    task = client.post("/api/human-tasks", json={"title": "login", "project_id": pid}).json()
+    sup = client.app.state.supervisor
+    sup._events.clear()
+    client.post(f"/api/human-tasks/{task['id']}/done")
+    assert sup._events.get(pid)  # completing the action re-evaluates work that waited on it
 
 
 def _pump(client, store, rounds: int = 4):

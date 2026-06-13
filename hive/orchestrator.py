@@ -14,14 +14,18 @@ import logging
 from pathlib import Path
 
 from hive.models import (
+    Autonomy,
+    Feedback,
     HumanTask,
     HumanTaskStatus,
     Project,
     Question,
     Runner,
+    Subscription,
     Task,
     TaskKind,
     TaskStatus,
+    Verdict,
     Workstream,
     WorkstreamStatus,
 )
@@ -33,6 +37,7 @@ log = logging.getLogger("hive.orchestrator")
 HISTORY_LIMIT = 80
 RESULT_SNIPPET = 4000
 BACKENDS = ("claude", "cursor", "codex", "gemini-cli")
+MAX_FIX_ROUNDS = 3  # consecutive verify rejects before a workstream must park + ask
 
 
 class Tools:
@@ -90,13 +95,26 @@ class Tools:
             return f"error: no online runner offers {backend!r}; available now: {sorted(set(online))}"
         if not self.store.get(Workstream, workstream_id):
             return f"error: no workstream {workstream_id}"
+        if kind == TaskKind.work and self._unresolved_rejects(workstream_id) >= MAX_FIX_ROUNDS:
+            return (
+                f"error: workstream {workstream_id} has {MAX_FIX_ROUNDS} verify rejects with no "
+                "accept since. Don't queue another fix — park the workstream and ask the user "
+                "what to change (park_workstream + ask_user)."
+            )
+        # PR (mature) mode keeps each workstream's work on its own branch so the
+        # verify task reviews exactly those changes and a human merges the PR.
+        # direct_push (fast) mode lands on the default branch; verify is the
+        # after-the-fact safety net that triggers a fix on reject.
+        branch = f"hive/{workstream_id[:8]}" if self.project.autonomy == Autonomy.pr else ""
         prompt_versions = {}
         if kind == TaskKind.work:
             landing_name = (
-                "landing_direct_push" if self.project.autonomy == "direct_push" else "landing_pr"
+                "landing_direct_push" if self.project.autonomy == Autonomy.direct_push else "landing_pr"
             )
             landing, version = load_prompt(landing_name)
             instructions = f"{instructions}\n\n{landing}"
+            if branch:
+                instructions += f"\n\nUse the git branch `{branch}` for this work."
             prompt_versions[landing_name] = version
         else:
             suffix, version = load_prompt("verify_suffix")
@@ -107,6 +125,7 @@ class Tools:
                 project_id=self.project.id,
                 workstream_id=workstream_id,
                 repo=repo,
+                branch=branch,
                 kind=TaskKind(kind),
                 instructions=instructions,
                 backend=backend,
@@ -115,6 +134,19 @@ class Tools:
         )
         self.actions.append(f"queued {kind} task {task.id} on {repo} via {backend}")
         return f"task_id={task.id} (queued)"
+
+    def _unresolved_rejects(self, workstream_id: str) -> int:
+        """Verify rejects since the last accept in a workstream — the fix-loop
+        depth the orchestrator must not exceed before escalating to the human."""
+        count = 0
+        for t in self.store.list(Task, project_id=self.project.id, workstream_id=workstream_id):
+            if t.kind != TaskKind.verify:
+                continue
+            if t.verdict == Verdict.accept:
+                count = 0
+            elif t.verdict == Verdict.reject:
+                count += 1
+        return count
 
     def ask_user(self, question_markdown: str, workstream_id: str = "") -> str:
         """Ask the human a clarification question (markdown: context, the
@@ -217,6 +249,18 @@ class Tools:
                 f"rejected: {len(unfinished)} unfinished tasks, {len(active)} active "
                 f"workstreams, {len(open_questions)} open questions. Finish or park them first."
             )
+        # The quality gate is real, not advisory: a workstream counts as built
+        # only if its most recent task is a verify that ACCEPTed.
+        for ws in self.store.list(Workstream, project_id=self.project.id):
+            if ws.status != WorkstreamStatus.done:
+                continue
+            ws_tasks = self.store.list(Task, project_id=self.project.id, workstream_id=ws.id)
+            last = ws_tasks[-1] if ws_tasks else None
+            if last is None or last.kind != TaskKind.verify or last.verdict != Verdict.accept:
+                return (
+                    f"rejected: workstream {ws.id} '{ws.title}' is not closed by an accepted "
+                    "verify task. Queue a verify task and get an ACCEPT before completing."
+                )
         self.project.goal_complete = True
         self.project.goal_complete_note = summary
         self.store.put(self.project)
@@ -236,7 +280,11 @@ class Tools:
         tasks = self.store.list(Task, project_id=self.project.id)
         for t in tasks[-15:]:
             line = f"- [{t.status}] {t.kind} task {t.id} ws={t.workstream_id} repo={t.repo} backend={t.backend}"
-            if t.status in (TaskStatus.done, TaskStatus.failed):
+            if t.branch:
+                line += f" branch={t.branch}"
+            if t.kind == TaskKind.verify and t.verdict != Verdict.none:
+                line += f" verdict={t.verdict}"
+            if t.status in (TaskStatus.done, TaskStatus.failed, TaskStatus.cancelled):
                 line += f"\n  result: {t.result_text[:RESULT_SNIPPET]}"
             task_lines.append(line)
         q_lines = [
@@ -251,6 +299,13 @@ class Tools:
             f"- {t.id} [{'org-wide' if not t.project_id else 'this project'}]: {t.title}"
             for t in self.store.list(HumanTask, status=HumanTaskStatus.open)
             if t.project_id in ("", self.project.id)
+        ]
+        sub_lines = [
+            f"- {s.provider} ({s.plan or 'plan?'}): {s.notes}" for s in self.store.list(Subscription)
+        ]
+        feedback_lines = [
+            f"- {f.verdict} on {f.target_id}: {f.comment}"
+            for f in self.store.list(Feedback, project_id=self.project.id)[-5:]
         ]
         p = self.project
         return "\n".join(
@@ -274,6 +329,12 @@ class Tools:
                 "",
                 "OPEN HUMAN TODOS (yours + org-wide):",
                 *(todo_lines or ["(none)"]),
+                "",
+                "SUBSCRIPTIONS (capacity that may exist beyond advertised runners):",
+                *(sub_lines or ["(none)"]),
+                "",
+                "RECENT FEEDBACK (human verdicts on tasks/questions):",
+                *(feedback_lines or ["(none)"]),
             ]
         )
 

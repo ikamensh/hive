@@ -16,6 +16,7 @@ const STATE_META: Record<ProjectState, { label: string; cls: string }> = {
   working: { label: "working", cls: "working" },
   blocked_questions: { label: "needs answers", cls: "questions" },
   blocked_resources: { label: "no resources", cls: "resources" },
+  blocked_budget: { label: "budget reached", cls: "resources" },
   idle_goal_complete: { label: "goal complete", cls: "idle" },
   idle_no_workstreams: { label: "idle", cls: "idle" },
 };

@@ -35,35 +35,44 @@ def seed(store, *, with_runner=True) -> Project:
 
 def test_goal_complete_wins():
     p = Project(name="p", spec_repo="x", goal_complete=True)
-    assert compute_state(p, [], 0, [], True) == ProjectState.idle_goal_complete
+    assert compute_state(p, [], 0, [], set()) == ProjectState.idle_goal_complete
 
 
 def test_running_task_means_working():
     p = Project(name="p", spec_repo="x")
     t = Task(project_id=p.id, workstream_id="w", repo="r", instructions="i",
              status=TaskStatus.running)
-    assert compute_state(p, [], 5, [t], False) == ProjectState.working
+    assert compute_state(p, [], 5, [t], set()) == ProjectState.working
 
 
-def test_pending_without_resources_is_blocked():
+def test_pending_blocks_unless_backend_available():
+    p = Project(name="p", spec_repo="x")
+    t = Task(project_id=p.id, workstream_id="w", repo="r", instructions="i", backend="claude")
+    # A cursor-only fleet can't run a claude task: blocked, not fake-working.
+    assert compute_state(p, [], 0, [t], {"cursor"}) == ProjectState.blocked_resources
+    assert compute_state(p, [], 0, [t], {"claude"}) == ProjectState.working
+
+
+def test_pending_over_budget_is_blocked_budget():
     p = Project(name="p", spec_repo="x")
     t = Task(project_id=p.id, workstream_id="w", repo="r", instructions="i")
-    assert compute_state(p, [], 0, [t], False) == ProjectState.blocked_resources
-    assert compute_state(p, [], 0, [t], True) == ProjectState.working
+    assert compute_state(p, [], 0, [t], {"cursor"}, over_budget=True) == ProjectState.blocked_budget
 
 
 def test_questions_block_only_when_nothing_active():
     p = Project(name="p", spec_repo="x")
     active = Workstream(project_id=p.id, title="a")
     parked = Workstream(project_id=p.id, title="b", status=WorkstreamStatus.parked)
-    assert compute_state(p, [parked], 2, [], True) == ProjectState.blocked_questions
+    assert compute_state(p, [parked], 2, [], set()) == ProjectState.blocked_questions
     # An active workstream means the orchestrator owes a decision: still working.
-    assert compute_state(p, [active, parked], 2, [], True) == ProjectState.working
+    assert compute_state(p, [active, parked], 2, [], set()) == ProjectState.working
+    # ...unless the daily budget is spent.
+    assert compute_state(p, [active], 0, [], set(), over_budget=True) == ProjectState.blocked_budget
 
 
 def test_no_workstreams_is_idle():
     p = Project(name="p", spec_repo="x")
-    assert compute_state(p, [], 0, [], True) == ProjectState.idle_no_workstreams
+    assert compute_state(p, [], 0, [], set()) == ProjectState.idle_no_workstreams
 
 
 def test_dispatch_serializes_per_repo():
@@ -113,6 +122,48 @@ def test_cooldown_resource_not_used():
     sup = make_supervisor(store)
     assert sup.dispatch(project) == 0
     assert sup.refresh_state(project) == ProjectState.blocked_resources
+
+
+def test_leader_lease_excludes_second_control_plane():
+    store = MemoryStore()
+    sup1, sup2 = make_supervisor(store), make_supervisor(store)
+    sup2.holder = "other-host:1"  # same process → same default holder; force a distinct one
+    sup1.acquire_leadership()
+    sup1.acquire_leadership()  # renewal by the owner is fine
+    try:
+        sup2.acquire_leadership()
+        raise AssertionError("second control plane must be refused")
+    except RuntimeError as exc:
+        assert sup1.holder in str(exc)
+    store._lease["expires"] = time.time() - 1  # leader died; lease lapsed
+    sup2.acquire_leadership()
+
+
+def test_over_budget_blocks_dispatch_and_state():
+    store = MemoryStore()
+    project = seed(store, with_runner=True)
+    project.daily_budget_usd = 1.0
+    store.put(project)
+    ws = store.put(Workstream(project_id=project.id, title="w"))
+    # A task already finished today blew past the cap.
+    store.put(Task(project_id=project.id, workstream_id=ws.id, repo="r-done", instructions="i",
+                   status=TaskStatus.done, cost_usd=2.0, finished_at=time.time()))
+    store.put(Task(project_id=project.id, workstream_id=ws.id, repo="r-next", instructions="i"))
+    sup = make_supervisor(store)
+    assert sup.over_budget(project)
+    assert sup.dispatch(project) == 0
+    assert sup.refresh_state(project) == ProjectState.blocked_budget
+
+
+def test_available_backends_tracks_online_and_cooldown():
+    store = MemoryStore()
+    online = store.put(Runner(name="on", backends=["cursor"]))
+    offline = store.put(Runner(name="off", backends=["claude"], last_seen=time.time() - 9999))
+    store.put(Resource(runner_id=online.id, backend="cursor"))
+    store.put(Resource(runner_id=offline.id, backend="claude"))
+    store.put(Resource(runner_id=online.id, backend="codex", cooldown_until=time.time() + 3600))
+    sup = make_supervisor(store)
+    assert sup.available_backends() == {"cursor"}  # offline + cooled-down excluded
 
 
 def test_orphaned_task_fails_when_runner_vanishes():

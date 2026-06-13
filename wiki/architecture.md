@@ -68,8 +68,8 @@ In MVP the only channel is the web UI inbox (user visits the page, sees work sta
 
 - Every task ends with **verification by a different agent session** than the one that wrote the code: tests pass, acceptance criteria checked against actual behavior, architect-style review. Kodo's benchmark edge came exactly from independent verification (9 rounds of caught bugs in real runs).
 - The verifier's checklist includes **anti-bloat**: "does this add complexity/tests/CI not justified by the spec?" is a rejection reason.
-- Strictness scales with autonomy: direct-push requires verification to pass, full stop; PR mode may open the PR with findings attached, human as final gate.
-- Failed verification loops back to the worker at most N times (~3), then the workstream parks with a question ("can't get this to pass, here's why").
+- Two landing modes encode the speed/safety trade-off (the autonomy toggle): **direct_push (fast)** lands work on the default branch immediately, and verification is the after-the-fact safety net — a REJECT queues a fix task. **pr (mature)** keeps each workstream's work on its own branch (`hive/<ws>`) with a PR; the verify task reviews that branch and the human merges. Both modes are gated at the finish line: `mark_goal_complete` is rejected in code unless every done workstream's most recent task is a verify that ACCEPTed.
+- Failed verification loops back to the worker at most N times (~3, enforced: `create_task` refuses another work task once a workstream has 3 verify rejects without an accept since), then the workstream parks with a question ("can't get this to pass, here's why").
 - A red main build (when CI exists) is an event that triggers a fix task.
 
 ## 5. Distribution: runners

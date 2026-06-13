@@ -15,6 +15,37 @@ Web UI access: https://hive.34-62-218-54.sslip.io, user `ilya`, password in Secr
 
 Built on primitives from [kodo](https://github.com/ikamensh/kodo) (agent/session wrappers for Claude Code, Cursor, Codex, Gemini CLI), with its own distributed orchestration layer on top.
 
+## CLI
+
+`hive` (or `python -m hive.cli`) covers the full web API — everything the UI can do, with JSON output — so coding agents and scripts can drive hive exactly like the operator. Targets `HIVE_URL` (default `http://localhost:8000`; set `HIVE_BASIC_AUTH=user:pass` for the public endpoint).
+
+```bash
+hive create myproj https://github.com/me/spec.git --member-repos https://github.com/me/app.git
+hive projects                      # list with live states
+hive show <project_id>             # workstreams, tasks, questions
+hive answer <question_id> "yes, add B"
+hive dismiss <question_id>           # discard a stale question without answering
+hive iterate <project_id> "next goal: ..."
+hive set <project_id> --paused true --autonomy pr --daily-budget 25
+hive cancel <task_id>                # dequeue if pending, stop the agent if running
+hive resources | hive subs | hive todos | hive org-context
+```
+
+`tests/test_cli.py` replays the full project loop (plan → work → verify → question → answer → goal complete) with the CLI playing the user — the scripted-test template for new flows.
+
+## Running locally
+
+The whole system runs on one machine; only the control plane and your laptop swap in for the VM, everything else (GitHub, Gemini, Firestore) stays the same. A leader lease in Firestore (`settings/leader_lease`) makes a second control plane on the same database refuse to start, so stop `hive-vm` first.
+
+```bash
+gcloud compute instances stop hive-vm --zone=europe-west1-b --project=hive-ikamen
+GEMINI_API_KEY=... HIVE_GCP_PROJECT=hive-ikamen HIVE_GH_TOKEN=... \
+  HIVE_DATA_DIR=~/.hive-data uv run uvicorn --factory hive.api:production_app
+uv run python -m hive.runner       # defaults already point at localhost:8000
+```
+
+Omit `HIVE_GCP_PROJECT` for a throwaway in-memory run.
+
 ## Web UI
 
 `web/` holds the control-plane SPA (React + Vite + TypeScript). Three pages: project list with live state badges, a project page (workstream board, question inbox, task activity feed, policy toggles), and a resources page (runners, backend cooldowns, human todos with copy-pasteable instructions, a subscriptions registry, editable org context). It polls the API every 4s and degrades to a "control plane unreachable" banner when the backend is down.

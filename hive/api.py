@@ -30,8 +30,10 @@ from hive.models import (
     Runner,
     Subscription,
     Task,
+    TaskKind,
     TaskStatus,
     Workstream,
+    parse_verdict,
 )
 from hive.supervisor import Supervisor
 
@@ -56,6 +58,7 @@ class ProjectPatch(BaseModel):
     guess_propensity: GuessPropensity | None = None
     prod_deploys: bool | None = None
     paused: bool | None = None
+    daily_budget_usd: float | None = None
     member_repos: list[str] | None = None
     new_iteration_note: str | None = None  # set when starting the next iteration
 
@@ -84,6 +87,7 @@ class TaskResult(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     resource_exhausted: bool = False  # rate limit / quota detected by runner
+    cancelled: bool = False  # runner stopped the task on an operator cancel request
 
 
 def create_app(store, supervisor: Supervisor, config: Config) -> FastAPI:
@@ -95,6 +99,7 @@ def create_app(store, supervisor: Supervisor, config: Config) -> FastAPI:
 
     @contextlib.asynccontextmanager
     async def lifespan(_app):
+        supervisor.acquire_leadership()  # raises if another control plane is live
         loop_task = asyncio.create_task(supervisor.run_forever())
         yield
         loop_task.cancel()
@@ -160,6 +165,20 @@ def create_app(store, supervisor: Supervisor, config: Config) -> FastAPI:
         )
         return question.model_dump()
 
+    @app.post("/api/questions/{question_id}/dismiss")
+    def dismiss_question(question_id: str):
+        question = store.get(Question, question_id)
+        if not question:
+            raise HTTPException(404)
+        question.status = QuestionStatus.dismissed
+        store.put(question)
+        supervisor.wake(
+            question.project_id,
+            f"User dismissed question {question.id} without answering. If a workstream "
+            "parked on it, decide whether to reactivate it or leave it parked.",
+        )
+        return question.model_dump()
+
     @app.post("/api/feedback")
     def add_feedback(body: FeedbackBody):
         return store.put(Feedback(**body.model_dump())).model_dump()
@@ -169,6 +188,24 @@ def create_app(store, supervisor: Supervisor, config: Config) -> FastAPI:
         task = store.get(Task, task_id)
         if not task:
             raise HTTPException(404)
+        return task.model_dump()
+
+    @app.post("/api/tasks/{task_id}/cancel")
+    def cancel_task(task_id: str):
+        task = store.get(Task, task_id)
+        if not task:
+            raise HTTPException(404)
+        if task.status == TaskStatus.pending:
+            # Never dispatched: drop it outright.
+            task.status = TaskStatus.cancelled
+            task.result_text = "Cancelled by operator before dispatch."
+            task.finished_at = time.time()
+            store.put(task)
+            supervisor.wake(task.project_id, f"Task {task.id} was cancelled before it ran.")
+        elif task.status == TaskStatus.running:
+            # Cooperative: the runner polls this flag and stops the agent.
+            task.cancel_requested = True
+            store.put(task)
         return task.model_dump()
 
     @app.get("/api/resources")
@@ -222,7 +259,16 @@ def create_app(store, supervisor: Supervisor, config: Config) -> FastAPI:
             raise HTTPException(404)
         task.status = HumanTaskStatus.done
         task.done_at = time.time()
-        return store.put(task).model_dump()
+        store.put(task)
+        # The action may have unblocked work (a runner login, a granted access).
+        # Wake the owning project, or every project for an org-wide todo.
+        note = f"Human task '{task.title}' was completed. Re-evaluate work that waited on it."
+        if task.project_id:
+            supervisor.wake(task.project_id, note)
+        else:
+            for project in store.list(Project):
+                supervisor.wake(project.id, note)
+        return task.model_dump()
 
     @app.get("/api/org-context")
     def get_org_context():
@@ -280,7 +326,12 @@ def create_app(store, supervisor: Supervisor, config: Config) -> FastAPI:
         task = store.get(Task, task_id)
         if not task:
             raise HTTPException(404)
-        task.status = TaskStatus.failed if body.is_error else TaskStatus.done
+        if body.cancelled:
+            task.status = TaskStatus.cancelled
+        else:
+            task.status = TaskStatus.failed if body.is_error else TaskStatus.done
+        if task.kind == TaskKind.verify and not body.cancelled:
+            task.verdict = parse_verdict(body.text)
         task.result_text = body.text
         task.is_error = body.is_error
         task.cost_usd = body.cost_usd
@@ -296,11 +347,14 @@ def create_app(store, supervisor: Supervisor, config: Config) -> FastAPI:
                 resource.cooldown_until = time.time() + RATE_LIMIT_COOLDOWN_S
             store.put(resource)
 
-        outcome = "failed" if body.is_error else "finished"
+        outcome = "cancelled" if body.cancelled else ("failed" if body.is_error else "finished")
+        verdict_note = (
+            f" verdict={task.verdict}" if task.kind == TaskKind.verify and not body.cancelled else ""
+        )
         supervisor.wake(
             task.project_id,
-            f"{task.kind} task {task.id} (ws {task.workstream_id}, repo {task.repo}) {outcome}.\n"
-            f"Result:\n{body.text[:6000]}",
+            f"{task.kind} task {task.id} (ws {task.workstream_id}, repo {task.repo}) "
+            f"{outcome}{verdict_note}.\nResult:\n{body.text[:6000]}",
         )
         return {"ok": True}
 

@@ -39,6 +39,7 @@ class ProjectState(StrEnum):
     working = "working"
     blocked_questions = "blocked_questions"
     blocked_resources = "blocked_resources"
+    blocked_budget = "blocked_budget"  # daily soft cap reached; resets at UTC midnight
     idle_goal_complete = "idle_goal_complete"
     idle_no_workstreams = "idle_no_workstreams"
 
@@ -53,6 +54,7 @@ class Project(BaseModel):
     guess_propensity: GuessPropensity = GuessPropensity.sometimes
     prod_deploys: bool = False
     paused: bool = False
+    daily_budget_usd: float = 0.0  # 0 = no cap; else soft cap on today's task spend
     goal_complete: bool = False
     goal_complete_note: str = ""
     state: ProjectState = ProjectState.idle_no_workstreams  # cached by supervisor
@@ -80,6 +82,7 @@ class TaskStatus(StrEnum):
     running = "running"  # dispatched to a runner
     done = "done"
     failed = "failed"  # runner-level failure (timeout, crash, resource exhausted)
+    cancelled = "cancelled"  # stopped by the operator before completing
 
 
 class TaskKind(StrEnum):
@@ -87,11 +90,32 @@ class TaskKind(StrEnum):
     verify = "verify"
 
 
+class Verdict(StrEnum):
+    none = "none"  # not a verify task, or no parseable verdict
+    accept = "accept"
+    reject = "reject"
+
+
+def parse_verdict(text: str) -> Verdict:
+    """Extract a verify agent's verdict from its result text. The verifier
+    prompt requires a `VERDICT: ACCEPT|REJECT` line; we read the last one so a
+    quoted instruction earlier in the report can't spoof the outcome."""
+    found = Verdict.none
+    for line in text.splitlines():
+        token = line.strip().upper()
+        if token.startswith("VERDICT:") and "ACCEPT" in token:
+            found = Verdict.accept
+        elif token.startswith("VERDICT:") and "REJECT" in token:
+            found = Verdict.reject
+    return found
+
+
 class Task(BaseModel):
     id: str = Field(default_factory=new_id)
     project_id: str
     workstream_id: str
     repo: str  # git URL the runner checks out
+    branch: str = ""  # non-default branch to check out (PR-mode work and its verify/fix)
     kind: TaskKind = TaskKind.work
     instructions: str
     backend: str = "cursor"  # kodo backend name: claude | cursor | codex | gemini-cli
@@ -99,6 +123,8 @@ class Task(BaseModel):
     status: TaskStatus = TaskStatus.pending
     runner_id: str = ""
     delivered: bool = False  # runner has picked the assignment up via poll
+    cancel_requested: bool = False  # operator asked to stop; runner honors cooperatively
+    verdict: Verdict = Verdict.none  # parsed from a verify task's result
     result_text: str = ""
     is_error: bool = False
     cost_usd: float = 0.0
@@ -113,6 +139,7 @@ class Task(BaseModel):
 class QuestionStatus(StrEnum):
     open = "open"
     answered = "answered"
+    dismissed = "dismissed"  # operator discarded it without answering
 
 
 class Question(BaseModel):

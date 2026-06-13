@@ -6,6 +6,7 @@ filtered queries. Documents are pydantic models serialized to dicts.
 
 from __future__ import annotations
 
+import time
 from typing import TypeVar
 
 from hive.models import (
@@ -43,6 +44,7 @@ class MemoryStore:
     def __init__(self) -> None:
         self._data: dict[str, dict[str, dict]] = {name: {} for name in _COLLECTIONS.values()}
         self.org_context: str = ""
+        self._lease: dict | None = None
 
     def put(self, obj: M) -> M:
         self._data[_COLLECTIONS[type(obj)]][obj.id] = obj.model_dump()
@@ -67,6 +69,17 @@ class MemoryStore:
 
     def set_org_context(self, text: str) -> None:
         self.org_context = text
+
+    def claim_leader(self, holder: str, ttl_s: float) -> str:
+        """Claim or renew the single-control-plane lease. Returns the holder
+        that owns the lease after this attempt; callers losing the claim see
+        the competing holder's name. A lease is free once its TTL lapses, so
+        a crashed control plane is superseded within ttl_s."""
+        lease = self._lease
+        if lease and lease["holder"] != holder and lease["expires"] > time.time():
+            return lease["holder"]
+        self._lease = {"holder": holder, "expires": time.time() + ttl_s}
+        return holder
 
     # -- convenience queries used by supervisor/dispatcher -------------------
 
@@ -112,3 +125,20 @@ class FirestoreStore(MemoryStore):
 
     def set_org_context(self, text: str) -> None:
         self._db.collection("settings").document("org_context").set({"text": text})
+
+    def claim_leader(self, holder: str, ttl_s: float) -> str:
+        from google.cloud import firestore
+
+        ref = self._db.collection("settings").document("leader_lease")
+        transaction = self._db.transaction()
+
+        @firestore.transactional
+        def attempt(txn) -> str:
+            snap = ref.get(transaction=txn)
+            lease = snap.to_dict() if snap.exists else None
+            if lease and lease["holder"] != holder and lease["expires"] > time.time():
+                return lease["holder"]
+            txn.set(ref, {"holder": holder, "expires": time.time() + ttl_s})
+            return holder
+
+        return attempt(transaction)

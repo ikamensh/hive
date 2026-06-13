@@ -23,6 +23,7 @@ RUNNER_TOKEN = os.environ.get("HIVE_RUNNER_TOKEN", "dev-token")
 RUNNER_NAME = os.environ.get("HIVE_RUNNER_NAME", socket.gethostname())
 WORKDIR = Path(os.environ.get("HIVE_RUNNER_WORKDIR", "~/hive-work")).expanduser()
 TASK_TIMEOUT_S = float(os.environ.get("HIVE_TASK_TIMEOUT_S", "3600"))
+CANCEL_POLL_S = 5.0  # how often a running task checks for an operator cancel request
 
 log = logging.getLogger("hive.runner")
 
@@ -59,35 +60,79 @@ def make_session(backend: str, model: str):
     raise ValueError(f"unknown backend {backend}")
 
 
-def checkout(repo_url: str) -> Path:
-    """Fresh-ish checkout: clone once, then fetch + hard-reset to origin default."""
+def checkout(repo_url: str, branch: str = "") -> Path:
+    """Fresh-ish checkout: clone once, fetch, then hard-reset to the target.
+
+    With no branch, resets to the origin default (work that lands on main).
+    With a branch, checks out that branch — existing on origin (verify/fix of
+    PR-mode work) or freshly created off the default (the first PR-mode work
+    task, which then pushes it)."""
     slug = repo_url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
     path = WORKDIR / slug
     if path.exists():
         subprocess.run(["git", "fetch", "origin"], cwd=path, check=True, timeout=300)
-        head = subprocess.run(
-            ["git", "symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
-            cwd=path, capture_output=True, text=True,
-        ).stdout.strip() or "origin/main"
-        subprocess.run(["git", "reset", "--hard", head], cwd=path, check=True, timeout=60)
-        subprocess.run(["git", "clean", "-fd"], cwd=path, check=True, timeout=60)
     else:
         WORKDIR.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "clone", repo_url, str(path)], check=True, timeout=600)
+    default_head = subprocess.run(
+        ["git", "symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
+        cwd=path, capture_output=True, text=True,
+    ).stdout.strip() or "origin/main"
+    if branch:
+        on_origin = subprocess.run(
+            ["git", "ls-remote", "--heads", "origin", branch],
+            cwd=path, capture_output=True, text=True, timeout=60,
+        ).stdout.strip()
+        base = f"origin/{branch}" if on_origin else default_head
+        if on_origin:
+            subprocess.run(["git", "fetch", "origin", branch], cwd=path, check=True, timeout=120)
+        subprocess.run(["git", "checkout", "-B", branch, base], cwd=path, check=True, timeout=60)
+    else:
+        subprocess.run(["git", "reset", "--hard", default_head], cwd=path, check=True, timeout=60)
+    subprocess.run(["git", "clean", "-fd"], cwd=path, check=True, timeout=60)
     return path
 
 
-def execute(task: dict) -> dict:
+def execute(task: dict, headers: dict, auth) -> dict:
     from kodo.agent import Agent
 
     try:
-        project_dir = checkout(task["repo"])
+        project_dir = checkout(task["repo"], task.get("branch", ""))
     except subprocess.SubprocessError as exc:
         return {"text": f"checkout failed: {exc}", "is_error": True}
 
     session = make_session(task["backend"], task.get("model", ""))
-    with Agent(session, max_turns=100, timeout_s=TASK_TIMEOUT_S) as agent:
-        result = agent.run(task["instructions"], project_dir, agent_name=task["kind"])
+    cancelled = threading.Event()
+    stop_watch = threading.Event()
+
+    def watch_for_cancel() -> None:
+        # Poll the task; on an operator cancel request, terminate the session,
+        # which unblocks Agent.run in its worker thread.
+        watcher = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=15.0, auth=auth)
+        while not stop_watch.wait(CANCEL_POLL_S):
+            try:
+                state = watcher.get(f"/api/tasks/{task['id']}").json()
+            except httpx.HTTPError:
+                continue
+            if state.get("cancel_requested"):
+                cancelled.set()
+                session.terminate()
+                return
+
+    watcher_thread = threading.Thread(target=watch_for_cancel, daemon=True)
+    watcher_thread.start()
+    try:
+        with Agent(session, max_turns=100, timeout_s=TASK_TIMEOUT_S) as agent:
+            result = agent.run(task["instructions"], project_dir, agent_name=task["kind"])
+    except BaseException:
+        if cancelled.is_set():
+            return {"text": "Task cancelled by operator.", "cancelled": True}
+        raise
+    finally:
+        stop_watch.set()
+
+    if cancelled.is_set():
+        return {"text": "Task cancelled by operator.", "cancelled": True}
     query = result.query
     return {
         "text": result.text,
@@ -136,7 +181,7 @@ def main() -> None:
             if not task:
                 continue
             log.info("executing %s task %s on %s", task["kind"], task["id"], task["repo"])
-            result = execute(task)
+            result = execute(task, headers, auth)
             log.info("task %s done (error=%s)", task["id"], result.get("is_error"))
             client.post(f"/api/tasks/{task['id']}/result", json=result)
         except (httpx.HTTPError, OSError) as exc:

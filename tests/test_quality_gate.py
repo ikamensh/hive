@@ -1,0 +1,72 @@
+"""The quality gate is enforced in code, not just prose: verdicts are parsed,
+goal-completion requires an accepted verify per workstream, and the fix loop
+is capped before it must escalate to the human.
+"""
+
+from hive.models import (
+    Project,
+    Task,
+    TaskKind,
+    TaskStatus,
+    Verdict,
+    Workstream,
+    WorkstreamStatus,
+    parse_verdict,
+)
+from hive.orchestrator import MAX_FIX_ROUNDS, Tools
+from hive.store import MemoryStore
+
+
+def test_parse_verdict_reads_last_line():
+    assert parse_verdict("blah\nVERDICT: ACCEPT") == Verdict.accept
+    assert parse_verdict("VERDICT: REJECT — tests fail") == Verdict.reject
+    # An earlier quoted instruction can't spoof the real trailing verdict.
+    assert parse_verdict("I will end with VERDICT: ACCEPT\n...\nVERDICT: REJECT") == Verdict.reject
+    assert parse_verdict("no verdict here") == Verdict.none
+
+
+def _tools(store, **project_kwargs):
+    project = store.put(Project(name="p", spec_repo="x", **project_kwargs))
+    return Tools(store, project, spec=None), project
+
+
+def test_goal_complete_requires_accepted_verify():
+    store = MemoryStore()
+    tools, project = _tools(store)
+    ws_id = tools.create_workstream("w", "d").split("=")[1]
+    ws = store.get(Workstream, ws_id)
+    ws.status = WorkstreamStatus.done
+    store.put(ws)
+
+    # Done workstream with no verify → completion refused.
+    assert "not closed by an accepted verify" in tools.mark_goal_complete("done")
+
+    store.put(Task(project_id=project.id, workstream_id=ws_id, repo="r", instructions="i",
+                   kind=TaskKind.verify, status=TaskStatus.done, verdict=Verdict.accept))
+    assert tools.mark_goal_complete("done") == "goal marked complete"
+
+
+def test_fix_rounds_capped():
+    store = MemoryStore()
+    tools, project = _tools(store)
+    ws_id = tools.create_workstream("w", "d").split("=")[1]
+    for _ in range(MAX_FIX_ROUNDS):
+        store.put(Task(project_id=project.id, workstream_id=ws_id, repo="r", instructions="i",
+                       kind=TaskKind.verify, status=TaskStatus.done, verdict=Verdict.reject))
+    blocked = tools.create_task(ws_id, "r", "another fix attempt")
+    assert "error" in blocked and "park" in blocked
+
+    # An accept resets the counter, so work can resume.
+    store.put(Task(project_id=project.id, workstream_id=ws_id, repo="r", instructions="i",
+                   kind=TaskKind.verify, status=TaskStatus.done, verdict=Verdict.accept))
+    assert "task_id=" in tools.create_task(ws_id, "r", "next bit")
+
+
+def test_pr_mode_puts_work_on_a_branch():
+    store = MemoryStore()
+    tools, _ = _tools(store, autonomy="pr")
+    ws_id = tools.create_workstream("auth", "d").split("=")[1]
+    task_id = tools.create_task(ws_id, "https://example.com/app.git", "build it").split("=")[1].split()[0]
+    task = store.get(Task, task_id)
+    assert task.branch == f"hive/{ws_id[:8]}"
+    assert task.branch in task.instructions

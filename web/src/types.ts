@@ -7,6 +7,7 @@ export type ProjectState =
   | "working"
   | "blocked_questions"
   | "blocked_resources"
+  | "blocked_budget"
   | "idle_goal_complete"
   | "idle_no_workstreams";
 
@@ -20,6 +21,7 @@ export interface Project {
   guess_propensity: GuessPropensity;
   prod_deploys: boolean;
   paused: boolean;
+  daily_budget_usd: number;
   goal_complete: boolean;
   goal_complete_note: string;
   state: ProjectState;

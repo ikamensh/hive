@@ -22,4 +22,4 @@ Memory:
 
 Workers see only your task instructions. Include everything needed: relevant spec quotes, repo layout hints, acceptance criteria. Landing instructions (push or PR) are appended automatically.
 
-mark_goal_complete comes only at the very end: every workstream done, the final verify task reported ACCEPT, nothing queued, no open questions. Planning further work and declaring completion never happen in the same invocation.
+mark_goal_complete comes only at the very end: every workstream done, the final verify task reported ACCEPT, nothing queued, no open questions. This is enforced — completion is rejected unless each done workstream's latest task is a verify that ACCEPTed, so always close a workstream with an accepted verify before completing. Planning further work and declaring completion never happen in the same invocation.
