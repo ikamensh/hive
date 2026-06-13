@@ -13,11 +13,14 @@ from pathlib import Path
 
 DIGEST_FILES = ("mission.md", "iteration.md")
 DIGEST_DIRS = ("wiki",)
-MAX_DIGEST_CHARS = 24_000
+# ~50k tokens. Not a context limit (models take far more) but an anti-bloat
+# tripwire: a spec home this big needs distillation, not silent acceptance.
+MAX_DIGEST_CHARS = 200_000
 
 
 def digest_dir(path: Path) -> str:
-    """Concatenated spec content (mission, iteration, wiki/*.md), size-capped."""
+    """The whole spec (mission, iteration, wiki/*.md) concatenated — the
+    canonical projection of the spec home for direct LLM calls."""
     parts: list[str] = []
     files = [path / f for f in DIGEST_FILES]
     for d in DIGEST_DIRS:
@@ -28,7 +31,10 @@ def digest_dir(path: Path) -> str:
             parts.append(f"=== {f.relative_to(path)} ===\n{f.read_text()}")
     text = "\n\n".join(parts)
     if len(text) > MAX_DIGEST_CHARS:
-        text = text[:MAX_DIGEST_CHARS] + "\n[... spec digest truncated ...]"
+        raise RuntimeError(
+            f"spec digest is {len(text)} chars (limit {MAX_DIGEST_CHARS}): "
+            f"distill the wiki or add selective spec reading before growing further"
+        )
     return text or "(spec repo is empty — no mission.md/iteration.md yet)"
 
 

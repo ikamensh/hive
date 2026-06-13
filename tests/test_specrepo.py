@@ -51,6 +51,14 @@ def test_sync_picks_up_remote_changes(bare_repo, tmp_path):
     assert "Revised" in spec.digest()
 
 
+def test_oversized_digest_raises(tmp_path):
+    from hive.specrepo import MAX_DIGEST_CHARS, digest_dir
+
+    (tmp_path / "mission.md").write_text("x" * (MAX_DIGEST_CHARS + 1))
+    with pytest.raises(RuntimeError, match="distill the wiki"):
+        digest_dir(tmp_path)
+
+
 def test_authed_url():
     assert (
         authed_url("https://github.com/a/b.git", "tok")
