@@ -11,8 +11,9 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from hive.blobstore import LocalBlobStore
 from hive.config import Config
-from hive.models import Project, Question, Task, TaskKind, Workstream
+from hive.models import Project, Question, Task, TaskKind, TaskStatus, Workstream
 from hive.orchestrator import Tools
 from hive.store import MemoryStore
 from hive.supervisor import Supervisor
@@ -60,7 +61,7 @@ def harness(tmp_path):
     )
     from hive.api import create_app
 
-    app = create_app(store, supervisor, config)
+    app = create_app(store, supervisor, config, blobs=LocalBlobStore(tmp_path / "blobs"))
     # No context manager: lifespan (the background loop) stays off; tests pump manually.
     yield TestClient(app), store, orch
 
@@ -190,6 +191,25 @@ def test_dismiss_question_wakes(harness):
     sup._events.clear()
     assert client.post(f"/api/questions/{q.id}/dismiss").json()["status"] == "dismissed"
     assert sup._events.get(pid)  # orchestrator is woken to reconsider the parked workstream
+
+
+def test_trace_roundtrip(harness):
+    client, store, _orch = harness
+    pid = client.post(
+        "/api/projects", json={"name": "t", "spec_repo": "https://example.com/s.git"}
+    ).json()["id"]
+    ws = store.put(Workstream(project_id=pid, title="w"))
+    task = store.put(Task(project_id=pid, workstream_id=ws.id, repo="r", instructions="i",
+                          status=TaskStatus.running))
+    trace = b'{"event":"run_init"}\n{"event":"agent_run_end","cost_usd":0.1}\n'
+    assert client.post(
+        f"/api/tasks/{task.id}/trace", content=trace, headers=RUNNER_HEADERS
+    ).json()["ok"]
+    assert store.get(Task, task.id).trace_blob == f"traces/{task.id}.jsonl"
+    got = client.get(f"/api/tasks/{task.id}/trace")
+    assert got.status_code == 200 and b"run_init" in got.content
+    # Trace upload is a runner action — unauthenticated callers are rejected.
+    assert client.post(f"/api/tasks/{task.id}/trace", content=trace).status_code == 401
 
 
 def test_human_task_done_wakes_project(harness):

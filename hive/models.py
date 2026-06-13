@@ -125,6 +125,7 @@ class Task(BaseModel):
     delivered: bool = False  # runner has picked the assignment up via poll
     cancel_requested: bool = False  # operator asked to stop; runner honors cooperatively
     verdict: Verdict = Verdict.none  # parsed from a verify task's result
+    trace_blob: str = ""  # blob key of the kodo JSONL run trace, once uploaded
     result_text: str = ""
     is_error: bool = False
     cost_usd: float = 0.0

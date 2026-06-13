@@ -12,7 +12,8 @@ import contextlib
 import logging
 import time
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from hive.config import Config
@@ -90,7 +91,7 @@ class TaskResult(BaseModel):
     cancelled: bool = False  # runner stopped the task on an operator cancel request
 
 
-def create_app(store, supervisor: Supervisor, config: Config) -> FastAPI:
+def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> FastAPI:
     app = FastAPI(title="hive")
 
     def runner_auth(x_hive_token: str = Header(default="")) -> None:
@@ -145,7 +146,13 @@ def create_app(store, supervisor: Supervisor, config: Config) -> FastAPI:
             project.goal_complete = False
             project.goal_complete_note = ""
             store.put(project)
-            supervisor.wake(project_id, f"New iteration started by user: {note}")
+            supervisor.wake(
+                project_id,
+                f"New iteration goal set by the user (authoritative): {note}\n"
+                "Your FIRST action must be commit_to_spec: archive the prior iteration.md to "
+                "iterations/ with a one-line outcome, then write this goal into iteration.md. "
+                "Only then plan workstreams.",
+            )
         store.put(project)
         return project.model_dump()
 
@@ -207,6 +214,29 @@ def create_app(store, supervisor: Supervisor, config: Config) -> FastAPI:
             task.cancel_requested = True
             store.put(task)
         return task.model_dump()
+
+    @app.post("/api/tasks/{task_id}/trace", dependencies=[Depends(runner_auth)])
+    async def upload_trace(task_id: str, request: Request):
+        task = store.get(Task, task_id)
+        if not task:
+            raise HTTPException(404)
+        if blobs is None:
+            raise HTTPException(503, "no blob store configured")
+        key = f"traces/{task_id}.jsonl"
+        blobs.put(key, await request.body())
+        task.trace_blob = key
+        store.put(task)
+        return {"ok": True}
+
+    @app.get("/api/tasks/{task_id}/trace")
+    def get_trace(task_id: str):
+        task = store.get(Task, task_id)
+        if not task or not task.trace_blob or blobs is None:
+            raise HTTPException(404)
+        data = blobs.get(task.trace_blob)
+        if data is None:
+            raise HTTPException(404)
+        return PlainTextResponse(data, media_type="application/x-ndjson")
 
     @app.get("/api/resources")
     def resources():
@@ -384,7 +414,7 @@ def production_app() -> FastAPI:
 
     orchestrator = Orchestrator(store, blobs, config)
     supervisor = Supervisor(store, orchestrator.invoke)
-    app = create_app(store, supervisor, config)
+    app = create_app(store, supervisor, config, blobs=blobs)
 
     import os
     from pathlib import Path

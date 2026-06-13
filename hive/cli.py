@@ -66,6 +66,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("cancel", help="cancel a task (dequeue if pending, stop if running)")
     p.add_argument("task_id")
 
+    p = sub.add_parser("trace", help="print a task's raw kodo JSONL run trace")
+    p.add_argument("task_id")
+
     sub.add_parser("resources", help="runners and backend resources")
 
     sub.add_parser("subs", help="list subscriptions")
@@ -179,6 +182,10 @@ def main(argv: list[str] | None = None) -> None:
         auth=tuple(auth.split(":", 1)) if auth else None,
         timeout=30.0,
     )
+    if args.command == "trace":
+        # Raw JSONL, not JSON-wrapped, so it pipes into kodo's viewer / jq.
+        print(client.get(f"/api/tasks/{args.task_id}/trace").raise_for_status().text)
+        return
     print(json.dumps(run(args, client), indent=2))
 
 

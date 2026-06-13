@@ -28,8 +28,11 @@ hive dismiss <question_id>           # discard a stale question without answerin
 hive iterate <project_id> "next goal: ..."
 hive set <project_id> --paused true --autonomy pr --daily-budget 25
 hive cancel <task_id>                # dequeue if pending, stop the agent if running
+hive trace <task_id>                 # raw kodo JSONL run trace (pipe into jq / kodo's viewer)
 hive resources | hive subs | hive todos | hive org-context
 ```
+
+The iteration goal is set through hive (`hive iterate`), which is authoritative; the orchestrator distills it into the spec home's `iteration.md`. Don't hand-edit `iteration.md` via git — that path isn't observed yet (no webhook).
 
 `tests/test_cli.py` replays the full project loop (plan → work → verify → question → answer → goal complete) with the CLI playing the user — the scripted-test template for new flows.
 

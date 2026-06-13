@@ -3,6 +3,10 @@
 Deferred gap-closing work (Phase 3). Captured, not yet started — see chat
 context for the full gap analysis these came from.
 
+(Gap 11 episode traces and gap 9 iteration.md ownership are done — see the
+runner trace upload / `hive trace`, and the iterate path in `api.py` +
+`wiki/architecture.md`.)
+
 ## Gap 10 — Spec critique in the loop
 `hive/critique.py` is currently reachable only via `scripts/spec_critique.py`.
 Wire it into the running system:
@@ -11,11 +15,10 @@ Wire it into the running system:
 - API + CLI + UI action to re-run critique on demand, with staleness tracking
   ("spec changed since last critique").
 
-## Gap 11 — Episode traces
-The runner returns only final text + cost. Persist the full kodo JSONL trace:
-- Runner uploads the trace blob (GCS / LocalBlobStore) keyed by task id.
-- Task records the blob path; API/CLI expose it; UI reuses kodo's JSONL viewer.
-- This is also the GEPA training-data substrate (architecture §10).
+## Gap 11 follow-up — trace viewer in the web UI
+Traces are uploaded and exposed via `GET /api/tasks/{id}/trace` + `hive trace`.
+Still TODO: surface them in the web UI (reuse kodo's JSONL viewer) and capture
+the `conversations/` gz files, not just `log.jsonl`.
 
 ## Gap 6 — Durable-memory enforcement
 `commit_to_spec` distillation is voluntary today; if the model skips it, an

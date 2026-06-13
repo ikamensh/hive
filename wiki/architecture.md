@@ -9,6 +9,7 @@ Condensed current understanding of hive's design. Originated from a design inter
   - `mission.md` — high-level goal, rarely changes.
   - `iteration.md` — the current timeboxed goal (user stories / "using system, steps X lead to Y").
   - `iterations/` — archive of completed iterations, each with a short outcome note. Git history technically preserves this, but an explicit archive is better UX for agents and humans.
+  - The iteration goal is set *through hive* (web UI / `hive iterate`), which is authoritative and clears goal-completion; the orchestrator then distills it into `iteration.md` and archives the prior one to `iterations/`. Hand-editing `iteration.md` via git is not observed in MVP (no webhook yet), so set goals through hive.
   - `wiki/` — condensed, current understanding of the project, curated by agents and corrected by the human. Includes `infrastructure.md` (deployed services, URLs, how to deploy, where logs/secrets live).
   - `input-log/` — raw user inputs (clarification answers, free-text feedback) preserved verbatim for later re-evaluation. The wiki is the distillation; the log is the source.
   - For a single-repo project, the spec home and the code repo may be the same repo (hive itself is the first example).

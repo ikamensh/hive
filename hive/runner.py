@@ -93,7 +93,22 @@ def checkout(repo_url: str, branch: str = "") -> Path:
     return path
 
 
+def _upload_trace(task_id: str, log_file, headers: dict, auth) -> None:
+    """Best-effort: ship the kodo JSONL run trace to the control plane so the
+    operator can inspect what the agent actually did."""
+    if not log_file or not Path(log_file).exists():
+        return
+    try:
+        data = Path(log_file).read_bytes()
+        httpx.Client(base_url=HIVE_URL, headers=headers, timeout=30.0, auth=auth).post(
+            f"/api/tasks/{task_id}/trace", content=data
+        )
+    except (httpx.HTTPError, OSError) as exc:
+        log.warning("trace upload failed for %s: %s", task_id, exc)
+
+
 def execute(task: dict, headers: dict, auth) -> dict:
+    from kodo import log as kodo_log
     from kodo.agent import Agent
 
     try:
@@ -101,6 +116,7 @@ def execute(task: dict, headers: dict, auth) -> dict:
     except subprocess.SubprocessError as exc:
         return {"text": f"checkout failed: {exc}", "is_error": True}
 
+    kodo_log.init(kodo_log.RunDir.create(project_dir))  # capture a per-task JSONL trace
     session = make_session(task["backend"], task.get("model", ""))
     cancelled = threading.Event()
     stop_watch = threading.Event()
@@ -130,6 +146,7 @@ def execute(task: dict, headers: dict, auth) -> dict:
         raise
     finally:
         stop_watch.set()
+        _upload_trace(task["id"], kodo_log.get_log_file(), headers, auth)
 
     if cancelled.is_set():
         return {"text": "Task cancelled by operator.", "cancelled": True}
