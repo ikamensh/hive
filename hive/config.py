@@ -16,6 +16,9 @@ class Config:
     orch_model: str
     runner_token: str
     data_dir: Path
+    orch_provider: str = "auto"  # auto | openai | gemini
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -26,7 +29,13 @@ class Config:
             gcs_bucket=os.environ.get("HIVE_GCS_BUCKET", ""),
             gh_token=os.environ.get("HIVE_GH_TOKEN", ""),
             gemini_api_key=os.environ.get("GEMINI_API_KEY", ""),
-            orch_model=os.environ.get("HIVE_ORCH_MODEL", "gemini-3-flash-preview"),
+            orch_model=os.environ.get("HIVE_ORCH_MODEL", ""),
             runner_token=os.environ.get("HIVE_RUNNER_TOKEN", "dev-token"),
             data_dir=data_dir,
+            orch_provider=os.environ.get("HIVE_ORCH_PROVIDER", "auto"),
+            openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
+            openai_base_url=os.environ.get(
+                "HIVE_OPENAI_BASE_URL",
+                os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            ),
         )

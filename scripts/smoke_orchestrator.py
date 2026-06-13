@@ -1,8 +1,9 @@
-"""Smoke test: real Gemini orchestrator invocation against a local spec repo.
+"""Smoke test: real orchestrator invocation against a local spec repo.
 
 Creates a throwaway local spec home (bare repo) with a tiny mission/iteration,
 invokes the orchestrator twice (project created → task finished), and prints
-the actions taken. Requires GEMINI_API_KEY.
+the actions taken. Requires an orchestrator provider credential such as
+OPENAI_API_KEY or GEMINI_API_KEY.
 """
 
 import logging
@@ -17,7 +18,8 @@ from hive.models import Project, Question, Task, TaskStatus, Workstream
 from hive.orchestrator import Orchestrator
 from hive.store import MemoryStore
 
-MODEL = os.environ.get("HIVE_ORCH_MODEL", "gemini-3-flash-preview")
+MODEL = os.environ.get("HIVE_ORCH_MODEL", "")
+PROVIDER = os.environ.get("HIVE_ORCH_PROVIDER", "auto")
 
 logging.basicConfig(level=logging.INFO, format="%(name)s %(message)s")
 
@@ -43,8 +45,14 @@ subprocess.run(["git", "push", "-q", "origin", "main"], cwd=seed, check=True)
 store = MemoryStore()
 config = Config(
     gcp_project="", gcs_bucket="", gh_token="",
-    gemini_api_key=os.environ["GEMINI_API_KEY"],
+    gemini_api_key=os.environ.get("GEMINI_API_KEY", ""),
     orch_model=MODEL, runner_token="", data_dir=tmp / "data",
+    orch_provider=PROVIDER,
+    openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
+    openai_base_url=os.environ.get(
+        "HIVE_OPENAI_BASE_URL",
+        os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+    ),
 )
 orch = Orchestrator(store, LocalBlobStore(tmp / "blobs"), config)
 project = store.put(Project(name="wordfreq", spec_repo=str(origin),

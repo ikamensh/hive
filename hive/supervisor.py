@@ -282,8 +282,13 @@ class Supervisor:
             return
         detail = f"{type(exc).__name__}: {exc}"
         hint = ""
-        if "api key" in detail.lower():
-            hint = "\n\nThis often means `GEMINI_API_KEY` or the configured orchestrator credential is missing."
+        detail_lower = detail.lower()
+        if "api key" in detail_lower or "api_key" in detail_lower or "provider" in detail_lower:
+            hint = (
+                "\n\nThis often means the configured orchestrator credential is missing. "
+                "Set `HIVE_ORCH_PROVIDER` plus `OPENAI_API_KEY` or `GEMINI_API_KEY`, "
+                "and optionally set `HIVE_ORCH_MODEL`."
+            )
         self.store.put(
             HumanTask(
                 project_id=project_id,

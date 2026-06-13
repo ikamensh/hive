@@ -41,13 +41,14 @@ fi
 
 # --- secrets -> /etc/hive/env ---
 secret() { gcloud secrets versions access latest --secret="$1"; }
+secret_optional() { gcloud secrets versions access latest --secret="$1" 2>/dev/null || true; }
 mkdir -p /etc/hive
 cat > /etc/hive/env <<EOF
 HIVE_GCP_PROJECT=hive-ikamen
 HIVE_GCS_BUCKET=hive-ikamen-blobs
-HIVE_ORCH_MODEL=gemini-3-flash-preview
-GEMINI_API_KEY=$(secret hive-gemini-api-key)
-OPENAI_API_KEY=$(secret hive-openai-api-key)
+HIVE_ORCH_PROVIDER=auto
+GEMINI_API_KEY=$(secret_optional hive-gemini-api-key)
+OPENAI_API_KEY=$(secret_optional hive-openai-api-key)
 HIVE_GH_TOKEN=$(secret hive-gh-token)
 GH_TOKEN=$(secret hive-gh-token)
 HIVE_RUNNER_TOKEN=$(secret hive-runner-token)

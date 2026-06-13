@@ -51,6 +51,23 @@ class ScriptedOrchestrator:
             tools.ask_user("Should we also add B? My recommendation: yes.", tasks[0].workstream_id)
 
 
+class ScriptedOpenAIOrchestrator(Orchestrator):
+    def __init__(self, store, blobs, config, *, responses, models=None):
+        super().__init__(store, blobs, config)
+        self.responses = list(responses)
+        self.models = models or {"data": []}
+        self.posts = []
+
+    def _openai_post(self, path: str, body: dict) -> dict:
+        assert path == "/chat/completions"
+        self.posts.append(body)
+        return self.responses.pop(0)
+
+    def _openai_get(self, path: str) -> dict:
+        assert path == "/models"
+        return self.models
+
+
 @pytest.fixture
 def harness(tmp_path):
     store = MemoryStore()
@@ -150,9 +167,95 @@ def test_orchestrator_requires_api_key_before_client(tmp_path):
     config = Config(
         gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
         orch_model="gemini-3-flash-preview", runner_token="test-token", data_dir=tmp_path,
+        orch_provider="gemini",
     )
     orch = Orchestrator(store, LocalBlobStore(tmp_path / "blobs"), config)
     with pytest.raises(ValueError, match="GEMINI_API_KEY"):
+        orch._generate(project, [], "event", Tools(store, project, spec=None))
+
+
+def test_openai_orchestrator_tool_loop(tmp_path):
+    store = MemoryStore()
+    project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
+    config = Config(
+        gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
+        orch_model="gpt-test", runner_token="test-token", data_dir=tmp_path,
+        orch_provider="openai", openai_api_key="test-key",
+    )
+    orch = ScriptedOpenAIOrchestrator(
+        store,
+        LocalBlobStore(tmp_path / "blobs"),
+        config,
+        responses=[
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "create_workstream",
+                                        "arguments": '{"title":"Basics","description":"local setup"}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+            {"choices": [{"message": {"role": "assistant", "content": "planned"}}]},
+        ],
+    )
+
+    text = orch._generate(project, [], "event", Tools(store, project, spec=None))
+
+    assert text == "planned"
+    assert store.list(Workstream, project_id=project.id)[0].title == "Basics"
+    assert orch.posts[0]["model"] == "gpt-test"
+    assert orch.posts[0]["tools"][0]["type"] == "function"
+    assert any(m["role"] == "tool" and "workstream_id=" in m["content"] for m in orch.posts[1]["messages"])
+
+
+def test_openai_orchestrator_auto_selects_model(tmp_path):
+    store = MemoryStore()
+    project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
+    config = Config(
+        gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
+        orch_model="", runner_token="test-token", data_dir=tmp_path,
+        orch_provider="openai", openai_api_key="test-key",
+    )
+    orch = ScriptedOpenAIOrchestrator(
+        store,
+        LocalBlobStore(tmp_path / "blobs"),
+        config,
+        responses=[{"choices": [{"message": {"role": "assistant", "content": "ok"}}]}],
+        models={
+            "data": [
+                {"id": "gpt-image-test", "created": 999},
+                {"id": "text-embedding-test", "created": 998},
+                {"id": "o-test-newer", "created": 30},
+                {"id": "gpt-test-new", "created": 20},
+            ]
+        },
+    )
+
+    assert orch._generate(project, [], "event", Tools(store, project, spec=None)) == "ok"
+    assert orch.posts[0]["model"] == "gpt-test-new"
+
+
+def test_openai_orchestrator_requires_api_key_for_official_api(tmp_path):
+    store = MemoryStore()
+    project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
+    config = Config(
+        gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
+        orch_model="gpt-test", runner_token="test-token", data_dir=tmp_path,
+        orch_provider="openai", openai_api_key="", openai_base_url="https://api.openai.com/v1",
+    )
+    orch = Orchestrator(store, LocalBlobStore(tmp_path / "blobs"), config)
+    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
         orch._generate(project, [], "event", Tools(store, project, spec=None))
 
 

@@ -40,16 +40,24 @@ The iteration goal is set through hive (`hive iterate`), which is authoritative;
 
 ## Running locally
 
-The whole system runs on one machine; only the control plane and your laptop swap in for the VM, everything else (GitHub, Gemini, Firestore) stays the same. A leader lease in Firestore (`settings/leader_lease`) makes a second control plane on the same database refuse to start, so stop `hive-vm` first.
+The whole system runs on one machine; only the control plane and your laptop swap in for the VM, everything else (GitHub, the orchestrator model provider, Firestore) stays the same. A leader lease in Firestore (`settings/leader_lease`) makes a second control plane on the same database refuse to start, so stop `hive-vm` first.
 
 ```bash
 gcloud compute instances stop hive-vm --zone=europe-west1-b --project=hive-ikamen
-GEMINI_API_KEY=... HIVE_GCP_PROJECT=hive-ikamen HIVE_GH_TOKEN=... \
+OPENAI_API_KEY=... HIVE_ORCH_PROVIDER=auto HIVE_GCP_PROJECT=hive-ikamen HIVE_GH_TOKEN=... \
   HIVE_DATA_DIR=~/.hive-data uv run uvicorn --factory hive.api:production_app
 uv run python -m hive.runner       # defaults already point at localhost:8000
 ```
 
 Omit `HIVE_GCP_PROJECT` for a throwaway in-memory run.
+
+Orchestrator config:
+
+- `HIVE_ORCH_PROVIDER=auto|openai|gemini` (default `auto`).
+- `HIVE_ORCH_MODEL=...` optionally pins a specific model.
+- `OPENAI_API_KEY` uses OpenAI's API; `HIVE_OPENAI_BASE_URL` can point at an OpenAI-compatible endpoint.
+- `GEMINI_API_KEY` remains supported for Gemini.
+- In `auto`, an explicit model prefix picks the provider; otherwise OpenAI is used when `OPENAI_API_KEY` exists, then Gemini.
 
 Before sending real project work to a laptop runner, run the basics preflight:
 
