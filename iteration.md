@@ -2,7 +2,27 @@
 
 **Demo scenario ("done"):** create a greenfield multi-repo-capable project via the web UI with a mission and an iteration goal; hive interviews you to clarify the spec (workstream 0), bootstraps infra sized to the project (workstream 1), then builds as fast as resources allow — serialized per repo, verified per task, landing work via PR or direct push per the toggle — parking workstreams on batched questions you answer in the inbox, until the iteration goal is `idle: goal complete`.
 
-## Verification stories
+## User story sets
+
+### Basics: local operator preflight
+
+These stories must pass on the operator's MacBook before asking the operator to test a real project. They prove hive can start locally, expose its control surfaces, discover available agent backends, register them as runnable capacity, and distinguish "installed" from "usable".
+
+1. **Start hive locally.** As the operator, I can start the control plane from this repo on my MacBook without deploying anything. User action: run the documented local command with `HIVE_GCP_PROJECT` unset for a throwaway run, or set it to the production Firestore project after stopping the VM leader. Expected outcome: the API starts on localhost, `hive projects` and `hive resources` return JSON, and failures are explicit if another leader already owns the store.
+
+2. **Use a local operator surface.** As the operator, I can drive the same basics from either the CLI or the web UI. User action: run `hive projects`, `hive resources`, and open the local web app's Resources page. Expected outcome: both surfaces show the same projects, runners, backend resources, cooldowns, and human todos; if the API is down, they show a clear unreachable/error state.
+
+3. **List locally available agent backends before registration.** As the operator, I can ask the runner what agent CLIs it detects on my MacBook. User action: run the runner's backend detection/preflight command. Expected outcome: hive reports the detected backends from the supported set (`claude`, `cursor`, `codex`, `gemini-cli`) and reports none with a clear "no supported agents found" result rather than silently registering empty capacity.
+
+4. **Register this MacBook as a runner.** As the operator, I can start a local runner and have it register itself with hive. User action: run `uv run python -m hive.runner` against the local control plane. Expected outcome: the Resources page and `hive resources` show an online runner named for this machine, with one resource row for each advertised backend, and runner endpoints reject missing or wrong `X-Hive-Token` values.
+
+5. **Verify an advertised backend is really usable.** As the operator, I can run a cheap smoke check for each advertised backend before trusting it with project work. User action: ask hive to probe one backend against a temporary local git repo with a tiny prompt that must produce a deterministic marker and no repo changes. Expected outcome: success marks that `(runner, backend)` as usable with time/result evidence; auth failures, missing CLIs, quota errors, or crashes mark it unusable/cooling down and create a concrete human todo when the fix requires the operator.
+
+6. **Avoid fake progress when no usable agent exists.** As the operator, I can see that hive waits instead of pretending to work when no registered usable backend can run a task. User action: create or inspect a pending task whose requested backend is absent, offline, cooled down, or failed preflight. Expected outcome: the project shows `blocked: resources`, no task is dispatched, and hive either suggests an available backend or asks the operator to register/fix capacity.
+
+7. **Recover local runner state.** As the operator, I can stop and restart the local runner without leaving work stuck forever. User action: restart the runner while a task is assigned or while idle. Expected outcome: boot registration refreshes the runner heartbeat, requeues work that died with the old runner process, and leaves heartbeat-only registrations from a still-running process untouched.
+
+### MVP demo workflow
 
 The MVP is working when a single demo run can produce evidence for these stories. Each story should have a task/trace, UI state, commit/PR, or test result that a verifier can inspect.
 
