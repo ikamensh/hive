@@ -9,11 +9,12 @@ be lost at any time — every invocation also receives a full state snapshot.
 # inspects runtime type hints of the tool methods; stringified annotations break
 # google-genai schema inference in particular.
 
-import inspect
 import json
 import logging
 from pathlib import Path
 
+from hive.backends import BACKEND_NAMES
+from hive.llm import ToolLoop, ToolSet, build_adapter
 from hive.models import (
     Autonomy,
     Feedback,
@@ -38,31 +39,8 @@ log = logging.getLogger("hive.orchestrator")
 
 HISTORY_LIMIT = 80
 RESULT_SNIPPET = 4000
-BACKENDS = ("claude", "cursor", "codex", "gemini-cli")
 MAX_FIX_ROUNDS = 3  # consecutive verify rejects before a workstream must park + ask
-MAX_REMOTE_CALLS = 25
-OPENAI_MODEL_SKIP = (
-    "audio",
-    "dall-e",
-    "embedding",
-    "image",
-    "moderation",
-    "realtime",
-    "search",
-    "speech",
-    "transcribe",
-    "tts",
-)
-
-
-def _json_type(annotation) -> str:
-    if annotation is bool:
-        return "boolean"
-    if annotation is int:
-        return "integer"
-    if annotation is float:
-        return "number"
-    return "string"
+MAX_REMOTE_CALLS = 25  # tool-call rounds per orchestrator invocation
 
 
 class Tools:
@@ -113,8 +91,8 @@ class Tools:
         review of the previous task; landing is disabled). backend is one of
         claude | cursor | codex | gemini-cli — pick one that an online runner
         advertises (see RUNNERS in the snapshot), or the task cannot dispatch."""
-        if backend not in BACKENDS:
-            return f"error: unknown backend {backend!r}, use one of {BACKENDS}"
+        if backend not in BACKEND_NAMES:
+            return f"error: unknown backend {backend!r}, use one of {BACKEND_NAMES}"
         online = [b for r in self.store.list(Runner) if r.online() for b in r.backends]
         if online and backend not in online:
             return f"error: no online runner offers {backend!r}; available now: {sorted(set(online))}"
@@ -416,214 +394,22 @@ class Orchestrator:
         history.append({"role": "model", "text": final_text})
         self._save_history(project_id, history[-HISTORY_LIMIT:])
 
-    # -- LLM call (overridden in tests) ---------------------------------------
+    # -- LLM call -------------------------------------------------------------
 
     def _generate(self, project: Project, history: list[dict], user_msg: str, tools: Tools) -> str:
-        provider = self._resolve_provider()
-        if provider == "openai":
-            return self._generate_openai(project, history, user_msg, tools)
-        if provider == "gemini":
-            return self._generate_gemini(project, history, user_msg, tools)
-        raise ValueError(f"unsupported orchestrator provider {provider!r}")
-
-    def _resolve_provider(self) -> str:
-        provider = (self.config.orch_provider or "auto").strip().lower()
-        if provider not in {"auto", "openai", "gemini"}:
-            raise ValueError("HIVE_ORCH_PROVIDER must be one of: auto, openai, gemini.")
-        if provider != "auto":
-            return provider
-
-        model = self.config.orch_model.strip().lower()
-        if model.startswith("gemini"):
-            return "gemini"
-        if model.startswith(("gpt-", "o")):
-            return "openai"
-        if self.config.openai_api_key.strip():
-            return "openai"
-        if self.config.gemini_api_key.strip():
-            return "gemini"
-        raise ValueError(
-            "No orchestrator provider is configured. Set OPENAI_API_KEY for OpenAI-compatible "
-            "orchestration, or set HIVE_ORCH_PROVIDER=gemini with GEMINI_API_KEY."
+        adapter = self._build_adapter()
+        return ToolLoop(MAX_REMOTE_CALLS).run(
+            adapter, self._system_prompt(), history, user_msg, ToolSet(tools.functions())
         )
 
-    def _prompt_parts(self, history: list[dict], user_msg: str) -> tuple[str, list[dict], str]:
+    def _build_adapter(self):
+        """The provider seam: tests override this to inject a scripted adapter."""
+        return build_adapter(self.config)
+
+    def _system_prompt(self) -> str:
         base_prompt, _version = load_prompt("orchestrator")
         org_context = self.store.get_org_context()
-        system = base_prompt + (f"\n\nORG CONTEXT:\n{org_context}" if org_context else "")
-        return system, history, user_msg
-
-    def _generate_gemini(
-        self, project: Project, history: list[dict], user_msg: str, tools: Tools
-    ) -> str:
-        from google import genai
-        from google.genai import types
-
-        if not self.config.gemini_api_key.strip():
-            raise ValueError("GEMINI_API_KEY is required for the Hive orchestrator.")
-        model = self.config.orch_model.strip()
-        if not model:
-            raise ValueError("HIVE_ORCH_MODEL is required when HIVE_ORCH_PROVIDER=gemini.")
-
-        system, history, user_msg = self._prompt_parts(history, user_msg)
-        contents = [
-            types.Content(role=m["role"], parts=[types.Part(text=m["text"])]) for m in history
-        ]
-        contents.append(types.Content(role="user", parts=[types.Part(text=user_msg)]))
-        client = genai.Client(api_key=self.config.gemini_api_key)
-        response = client.models.generate_content(
-            model=model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                tools=tools.functions(),
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                    maximum_remote_calls=MAX_REMOTE_CALLS
-                ),
-            ),
-        )
-        return response.text or "(no text)"
-
-    def _generate_openai(
-        self, project: Project, history: list[dict], user_msg: str, tools: Tools
-    ) -> str:
-        self._ensure_openai_config()
-        model = self.config.orch_model.strip() or self._select_openai_model()
-        system, history, user_msg = self._prompt_parts(history, user_msg)
-        messages = [{"role": "system", "content": system}]
-        for item in history:
-            role = "assistant" if item["role"] == "model" else item["role"]
-            messages.append({"role": role, "content": item["text"]})
-        messages.append({"role": "user", "content": user_msg})
-
-        functions = {fn.__name__: fn for fn in tools.functions()}
-        tool_defs = [self._openai_tool_schema(fn) for fn in functions.values()]
-        for _ in range(MAX_REMOTE_CALLS):
-            data = self._openai_post(
-                "/chat/completions",
-                {
-                    "model": model,
-                    "messages": messages,
-                    "tools": tool_defs,
-                    "tool_choice": "auto",
-                },
-            )
-            message = data["choices"][0]["message"]
-            tool_calls = message.get("tool_calls") or []
-            if not tool_calls:
-                content = message.get("content")
-                if isinstance(content, list):
-                    return "\n".join(
-                        str(part.get("text", "")) if isinstance(part, dict) else str(part)
-                        for part in content
-                    ).strip() or "(no text)"
-                return content or "(no text)"
-
-            assistant_message = {"role": "assistant", "tool_calls": tool_calls}
-            if message.get("content") is not None:
-                assistant_message["content"] = message["content"]
-            messages.append(assistant_message)
-            for call in tool_calls:
-                name = call.get("function", {}).get("name", "")
-                args_text = call.get("function", {}).get("arguments") or "{}"
-                result = self._call_tool(functions, name, args_text)
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call["id"],
-                        "content": result,
-                    }
-                )
-        return "Stopped after maximum orchestrator tool-call rounds."
-
-    def _call_tool(self, functions: dict, name: str, args_text: str) -> str:
-        fn = functions.get(name)
-        if fn is None:
-            return f"error: unknown tool {name!r}"
-        try:
-            args = json.loads(args_text)
-        except json.JSONDecodeError as exc:
-            return f"error: invalid JSON arguments for {name}: {exc}"
-        try:
-            return str(fn(**args))
-        except Exception as exc:
-            log.exception("orchestrator tool %s failed", name)
-            return f"error: tool {name} raised {type(exc).__name__}: {exc}"
-
-    @staticmethod
-    def _openai_tool_schema(fn) -> dict:
-        signature = inspect.signature(fn)
-        properties = {}
-        required = []
-        for name, param in signature.parameters.items():
-            if name == "self":
-                continue
-            schema = {"type": _json_type(param.annotation)}
-            if param.default is inspect.Parameter.empty:
-                required.append(name)
-            properties[name] = schema
-        return {
-            "type": "function",
-            "function": {
-                "name": fn.__name__,
-                "description": inspect.getdoc(fn) or "",
-                "parameters": {
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
-                    "additionalProperties": False,
-                },
-            },
-        }
-
-    def _ensure_openai_config(self) -> None:
-        base_url = self.config.openai_base_url.rstrip("/")
-        if "api.openai.com" in base_url and not self.config.openai_api_key.strip():
-            raise ValueError("OPENAI_API_KEY is required when HIVE_ORCH_PROVIDER=openai.")
-
-    def _select_openai_model(self) -> str:
-        data = self._openai_get("/models")
-        candidates = []
-        for item in data.get("data", []):
-            model_id = item.get("id", "")
-            lower = model_id.lower()
-            if not lower.startswith(("gpt-", "o")):
-                continue
-            if any(part in lower for part in OPENAI_MODEL_SKIP):
-                continue
-            family = 1 if lower.startswith("gpt-") else 0
-            candidates.append((family, int(item.get("created", 0) or 0), model_id))
-        if not candidates:
-            raise ValueError(
-                "Could not auto-select an OpenAI model. Set HIVE_ORCH_MODEL to an "
-                "OpenAI-compatible chat model that supports tool calling."
-            )
-        candidates.sort(reverse=True)
-        return candidates[0][2]
-
-    def _openai_get(self, path: str) -> dict:
-        return self._openai_request("GET", path)
-
-    def _openai_post(self, path: str, body: dict) -> dict:
-        return self._openai_request("POST", path, body)
-
-    def _openai_request(self, method: str, path: str, body: dict | None = None) -> dict:
-        import httpx
-
-        base_url = self.config.openai_base_url.rstrip("/")
-        headers = {"Content-Type": "application/json"}
-        if self.config.openai_api_key.strip():
-            headers["Authorization"] = f"Bearer {self.config.openai_api_key.strip()}"
-        response = httpx.request(
-            method,
-            f"{base_url}{path}",
-            headers=headers,
-            json=body,
-            timeout=120.0,
-        )
-        if response.status_code >= 400:
-            raise RuntimeError(f"OpenAI-compatible API error {response.status_code}: {response.text[:1000]}")
-        return response.json()
+        return base_prompt + (f"\n\nORG CONTEXT:\n{org_context}" if org_context else "")
 
     # -- history persistence ---------------------------------------------------
 

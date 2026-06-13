@@ -12,9 +12,10 @@ import subprocess
 import pytest
 from fastapi.testclient import TestClient
 
-from hive.agent_probe import PROBE_MARKER
+from hive.backends import PROBE_MARKER
 from hive.blobstore import LocalBlobStore
 from hive.config import Config
+from hive.llm.openai import OpenAIAdapter
 from hive.models import HumanTask, Project, Question, Resource, Task, TaskKind, TaskStatus, Workstream
 from hive.orchestrator import Orchestrator, Tools
 from hive.store import MemoryStore
@@ -52,21 +53,35 @@ class ScriptedOrchestrator:
             tools.ask_user("Should we also add B? My recommendation: yes.", tasks[0].workstream_id)
 
 
-class ScriptedOpenAIOrchestrator(Orchestrator):
-    def __init__(self, store, blobs, config, *, responses, models=None):
-        super().__init__(store, blobs, config)
+class ScriptedOpenAIAdapter(OpenAIAdapter):
+    """Real OpenAIAdapter with its HTTP scripted — exercises the live message
+    plumbing (schemas, tool-result round-trip, model auto-select) sans network."""
+
+    def __init__(self, *args, responses, models=None, **kwargs):
+        super().__init__(*args, **kwargs)
         self.responses = list(responses)
         self.models = models or {"data": []}
         self.posts = []
 
-    def _openai_post(self, path: str, body: dict) -> dict:
+    def _post(self, path: str, body: dict) -> dict:
         assert path == "/chat/completions"
         self.posts.append(body)
         return self.responses.pop(0)
 
-    def _openai_get(self, path: str) -> dict:
+    def _get(self, path: str) -> dict:
         assert path == "/models"
         return self.models
+
+
+class AdapterOrchestrator(Orchestrator):
+    """Orchestrator with the provider seam pinned to a supplied adapter."""
+
+    def __init__(self, store, blobs, config, adapter):
+        super().__init__(store, blobs, config)
+        self.adapter = adapter
+
+    def _build_adapter(self):
+        return self.adapter
 
 
 @pytest.fixture
@@ -225,10 +240,10 @@ def test_openai_orchestrator_tool_loop(tmp_path):
         orch_model="gpt-test", runner_token="test-token", data_dir=tmp_path,
         orch_provider="openai", openai_api_key="test-key",
     )
-    orch = ScriptedOpenAIOrchestrator(
-        store,
-        LocalBlobStore(tmp_path / "blobs"),
-        config,
+    adapter = ScriptedOpenAIAdapter(
+        "test-key",
+        "https://api.openai.com/v1",
+        "gpt-test",
         responses=[
             {
                 "choices": [
@@ -252,14 +267,17 @@ def test_openai_orchestrator_tool_loop(tmp_path):
             {"choices": [{"message": {"role": "assistant", "content": "planned"}}]},
         ],
     )
+    orch = AdapterOrchestrator(store, LocalBlobStore(tmp_path / "blobs"), config, adapter)
 
     text = orch._generate(project, [], "event", Tools(store, project, spec=None))
 
     assert text == "planned"
     assert store.list(Workstream, project_id=project.id)[0].title == "Basics"
-    assert orch.posts[0]["model"] == "gpt-test"
-    assert orch.posts[0]["tools"][0]["type"] == "function"
-    assert any(m["role"] == "tool" and "workstream_id=" in m["content"] for m in orch.posts[1]["messages"])
+    assert adapter.posts[0]["model"] == "gpt-test"
+    assert adapter.posts[0]["tools"][0]["type"] == "function"
+    assert any(
+        m["role"] == "tool" and "workstream_id=" in m["content"] for m in adapter.posts[1]["messages"]
+    )
 
 
 def test_openai_orchestrator_auto_selects_model(tmp_path):
@@ -270,10 +288,10 @@ def test_openai_orchestrator_auto_selects_model(tmp_path):
         orch_model="", runner_token="test-token", data_dir=tmp_path,
         orch_provider="openai", openai_api_key="test-key",
     )
-    orch = ScriptedOpenAIOrchestrator(
-        store,
-        LocalBlobStore(tmp_path / "blobs"),
-        config,
+    adapter = ScriptedOpenAIAdapter(
+        "test-key",
+        "https://api.openai.com/v1",
+        "",
         responses=[{"choices": [{"message": {"role": "assistant", "content": "ok"}}]}],
         models={
             "data": [
@@ -284,9 +302,10 @@ def test_openai_orchestrator_auto_selects_model(tmp_path):
             ]
         },
     )
+    orch = AdapterOrchestrator(store, LocalBlobStore(tmp_path / "blobs"), config, adapter)
 
     assert orch._generate(project, [], "event", Tools(store, project, spec=None)) == "ok"
-    assert orch.posts[0]["model"] == "gpt-test-new"
+    assert adapter.posts[0]["model"] == "gpt-test-new"
 
 
 def test_openai_orchestrator_requires_api_key_for_official_api(tmp_path):

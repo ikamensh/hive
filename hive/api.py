@@ -20,8 +20,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from hive.agent_probe import probe_instructions
+from hive.backends import probe_instructions
 from hive.config import Config
+from hive.escalation import escalate
 from hive.models import (
     Autonomy,
     Feedback,
@@ -168,29 +169,19 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         return f"{path} @ {sha[:8]}"
 
     def file_spec_log_failure(project: Project, question: Question, exc: Exception) -> None:
-        title = f"Repair spec logging for {project.name}"
-        already_open = any(
-            task.status == HumanTaskStatus.open
-            and task.project_id == project.id
-            and task.title == title
-            for task in store.list(HumanTask)
-        )
-        if already_open:
-            return
-        store.put(
-            HumanTask(
-                project_id=project.id,
-                title=title,
-                instructions=(
-                    "Hive saved a clarification answer in the control-plane DB, but could not "
-                    "append the raw answer to the spec repo input log.\n\n"
-                    f"Question: `{question.id}`\n\n"
-                    f"Spec repo: `{project.spec_repo}`\n\n"
-                    f"Error:\n\n```\n{type(exc).__name__}: {str(exc)[:1500]}\n```\n\n"
-                    "Fix spec-repo write access, then ask Hive to distill or replay the answer "
-                    "from the project question history."
-                ),
-            )
+        escalate(
+            store,
+            f"Repair spec logging for {project.name}",
+            instructions=(
+                "Hive saved a clarification answer in the control-plane DB, but could not "
+                "append the raw answer to the spec repo input log.\n\n"
+                f"Question: `{question.id}`\n\n"
+                f"Spec repo: `{project.spec_repo}`\n\n"
+                f"Error:\n\n```\n{type(exc).__name__}: {str(exc)[:1500]}\n```\n\n"
+                "Fix spec-repo write access, then ask Hive to distill or replay the answer "
+                "from the project question history."
+            ),
+            project_id=project.id,
         )
 
     def runner_auth(x_hive_token: str = Header(default="")) -> None:
@@ -552,22 +543,16 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         if task.kind == TaskKind.probe:
             if body.is_error and HUMAN_FIX_PATTERNS.search(body.text):
                 runner = store.get(Runner, task.runner_id)
-                title = f"Fix {task.backend} login on {runner.name if runner else task.runner_id}"
-                already_open = any(
-                    t.status == HumanTaskStatus.open and t.title == title
-                    for t in store.list(HumanTask)
+                runner_name = runner.name if runner else task.runner_id
+                escalate(
+                    store,
+                    f"Fix {task.backend} login on {runner_name}",
+                    instructions=(
+                        f"Refresh or repair the `{task.backend}` CLI login on runner "
+                        f"`{runner_name}`, then rerun the resource probe.\n\n"
+                        f"Recent probe output:\n\n```\n{body.text[:1500]}\n```"
+                    ),
                 )
-                if not already_open:
-                    store.put(
-                        HumanTask(
-                            title=title,
-                            instructions=(
-                                f"Refresh or repair the `{task.backend}` CLI login on runner "
-                                f"`{runner.name if runner else task.runner_id}`, then rerun the resource probe.\n\n"
-                                f"Recent probe output:\n\n```\n{body.text[:1500]}\n```"
-                            ),
-                        )
-                    )
             return {"ok": True}
 
         outcome = "cancelled" if body.cancelled else ("failed" if body.is_error else "finished")

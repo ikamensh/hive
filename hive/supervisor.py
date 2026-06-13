@@ -17,9 +17,8 @@ import time
 from collections import defaultdict
 from typing import Callable
 
+from hive.escalation import escalate
 from hive.models import (
-    HumanTask,
-    HumanTaskStatus,
     Project,
     ProjectState,
     Resource,
@@ -272,14 +271,6 @@ class Supervisor:
         project = self.store.get(Project, project_id)
         project_name = project.name if project else project_id
         title = f"Fix Hive orchestrator for {project_name}"
-        already_open = any(
-            task.status == HumanTaskStatus.open
-            and task.project_id == project_id
-            and task.title == title
-            for task in self.store.list(HumanTask)
-        )
-        if already_open:
-            return
         detail = f"{type(exc).__name__}: {exc}"
         hint = ""
         detail_lower = detail.lower()
@@ -289,17 +280,16 @@ class Supervisor:
                 "Set `HIVE_ORCH_PROVIDER` plus `OPENAI_API_KEY` or `GEMINI_API_KEY`, "
                 "and optionally set `HIVE_ORCH_MODEL`."
             )
-        self.store.put(
-            HumanTask(
-                project_id=project_id,
-                title=title,
-                instructions=(
-                    "The supervisor tried to wake the LLM orchestrator, but the invocation failed before it "
-                    "could plan work.\n\n"
-                    f"Recent event(s):\n\n```\n{chr(10).join(events)[:1500]}\n```\n\n"
-                    f"Error:\n\n```\n{detail[:1500]}\n```"
-                    f"{hint}\n\n"
-                    "Fix the orchestrator configuration, then mark this todo done so Hive re-evaluates the project."
-                ),
-            )
+        escalate(
+            self.store,
+            title,
+            instructions=(
+                "The supervisor tried to wake the LLM orchestrator, but the invocation failed before it "
+                "could plan work.\n\n"
+                f"Recent event(s):\n\n```\n{chr(10).join(events)[:1500]}\n```\n\n"
+                f"Error:\n\n```\n{detail[:1500]}\n```"
+                f"{hint}\n\n"
+                "Fix the orchestrator configuration, then mark this todo done so Hive re-evaluates the project."
+            ),
+            project_id=project_id,
         )

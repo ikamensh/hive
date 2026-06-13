@@ -10,12 +10,12 @@ silently empty report.
 from __future__ import annotations
 
 import json
-import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
 from pydantic import BaseModel
 
+from hive.llm.parsing import extract_json
 from hive.prompts import load as load_prompt
 
 LENSES = {
@@ -64,18 +64,6 @@ class CritiqueReport(BaseModel):
     prompt_versions: dict[str, str]
 
 
-def _extract_json(text: str):
-    """Parse the last ```json fence, or fall back to the outermost bracket span."""
-    fences = re.findall(r"```json\s*(.*?)```", text, re.DOTALL)
-    if fences:
-        return json.loads(fences[-1])
-    start = min((i for i in (text.find("["), text.find("{")) if i != -1), default=-1)
-    if start == -1:
-        raise ValueError(f"no JSON found in model output: {text[:500]!r}")
-    end = max(text.rfind("]"), text.rfind("}"))
-    return json.loads(text[start : end + 1])
-
-
 def run_critics(digest: str, llms: dict[str, LLM]) -> list[Finding]:
     """Every model critiques through every lens — diversity is cheap, the
     adjudicator dedupes."""
@@ -85,7 +73,7 @@ def run_critics(digest: str, llms: dict[str, LLM]) -> list[Finding]:
         prompt = template.replace("<<LENS>>", f"{lens} — {LENSES[lens]}").replace(
             "<<DIGEST>>", digest
         )
-        raw = _extract_json(llms[model](prompt))
+        raw = extract_json(llms[model](prompt))
         return [Finding(**{**f, "lens": lens, "model": model}) for f in raw]
 
     jobs = [(model, lens) for model in llms for lens in LENSES]
@@ -108,7 +96,7 @@ def run_adjudicator(
         .replace("<<FINDINGS>>", json.dumps([f.model_dump() for f in findings], indent=1))
         .replace("<<DIGEST>>", digest)
     )
-    raw = _extract_json(llm(prompt))
+    raw = extract_json(llm(prompt))
     verdicts = [Verdict(**v) for v in raw["verdicts"]]
     return verdicts, raw.get("inbox_markdown", ""), raw.get("flags_markdown", "")
 

@@ -4,7 +4,8 @@ import json
 
 import pytest
 
-from hive.critique import LENSES, CritiqueReport, _extract_json, critique, report_markdown
+from hive.critique import LENSES, CritiqueReport, critique, report_markdown
+from hive.llm.parsing import extract_json
 
 CRITIC_REPLY = """Here is my analysis.
 ```json
@@ -77,13 +78,13 @@ def test_no_findings_skips_adjudicator():
 
 
 def test_extract_json_variants():
-    assert _extract_json('```json\n{"a": 1}\n```') == {"a": 1}
+    assert extract_json('```json\n{"a": 1}\n```') == {"a": 1}
     # last fence wins (models sometimes echo examples first)
-    assert _extract_json('```json\n[1]\n``` then ```json\n[2]\n```') == [2]
+    assert extract_json('```json\n[1]\n``` then ```json\n[2]\n```') == [2]
     # bare JSON with chatter around it
-    assert _extract_json('Sure! [{"title": "x"}] hope this helps') == [{"title": "x"}]
+    assert extract_json('Sure! [{"title": "x"}] hope this helps') == [{"title": "x"}]
     with pytest.raises(ValueError):
-        _extract_json("no json here at all")
+        extract_json("no json here at all")
 
 
 def test_malformed_critic_output_raises():

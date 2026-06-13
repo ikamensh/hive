@@ -18,7 +18,7 @@ from pathlib import Path
 
 import httpx
 
-from hive.agent_probe import PROBE_MARKER, SUPPORTED_BACKENDS
+from hive.backends import BACKEND_NAMES, PROBE_MARKER, make_session
 
 HIVE_URL = os.environ.get("HIVE_URL", "http://localhost:8000")
 HIVE_BASIC_AUTH = os.environ.get("HIVE_BASIC_AUTH", "")  # "user:pass" when behind Caddy
@@ -39,27 +39,7 @@ EXHAUSTED_PATTERNS = re.compile(
 def detect_backends() -> list[str]:
     from kodo.factory import available_backends
 
-    return [name for name, ok in available_backends().items() if ok and name in SUPPORTED_BACKENDS]
-
-
-def make_session(backend: str, model: str):
-    if backend == "claude":
-        from kodo.sessions.claude import ClaudeSession
-
-        return ClaudeSession(model=model) if model else ClaudeSession()
-    if backend == "cursor":
-        from kodo.sessions.cursor import CursorSession
-
-        return CursorSession(model=model) if model else CursorSession()
-    if backend == "codex":
-        from kodo.sessions.codex import CodexSession
-
-        return CodexSession(model=model, sandbox="danger-full-access") if model else CodexSession(sandbox="danger-full-access")
-    if backend == "gemini-cli":
-        from kodo.sessions.gemini_cli import GeminiCliSession
-
-        return GeminiCliSession(model=model) if model else GeminiCliSession()
-    raise ValueError(f"unknown backend {backend}")
+    return [name for name, ok in available_backends().items() if ok and name in BACKEND_NAMES]
 
 
 def checkout(repo_url: str, branch: str = "") -> Path:
@@ -197,7 +177,7 @@ def main(argv: list[str] | None = None) -> None:
         print(
             json.dumps(
                 {
-                    "supported": list(SUPPORTED_BACKENDS),
+                    "supported": list(BACKEND_NAMES),
                     "detected": detected,
                     "message": (
                         "supported agents detected"

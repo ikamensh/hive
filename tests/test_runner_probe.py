@@ -1,6 +1,6 @@
 import subprocess
 
-from hive.agent_probe import PROBE_MARKER
+from hive.backends import PROBE_MARKER
 from hive.runner import validate_probe_result
 
 
