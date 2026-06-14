@@ -14,11 +14,88 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
+
+
+# Keys hive will store for itself and apply when launching the control plane.
+# Restricting the set keeps `config set` self-documenting and the file tidy.
+CONFIG_KEYS: dict[str, str] = {
+    "HIVE_GH_TOKEN": "GitHub token for clone/push (auto-detected from `gh auth token`)",
+    "OPENAI_API_KEY": "OpenAI API key for the orchestrator",
+    "GEMINI_API_KEY": "Gemini API key for the orchestrator",
+    "HIVE_ORCH_PROVIDER": "orchestrator provider: auto | openai | gemini",
+    "HIVE_ORCH_MODEL": "pin a specific orchestrator model",
+    "HIVE_OPENAI_BASE_URL": "OpenAI-compatible endpoint base URL",
+    "HIVE_GCP_PROJECT": "Firestore project (enables persistence across restarts)",
+    "HIVE_GCS_BUCKET": "GCS bucket for blob storage",
+    "HIVE_RUNNER_TOKEN": "shared token runners present as X-Hive-Token",
+}
+
+
+def config_path() -> Path:
+    return Path(os.environ.get("HIVE_CONFIG_FILE", "~/.config/hive/config.env")).expanduser()
+
+
+def load_stored_config(path=None) -> dict[str, str]:
+    """Read hive's own KEY=VALUE token store. Missing file → empty (fresh machine)."""
+    path = path or config_path()
+    if not path.exists():
+        return {}
+    out: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, _, value = line.partition("=")
+        out[key.strip()] = value.strip()
+    return out
+
+
+def save_stored_config(values: dict[str, str], path=None):
+    path = path or config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = "".join(f"{k}={values[k]}\n" for k in sorted(values))
+    path.write_text(body)
+    path.chmod(0o600)  # the file holds secrets
+    return path
+
+
+def _is_secret(key: str) -> bool:
+    return key.endswith("_TOKEN") or key.endswith("_API_KEY")
+
+
+def _mask(key: str, value: str) -> str:
+    if not _is_secret(key) or not value:
+        return value
+    return f"…{value[-4:]}" if len(value) > 4 else "****"
+
+
+def _gh_token() -> str:
+    import subprocess
+
+    proc = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True)
+    return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="hive", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("run", help="launch the local control plane (auto-detects tokens)")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--reload", action="store_true", help="auto-reload on code changes")
+
+    p = sub.add_parser("config", help="manage hive's own stored tokens/settings")
+    csub = p.add_subparsers(dest="config_command", required=True)
+    csub.add_parser("show", help="show stored config (secrets masked)")
+    cset = csub.add_parser("set", help="store a token/setting (overrides ambient env on `run`)")
+    cset.add_argument("key", choices=sorted(CONFIG_KEYS))
+    cset.add_argument("value")
+    cunset = csub.add_parser("unset", help="remove a stored key")
+    cunset.add_argument("key", choices=sorted(CONFIG_KEYS))
+    cimp = csub.add_parser("import", help="seed stored config from `gh` + current environment")
+    cimp.add_argument("--force", action="store_true", help="overwrite keys already stored")
 
     p = sub.add_parser("projects", help="list projects")
 
@@ -100,6 +177,107 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _csv(value: str) -> list[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
+
+
+def prepare_run_env(env: dict[str, str], stored: dict[str, str]) -> list[str]:
+    """Resolve the tokens/settings the control plane will run with, mutating
+    `env`, and return human-readable lines (with provenance) describing them.
+
+    Precedence, highest first: hive's own `stored` config, then ambient env,
+    then autodetection (`gh auth token`). Stored config intentionally *overrides*
+    ambient env so a user can give hive separate keys — e.g. to bill/track its
+    cost on a different account — while autodetected tokens are just the starting
+    point you seed that store from (`hive config import`)."""
+    stored = {k: v for k, v in stored.items() if v}
+    for key, value in stored.items():
+        env[key] = value
+
+    notes: list[str] = []
+    gh_autodetected = False
+    if not env.get("HIVE_GH_TOKEN"):
+        if token := _gh_token():
+            env["HIVE_GH_TOKEN"] = token
+            gh_autodetected = True
+
+    def src(key: str) -> str:
+        return "stored config" if key in stored else "environment"
+
+    if gh_autodetected:
+        notes.append("github: token from `gh auth token`")
+    elif env.get("HIVE_GH_TOKEN"):
+        notes.append(f"github: HIVE_GH_TOKEN from {src('HIVE_GH_TOKEN')}")
+    else:
+        notes.append("github: no token (`gh auth login` or `hive config set HIVE_GH_TOKEN …`)")
+
+    provider = env.get("HIVE_ORCH_PROVIDER", "auto")
+    if env.get("OPENAI_API_KEY"):
+        notes.append(f"orchestrator: OPENAI_API_KEY from {src('OPENAI_API_KEY')} (provider={provider})")
+    elif env.get("GEMINI_API_KEY"):
+        notes.append(f"orchestrator: GEMINI_API_KEY from {src('GEMINI_API_KEY')} (provider={provider})")
+    else:
+        notes.append("orchestrator: NO API key — `hive config set OPENAI_API_KEY …` or export it")
+
+    if env.get("HIVE_GCP_PROJECT"):
+        notes.append(
+            f"store: Firestore ({env['HIVE_GCP_PROJECT']}, from {src('HIVE_GCP_PROJECT')})"
+        )
+    else:
+        notes.append("store: in-memory (throwaway; set HIVE_GCP_PROJECT to persist)")
+
+    return notes
+
+
+def detect_config(env: dict[str, str]) -> dict[str, str]:
+    """Tokens/settings discoverable on this machine, as a seed for the store:
+    the `gh` token plus any recognized hive vars already in the environment."""
+    found = {key: env[key] for key in CONFIG_KEYS if env.get(key)}
+    if "HIVE_GH_TOKEN" not in found and (token := _gh_token()):
+        found["HIVE_GH_TOKEN"] = token
+    return found
+
+
+def _run_config(args: argparse.Namespace) -> None:
+    path = config_path()
+    stored = load_stored_config(path)
+    action = args.config_command
+    if action == "show":
+        print(json.dumps({k: _mask(k, v) for k, v in stored.items()}, indent=2))
+    elif action == "set":
+        stored[args.key] = args.value
+        save_stored_config(stored, path)
+        print(f"stored {args.key} → {path}")
+    elif action == "unset":
+        stored.pop(args.key, None)
+        save_stored_config(stored, path)
+        print(f"removed {args.key} from {path}")
+    elif action == "import":
+        added = {
+            k: v for k, v in detect_config(os.environ).items()
+            if args.force or k not in stored
+        }
+        stored.update(added)
+        save_stored_config(stored, path)
+        print(json.dumps(
+            {"imported": {k: _mask(k, v) for k, v in added.items()}, "path": str(path)},
+            indent=2,
+        ))
+    else:
+        raise AssertionError(f"unhandled config command {action}")
+
+
+def _run_control_plane(args: argparse.Namespace) -> None:
+    import uvicorn
+
+    for line in prepare_run_env(os.environ, load_stored_config()):
+        print(f"  {line}")
+    print(f"hive control plane → http://{args.host}:{args.port}\n")
+    uvicorn.run(
+        "hive.api:production_app",
+        factory=True,
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+    )
 
 
 def run(args: argparse.Namespace, client) -> dict | list:
@@ -200,6 +378,12 @@ def main(argv: list[str] | None = None) -> None:
     import httpx
 
     args = build_parser().parse_args(argv)
+    if args.command == "run":
+        _run_control_plane(args)
+        return
+    if args.command == "config":
+        _run_config(args)
+        return
     auth = os.environ.get("HIVE_BASIC_AUTH", "")
     client = httpx.Client(
         base_url=os.environ.get("HIVE_URL", "http://localhost:8000"),

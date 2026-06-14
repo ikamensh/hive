@@ -9,7 +9,13 @@ import pytest
 from fastapi.testclient import TestClient
 from test_api_e2e import ScriptedOrchestrator, _pump, _register_usable_runner
 
-from hive.cli import build_parser, run
+from hive.cli import (
+    build_parser,
+    detect_config,
+    load_stored_config,
+    prepare_run_env,
+    run,
+)
 from hive.config import Config
 from hive.store import MemoryStore
 from hive.supervisor import Supervisor
@@ -112,6 +118,74 @@ def test_cli_settings_and_admin(harness):
 
     patched = cli(client, "set", pid, "--daily-budget", "12.5")
     assert patched["daily_budget_usd"] == 12.5
+
+
+def _fake_gh(monkeypatch, token):
+    import subprocess
+
+    rc = 0 if token else 1
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a, rc, stdout=token, stderr=""))
+
+
+def test_prepare_run_env_extracts_gh_token(monkeypatch):
+    _fake_gh(monkeypatch, "ghp_abc\n")
+    env = {"OPENAI_API_KEY": "sk-x"}
+    notes = prepare_run_env(env, {})
+    assert env["HIVE_GH_TOKEN"] == "ghp_abc"
+    assert any("gh auth token" in n for n in notes)
+    assert any("OPENAI_API_KEY from environment" in n for n in notes)
+    assert any("in-memory" in n for n in notes)
+
+
+def test_prepare_run_env_no_gh_no_key(monkeypatch):
+    _fake_gh(monkeypatch, "")
+    env: dict[str, str] = {}
+    notes = prepare_run_env(env, {})
+    assert "HIVE_GH_TOKEN" not in env
+    assert any("NO API key" in n for n in notes)
+
+
+def test_stored_config_overrides_ambient_env(monkeypatch):
+    # gh would offer a token, but the stored value must win (separate hive key).
+    _fake_gh(monkeypatch, "from-gh")
+    env = {"OPENAI_API_KEY": "shell-key", "HIVE_GH_TOKEN": "shell-gh"}
+    stored = {"OPENAI_API_KEY": "hive-key", "HIVE_GH_TOKEN": "hive-gh", "HIVE_GCP_PROJECT": "proj"}
+    notes = prepare_run_env(env, stored)
+    assert env["OPENAI_API_KEY"] == "hive-key"
+    assert env["HIVE_GH_TOKEN"] == "hive-gh"
+    assert any("OPENAI_API_KEY from stored config" in n for n in notes)
+    assert any("Firestore (proj, from stored config)" in n for n in notes)
+
+
+def test_config_command_set_show_unset(tmp_path, monkeypatch, capsys):
+    import json as _json
+
+    from hive.cli import _mask, main
+
+    cfg = tmp_path / "config.env"
+    monkeypatch.setenv("HIVE_CONFIG_FILE", str(cfg))
+
+    main(["config", "set", "OPENAI_API_KEY", "sk-secret-1234"])
+    assert cfg.stat().st_mode & 0o777 == 0o600
+    assert load_stored_config(cfg) == {"OPENAI_API_KEY": "sk-secret-1234"}
+
+    capsys.readouterr()
+    main(["config", "show"])
+    shown = _json.loads(capsys.readouterr().out)
+    assert shown == {"OPENAI_API_KEY": "…1234"}  # masked, never the raw secret
+
+    main(["config", "unset", "OPENAI_API_KEY"])
+    assert load_stored_config(cfg) == {}
+    assert _mask("HIVE_ORCH_MODEL", "gpt-x") == "gpt-x"  # non-secret shown plainly
+
+
+def test_detect_config_seeds_from_gh_and_env(monkeypatch):
+    _fake_gh(monkeypatch, "ghp_detected")
+    found = detect_config({"GEMINI_API_KEY": "g-key", "HIVE_ORCH_MODEL": "m", "IRRELEVANT": "x"})
+    assert found["HIVE_GH_TOKEN"] == "ghp_detected"
+    assert found["GEMINI_API_KEY"] == "g-key"
+    assert "IRRELEVANT" not in found
 
 
 def test_cli_cancel_and_dismiss(harness):
