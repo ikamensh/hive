@@ -966,12 +966,20 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 resource.last_probe_text = body.text[:2000]
                 if body.cancelled:
                     resource.usability_status = ResourceUsability.unknown
+                elif body.resource_exhausted:
+                    resource.usability_status = ResourceUsability.usable
                 elif body.is_error:
                     resource.usability_status = ResourceUsability.failed
                 else:
                     resource.usability_status = ResourceUsability.usable
+                    resource.clear_exhaustion()
             if body.resource_exhausted:
-                resource.cooldown_until = time.time() + RATE_LIMIT_COOLDOWN_S
+                resource.mark_exhausted(
+                    until=time.time() + RATE_LIMIT_COOLDOWN_S,
+                    at=task.finished_at,
+                    text=body.text,
+                    task_id=task.id,
+                )
 
         for resource in store.list(
             Resource,
@@ -982,7 +990,12 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             store.update(Resource, resource.id, account)
 
         if task.kind == TaskKind.probe:
-            if probe_resource_enabled and body.is_error and HUMAN_FIX_PATTERNS.search(body.text):
+            if (
+                probe_resource_enabled
+                and body.is_error
+                and not body.resource_exhausted
+                and HUMAN_FIX_PATTERNS.search(body.text)
+            ):
                 runner = store.get(Runner, task.runner_id)
                 runner_name = runner.name if runner else task.runner_id
                 hint = REGISTRY.get(task.backend).login_hint if task.backend in REGISTRY else ""

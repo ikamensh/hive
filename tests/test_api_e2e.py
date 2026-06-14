@@ -406,6 +406,9 @@ def test_rate_limited_result_sets_cooldown(harness):
     assert not res["available"]
     assert res["cooldown_until"] > time.time()
     assert res["usability_status"] == "usable"
+    assert res["last_exhaustion_text"] == "429 rate limit"
+    assert res["last_exhaustion_task_id"] == task["id"]
+    assert res["last_exhaustion_at"] > 0
 
 
 # Real message from `codex exec` when the ChatGPT subscription window is exhausted.
@@ -459,6 +462,9 @@ def test_codex_quota_exhaustion_blocks_project(harness):
     assert codex_res["usability_status"] == "usable"  # quota ≠ broken login
     assert not codex_res["available"]
     assert codex_res["cooldown_until"] > time.time()
+    assert codex_res["last_exhaustion_text"] == CODEX_QUOTA_ERROR
+    assert codex_res["last_exhaustion_task_id"] == task.id
+    assert codex_res["last_exhaustion_at"] > 0
 
     # Another codex task is stuck until the cooldown lifts.
     store.put(
@@ -479,6 +485,28 @@ def test_codex_quota_exhaustion_blocks_project(harness):
     wake_text = orch.invocations[-1][0]
     assert "failed" in wake_text
     assert "usage limit" in wake_text
+
+    # A later successful probe proves the temporary availability cooldown is stale.
+    queued = client.post(f"/api/resources/{codex_res['id']}/probe").json()
+    probe = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert probe["id"] == queued["task"]["id"]
+    client.post(
+        f"/api/tasks/{probe['id']}/result",
+        json={"text": PROBE_MARKER},
+        headers=RUNNER_HEADERS,
+    )
+    codex_res = next(
+        r for r in client.get("/api/resources").json()["resources"] if r["backend"] == "codex"
+    )
+    assert codex_res["usability_status"] == "usable"
+    assert codex_res["available"]
+    assert codex_res["cooldown_until"] == 0
+    assert codex_res["last_exhaustion_text"] == ""
+    assert codex_res["last_exhaustion_task_id"] == ""
+    assert codex_res["last_exhaustion_at"] == 0
+
+    _pump(client, store)
+    assert store.list(Task, project_id=pid, status=TaskStatus.running)
 
 
 def test_runner_auth_required(harness):
@@ -533,6 +561,36 @@ def test_resource_probe_marks_usable_and_failed(harness):
     assert store.list(HumanTask)[0].status == HumanTaskStatus.done
 
     assert client.post(f"/api/resources/{resource.id}/probe").status_code == 409
+
+
+def test_resource_exhausted_probe_is_availability_not_login_failure(harness):
+    client, store, _orch = harness
+    rid = client.post(
+        "/api/runners/register",
+        json={"name": "quota-probe-runner", "backends": ["codex"]},
+        headers=RUNNER_HEADERS,
+    ).json()["runner_id"]
+    resource = client.get("/api/resources").json()["resources"][0]
+
+    queued = client.post(f"/api/resources/{resource['id']}/probe").json()
+    probe = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert probe["id"] == queued["task"]["id"]
+    client.post(
+        f"/api/tasks/{probe['id']}/result",
+        json={
+            "text": CODEX_QUOTA_ERROR,
+            "is_error": True,
+            "resource_exhausted": True,
+        },
+        headers=RUNNER_HEADERS,
+    )
+
+    resource = store.get(Resource, resource["id"])
+    assert resource.usability_status == "usable"
+    assert not resource.available()
+    assert resource.cooldown_until > time.time()
+    assert resource.last_exhaustion_text == CODEX_QUOTA_ERROR
+    assert not store.list(HumanTask)
 
 
 def test_local_runner_start_endpoint(tmp_path):

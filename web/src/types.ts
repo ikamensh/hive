@@ -176,6 +176,9 @@ export interface ResourceInfo {
   last_probe_task_id: string;
   last_probe_text: string;
   cooldown_until: number;
+  last_exhaustion_at: number;
+  last_exhaustion_text: string;
+  last_exhaustion_task_id: string;
   total_cost_usd: number;
   total_tasks: number;
   available: boolean;

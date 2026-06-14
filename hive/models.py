@@ -241,6 +241,9 @@ class Resource(BaseModel):
     last_probe_task_id: str = ""
     last_probe_text: str = ""
     cooldown_until: float = 0.0  # epoch; >now means exhausted
+    last_exhaustion_at: float = 0.0
+    last_exhaustion_text: str = ""  # runner-reported quota/rate-limit message
+    last_exhaustion_task_id: str = ""
     total_cost_usd: float = 0.0
     total_tasks: int = 0
     enabled: bool = True
@@ -252,6 +255,18 @@ class Resource(BaseModel):
             and self.usability_status == ResourceUsability.usable
             and now() >= self.cooldown_until
         )
+
+    def mark_exhausted(self, *, until: float, at: float, text: str, task_id: str) -> None:
+        self.cooldown_until = until
+        self.last_exhaustion_at = at
+        self.last_exhaustion_text = text[:2000]
+        self.last_exhaustion_task_id = task_id
+
+    def clear_exhaustion(self) -> None:
+        self.cooldown_until = 0.0
+        self.last_exhaustion_at = 0.0
+        self.last_exhaustion_text = ""
+        self.last_exhaustion_task_id = ""
 
 
 class Subscription(BaseModel):

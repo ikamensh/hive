@@ -621,13 +621,38 @@ function usabilityTitle(res: ResourceInfo): string {
   ].filter(Boolean).join("\n\n");
 }
 
+function exhaustionRetryHint(text: string): string | undefined {
+  const match = text.match(/try again at ([^.\n]+)/i);
+  return match?.[1]?.trim();
+}
+
+function exhaustionTitle(res: ResourceInfo): string {
+  const parts = [
+    res.last_exhaustion_text,
+    res.cooldown_until > Date.now() / 1000 && `Resumes in ${countdown(res.cooldown_until)}`,
+    res.last_exhaustion_at > 0 && `Hit ${ago(res.last_exhaustion_at)}`,
+    res.last_exhaustion_task_id && `Task ${res.last_exhaustion_task_id}`,
+  ].filter(Boolean);
+  return parts.join("\n\n");
+}
+
 function availability(res: ResourceInfo) {
   if (!isResourceEnabled(res)) {
     return <span className="avail wait" title={res.disabled_reason || "resource is disabled"}>disabled</span>;
   }
   if (res.available) return <span className="avail ok">available</span>;
   if (res.cooldown_until > Date.now() / 1000) {
-    return <span className="avail cool">cooldown {countdown(res.cooldown_until)}</span>;
+    const retryHint = res.last_exhaustion_text ? exhaustionRetryHint(res.last_exhaustion_text) : undefined;
+    const label = res.last_exhaustion_text
+      ? retryHint
+        ? `quota exhausted · ${retryHint}`
+        : `quota exhausted · ${countdown(res.cooldown_until)}`
+      : `cooldown ${countdown(res.cooldown_until)}`;
+    return (
+      <span className="avail cool" title={res.last_exhaustion_text ? exhaustionTitle(res) : undefined}>
+        {label}
+      </span>
+    );
   }
   return <span className="avail wait">not dispatchable</span>;
 }
