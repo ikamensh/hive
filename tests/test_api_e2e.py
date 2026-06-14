@@ -18,6 +18,7 @@ from hive.config import Config
 from hive.llm.openai import OpenAIAdapter
 from hive.models import (
     HumanTask,
+    HumanTaskStatus,
     OrchestratorRun,
     Project,
     Question,
@@ -447,6 +448,18 @@ def test_resource_probe_marks_usable_and_failed(harness):
     assert resource.usability_status == "failed"
     assert not resource.available()
     assert store.list(HumanTask)[0].title == "Fix cursor login on probe-runner"
+
+    patched = client.patch(
+        f"/api/resources/{resource.id}",
+        json={"enabled": False, "disabled_reason": "No subscription"},
+    ).json()
+    assert patched["enabled"] is False
+    assert patched["available"] is False
+    assert patched["disabled_reason"] == "No subscription"
+    assert store.get(Resource, resource.id).enabled is False
+    assert store.list(HumanTask)[0].status == HumanTaskStatus.done
+
+    assert client.post(f"/api/resources/{resource.id}/probe").status_code == 409
 
 
 def test_local_runner_start_endpoint(tmp_path):

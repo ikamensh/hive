@@ -1301,6 +1301,17 @@ textarea:focus {
 .machine-agent-table td:last-child {
   padding-right: 18px;
 }
+.resource-disabled {
+  opacity: 0.62;
+}
+.resource-actions {
+  display: inline-flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.resource-actions .quiet {
+  color: var(--ink-faint);
+}
 .res-table td {
   padding: 10px 16px;
   border-bottom: 1px solid var(--line-soft);

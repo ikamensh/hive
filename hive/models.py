@@ -242,9 +242,15 @@ class Resource(BaseModel):
     cooldown_until: float = 0.0  # epoch; >now means exhausted
     total_cost_usd: float = 0.0
     total_tasks: int = 0
+    enabled: bool = True
+    disabled_reason: str = ""
 
     def available(self) -> bool:
-        return self.usability_status == ResourceUsability.usable and now() >= self.cooldown_until
+        return (
+            self.enabled
+            and self.usability_status == ResourceUsability.usable
+            and now() >= self.cooldown_until
+        )
 
 
 class Subscription(BaseModel):

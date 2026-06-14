@@ -177,6 +177,7 @@ function OrgContext() {
 export default function Resources() {
   const { data, failed, refresh } = usePoll(() => api.resources(), []);
   const [probing, setProbing] = useState<string | null>(null);
+  const [updatingResource, setUpdatingResource] = useState<string | null>(null);
   const [startingRunner, setStartingRunner] = useState(false);
   const [runnerError, setRunnerError] = useState("");
   // 1s ticker so cooldown countdowns feel live between polls.
@@ -195,6 +196,19 @@ export default function Resources() {
       await refresh();
     } finally {
       setProbing(null);
+    }
+  };
+
+  const setResourceEnabled = async (res: ResourceInfo, enabled: boolean) => {
+    setUpdatingResource(res.id);
+    try {
+      await api.updateResource(res.id, {
+        enabled,
+        disabled_reason: enabled ? "" : "No subscription or intentionally not used.",
+      });
+      await refresh();
+    } finally {
+      setUpdatingResource(null);
     }
   };
 
@@ -253,8 +267,10 @@ export default function Resources() {
                 key={card.machine.id}
                 card={card}
                 probing={probing}
+                updatingResource={updatingResource}
                 runnerOnline={runnerOnline}
                 onProbe={probe}
+                onSetEnabled={setResourceEnabled}
               />
             ))}
           </div>
@@ -337,13 +353,17 @@ function virtualMachineForRunner(runner: RunnerInfo): MachineInfo {
 function MachineCard({
   card,
   probing,
+  updatingResource,
   runnerOnline,
   onProbe,
+  onSetEnabled,
 }: {
   card: MachineCardData;
   probing: string | null;
+  updatingResource: string | null;
   runnerOnline: (id: string) => boolean;
   onProbe: (id: string) => void;
+  onSetEnabled: (res: ResourceInfo, enabled: boolean) => void;
 }) {
   const online = card.runners.some((runner) => runner.online);
   const lastSeen = Math.max(card.machine.last_seen, ...card.runners.map((runner) => runner.last_seen), 0);
@@ -394,7 +414,7 @@ function MachineCard({
           </thead>
           <tbody>
             {card.resources.map((res) => (
-              <tr key={res.id}>
+              <tr key={res.id} className={isResourceEnabled(res) ? undefined : "resource-disabled"}>
                 <td className="mono">
                   <span>{res.backend}</span>
                   {card.runners.length > 1 && runnerById.get(res.runner_id) && (
@@ -416,13 +436,36 @@ function MachineCard({
                 <td className="num">{res.total_tasks}</td>
                 <td className="num">{money(res.total_cost_usd)}</td>
                 <td className="num">
-                  <button
-                    className="ghost"
-                    disabled={!runnerOnline(res.runner_id) || res.usability_status === "probing" || probing === res.id}
-                    onClick={() => onProbe(res.id)}
-                  >
-                    {probing === res.id || res.usability_status === "probing" ? "probing" : "probe"}
-                  </button>
+                  <div className="resource-actions">
+                    {isResourceEnabled(res) ? (
+                      <>
+                        <button
+                          className="ghost"
+                          disabled={!runnerOnline(res.runner_id) || res.usability_status === "probing" || probing === res.id}
+                          onClick={() => onProbe(res.id)}
+                        >
+                          {probing === res.id || res.usability_status === "probing" ? "probing" : "probe"}
+                        </button>
+                        <button
+                          className="ghost quiet"
+                          title="mark this agent intentionally unavailable on this machine"
+                          disabled={updatingResource === res.id || res.usability_status === "probing"}
+                          onClick={() => onSetEnabled(res, false)}
+                        >
+                          disable
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        className="ghost"
+                        title={res.disabled_reason || "resource is disabled"}
+                        disabled={updatingResource === res.id}
+                        onClick={() => onSetEnabled(res, true)}
+                      >
+                        enable
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -468,15 +511,27 @@ function discoveryTitle(res: ResourceInfo): string {
 
 function usabilityTitle(res: ResourceInfo): string {
   const checked = res.last_probe_at > 0 ? `last checked ${ago(res.last_probe_at)}` : "not probed yet";
-  return [checked, res.last_probe_task_id && `task ${res.last_probe_task_id}`, res.last_probe_text].filter(Boolean).join("\n\n");
+  return [
+    isResourceEnabled(res) ? "" : `disabled: ${res.disabled_reason || "No reason recorded."}`,
+    checked,
+    res.last_probe_task_id && `task ${res.last_probe_task_id}`,
+    res.last_probe_text,
+  ].filter(Boolean).join("\n\n");
 }
 
 function availability(res: ResourceInfo) {
+  if (!isResourceEnabled(res)) {
+    return <span className="avail wait" title={res.disabled_reason || "resource is disabled"}>disabled</span>;
+  }
   if (res.available) return <span className="avail ok">available</span>;
   if (res.cooldown_until > Date.now() / 1000) {
     return <span className="avail cool">cooldown {countdown(res.cooldown_until)}</span>;
   }
   return <span className="avail wait">not dispatchable</span>;
+}
+
+function isResourceEnabled(res: ResourceInfo): boolean {
+  return res.enabled !== false;
 }
 
 function LocalRunnerAction({

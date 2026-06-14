@@ -63,6 +63,8 @@ const realApi = {
     http<NonNullable<ResourcesPayload["local_runner"]>>("/api/local-runner/start", { method: "POST" }),
   probeResource: (id: string) =>
     http(`/api/resources/${id}/probe`, { method: "POST" }),
+  updateResource: (id: string, patch: { enabled?: boolean; disabled_reason?: string }) =>
+    http(`/api/resources/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   subscriptions: () => http<Subscription[]>("/api/subscriptions"),
   addSubscription: (provider: string, plan: string, notes: string) =>
     http<Subscription>("/api/subscriptions", {

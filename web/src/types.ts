@@ -151,6 +151,8 @@ export interface ResourceInfo {
   total_cost_usd: number;
   total_tasks: number;
   available: boolean;
+  enabled?: boolean;
+  disabled_reason?: string;
 }
 
 export interface ResourcesPayload {

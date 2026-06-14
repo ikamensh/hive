@@ -265,10 +265,10 @@ const resourcesPayload: ResourcesPayload = {
     { id: "r-hex2", workspace_id: "default", machine_id: "m-hex2", name: "hex-2", backends: ["cursor", "gemini-cli"], last_seen: now - 60 * 47, online: false },
   ],
   resources: [
-    { id: "res-1", runner_id: "r-hex1", backend: "claude", discovery_status: "ok", discovery_text: "", discovered_at: now - 120, cli_path: "/usr/local/bin/claude", cli_version: "1.0.0", usability_status: "usable", last_probe_at: now - 3600, last_probe_task_id: "probe-1", last_probe_text: "HIVE PROBE PASSED", cooldown_until: 0, total_cost_usd: 214.6, total_tasks: 131, available: true },
-    { id: "res-2", runner_id: "r-hex1", backend: "codex", discovery_status: "ok", discovery_text: "", discovered_at: now - 120, cli_path: "/usr/local/bin/codex", cli_version: "1.0.0", usability_status: "unknown", last_probe_at: 0, last_probe_task_id: "", last_probe_text: "", cooldown_until: 0, total_cost_usd: 88.1, total_tasks: 64, available: false },
-    { id: "res-3", runner_id: "r-hex2", backend: "cursor", discovery_status: "warning", discovery_text: "authentication issue detected by preflight", discovered_at: now - 80, cli_path: "/usr/local/bin/cursor-agent", cli_version: "1.0.0", usability_status: "failed", last_probe_at: now - 900, last_probe_task_id: "probe-3", last_probe_text: "not authenticated", cooldown_until: now + 1860, total_cost_usd: 41.9, total_tasks: 23, available: false },
-    { id: "res-4", runner_id: "r-hex2", backend: "gemini-cli", discovery_status: "ok", discovery_text: "", discovered_at: now - 80, cli_path: "/usr/local/bin/gemini", cli_version: "1.0.0", usability_status: "usable", last_probe_at: now - 7200, last_probe_task_id: "probe-4", last_probe_text: "HIVE PROBE PASSED", cooldown_until: 0, total_cost_usd: 3.2, total_tasks: 4, available: false },
+    { id: "res-1", runner_id: "r-hex1", backend: "claude", discovery_status: "ok", discovery_text: "", discovered_at: now - 120, cli_path: "/usr/local/bin/claude", cli_version: "1.0.0", usability_status: "usable", last_probe_at: now - 3600, last_probe_task_id: "probe-1", last_probe_text: "HIVE PROBE PASSED", cooldown_until: 0, total_cost_usd: 214.6, total_tasks: 131, available: true, enabled: true, disabled_reason: "" },
+    { id: "res-2", runner_id: "r-hex1", backend: "codex", discovery_status: "ok", discovery_text: "", discovered_at: now - 120, cli_path: "/usr/local/bin/codex", cli_version: "1.0.0", usability_status: "unknown", last_probe_at: 0, last_probe_task_id: "", last_probe_text: "", cooldown_until: 0, total_cost_usd: 88.1, total_tasks: 64, available: false, enabled: true, disabled_reason: "" },
+    { id: "res-3", runner_id: "r-hex2", backend: "cursor", discovery_status: "warning", discovery_text: "authentication issue detected by preflight", discovered_at: now - 80, cli_path: "/usr/local/bin/cursor-agent", cli_version: "1.0.0", usability_status: "failed", last_probe_at: now - 900, last_probe_task_id: "probe-3", last_probe_text: "not authenticated", cooldown_until: now + 1860, total_cost_usd: 41.9, total_tasks: 23, available: false, enabled: true, disabled_reason: "" },
+    { id: "res-4", runner_id: "r-hex2", backend: "gemini-cli", discovery_status: "ok", discovery_text: "", discovered_at: now - 80, cli_path: "/usr/local/bin/gemini", cli_version: "1.0.0", usability_status: "usable", last_probe_at: now - 7200, last_probe_task_id: "probe-4", last_probe_text: "HIVE PROBE PASSED", cooldown_until: 0, total_cost_usd: 3.2, total_tasks: 4, available: false, enabled: true, disabled_reason: "" },
   ],
   local_runner: {
     supported: true,
@@ -422,6 +422,16 @@ export const api = {
     res.total_tasks += 1;
     res.last_probe_text = "HIVE PROBE PASSED";
     return structuredClone({ resource: res });
+  },
+  updateResource: async (id: string, patch: { enabled?: boolean; disabled_reason?: string }) => {
+    const res = resourcesPayload.resources.find((r) => r.id === id);
+    if (!res) throw new Error("not found");
+    if (patch.enabled !== undefined) {
+      res.enabled = patch.enabled;
+      res.disabled_reason = patch.enabled ? "" : (patch.disabled_reason || "Disabled by operator.");
+      res.available = patch.enabled && res.usability_status === "usable" && res.cooldown_until <= Date.now() / 1000;
+    }
+    return structuredClone(res);
   },
 
   subscriptions: async (): Promise<Subscription[]> => structuredClone(subscriptions),

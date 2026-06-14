@@ -134,6 +134,11 @@ class TaskResult(BaseModel):
     cancelled: bool = False  # runner stopped the task on an operator cancel request
 
 
+class ResourcePatch(BaseModel):
+    enabled: bool | None = None
+    disabled_reason: str = ""
+
+
 def _ensure_probe_repo(data_dir: Path) -> Path:
     repo = data_dir / PROBE_REPO_DIR
     repo.mkdir(parents=True, exist_ok=True)
@@ -272,6 +277,8 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return None
 
     def queue_probe(resource: Resource, runner: Runner) -> tuple[Task, Resource]:
+        if not resource.enabled:
+            raise HTTPException(409, "resource is disabled")
         if resource.backend not in runner.backends:
             raise HTTPException(409, "runner no longer advertises this backend")
         if task := active_probe_task(resource):
@@ -297,6 +304,20 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         resource.last_probe_text = "Probe queued."
         store.put(resource)
         return task, resource
+
+    def complete_resource_login_todos(resource: Resource) -> None:
+        runner = store.get(Runner, resource.runner_id)
+        runner_name = runner.name if runner else resource.runner_id
+        title = f"Fix {resource.backend} login on {runner_name}"
+        for task in store.list(HumanTask, workspace_id=resource.workspace_id):
+            if (
+                task.status == HumanTaskStatus.open
+                and task.project_id == ""
+                and task.title == title
+            ):
+                task.status = HumanTaskStatus.done
+                task.done_at = time.time()
+                store.put(task)
 
     # ---- auth ---------------------------------------------------------------
 
@@ -583,6 +604,32 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         task, resource = queue_probe(resource, runner)
         return {"task": task.model_dump(), "resource": {**resource.model_dump(), "available": resource.available()}}
 
+    @app.patch("/api/resources/{resource_id}")
+    def update_resource(
+        resource_id: str,
+        body: ResourcePatch,
+        ctx: AuthContext = Depends(current),
+    ):
+        resource = store.get(Resource, resource_id)
+        if not resource or resource.workspace_id != ctx.workspace_id:
+            raise HTTPException(404)
+
+        def mutate(resource: Resource) -> None:
+            if body.enabled is not None:
+                resource.enabled = body.enabled
+                if body.enabled:
+                    resource.disabled_reason = ""
+                else:
+                    reason = body.disabled_reason.strip()
+                    resource.disabled_reason = reason or "Disabled by operator."
+
+        updated = store.update(Resource, resource_id, mutate)
+        if updated is None:
+            raise HTTPException(404)
+        if body.enabled is False:
+            complete_resource_login_todos(updated)
+        return {**updated.model_dump(), "available": updated.available()}
+
     @app.get("/api/subscriptions")
     def list_subscriptions(ctx: AuthContext = Depends(current)):
         return [
@@ -749,7 +796,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 apply_discovery(resource, discovery)
             store.put(resource)
             resources_by_pair[(machine.id, backend)] = resource
-            if body.auto_probe and resource.usability_status == ResourceUsability.unknown:
+            if body.auto_probe and resource.enabled and resource.usability_status == ResourceUsability.unknown:
                 queue_probe(resource, runner)
 
         for discovery in body.discoveries:
@@ -810,10 +857,14 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if task is None:
             raise HTTPException(404)
 
+        probe_resource_enabled = True
+
         def account(resource: Resource) -> None:
+            nonlocal probe_resource_enabled
             resource.total_tasks += 1
             resource.total_cost_usd += body.cost_usd
             if task.kind == TaskKind.probe and resource.last_probe_task_id == task.id:
+                probe_resource_enabled = resource.enabled
                 resource.last_probe_at = task.finished_at
                 resource.last_probe_text = body.text[:2000]
                 if body.cancelled:
@@ -834,7 +885,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             store.update(Resource, resource.id, account)
 
         if task.kind == TaskKind.probe:
-            if body.is_error and HUMAN_FIX_PATTERNS.search(body.text):
+            if probe_resource_enabled and body.is_error and HUMAN_FIX_PATTERNS.search(body.text):
                 runner = store.get(Runner, task.runner_id)
                 runner_name = runner.name if runner else task.runner_id
                 hint = REGISTRY.get(task.backend).login_hint if task.backend in REGISTRY else ""
