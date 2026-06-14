@@ -120,7 +120,7 @@ class Project(BaseModel):
 
 class WorkstreamStatus(StrEnum):
     active = "active"
-    queued = "queued"  # issues mode (dormant ordering variant): cleared, awaiting its turn
+    queued = "queued"  # issues mode: ingested, awaiting its turn (strict one-at-a-time)
     parked = "parked"
     done = "done"
     # issues-mode per-issue pipeline (see wiki/issues-mode.md):

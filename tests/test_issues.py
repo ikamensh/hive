@@ -11,7 +11,7 @@ from hive.blobstore import LocalBlobStore
 from hive.config import Config
 from hive.issues import (
     activate_next,
-    create_resolve_tasks,
+    advance_issues,
     issue_branch,
     reconcile,
 )
@@ -53,12 +53,12 @@ def issues_project(store) -> Project:
 # -- ingestion (pure) --------------------------------------------------------
 
 
-def test_reconcile_ingests_as_resolving():
+def test_reconcile_ingests_as_queued():
     store = MemoryStore()
     project = issues_project(store)
     reconcile(store, project, [issue(7), issue(3, attachments=["http://x/a.png"])])
     ws = {w.issue_number: w for w in store.list(Workstream, project_id=project.id)}
-    assert {w.status for w in ws.values()} == {WorkstreamStatus.resolving}
+    assert {w.status for w in ws.values()} == {WorkstreamStatus.queued}
     assert all(w.source == WorkstreamSource.issue for w in ws.values())
     assert ws[3].issue_attachments == ["http://x/a.png"]
 
@@ -73,38 +73,45 @@ def test_reconcile_idempotent_and_cancels_closed():
     assert ws[2].status == WorkstreamStatus.cancelled
 
 
-@pytest.mark.parametrize("stuck", [WorkstreamStatus.blocked_clarity, WorkstreamStatus.rejected])
+@pytest.mark.parametrize(
+    "stuck",
+    [WorkstreamStatus.blocked_clarity, WorkstreamStatus.rejected, WorkstreamStatus.resolving],
+)
 def test_reconcile_regates_stuck_issue_on_rescan(stuck):
     store = MemoryStore()
     project = issues_project(store)
     reconcile(store, project, [issue(1)])
     ws = store.list(Workstream, project_id=project.id)[0]
-    ws.status = stuck
+    ws.status = stuck  # blocked/rejected, or errored mid-flight with no live task
     store.put(ws)
     reconcile(store, project, [issue(1)])  # human acted, scans again
-    assert store.get(Workstream, ws.id).status == WorkstreamStatus.resolving
+    assert store.get(Workstream, ws.id).status == WorkstreamStatus.queued
 
 
 # -- resolve task setup ------------------------------------------------------
 
 
-def test_create_resolve_tasks_one_per_issue_idempotent():
+def test_advance_issues_starts_one_at_a_time():
     store = MemoryStore()
     project = issues_project(store)
-    reconcile(store, project, [issue(1), issue(2)])
-    assert create_resolve_tasks(store, project) == 2
+    reconcile(store, project, [issue(2), issue(1)])
+    # strict: one issue promoted to resolving with a resolve task; the rest wait
+    assert advance_issues(store, project) == 1
     tasks = store.list(Task, project_id=project.id)
-    assert len(tasks) == 2
-    assert all(t.kind == TaskKind.resolve and t.backend == "codex" for t in tasks)
-    # a second call doesn't double up while the first tasks are pending
-    assert create_resolve_tasks(store, project) == 0
+    assert len(tasks) == 1 and tasks[0].kind == TaskKind.resolve and tasks[0].backend == "codex"
+    assert tasks[0].issue_number == 1  # lowest order first
+    statuses = {w.issue_number: w.status for w in store.list(Workstream, project_id=project.id)}
+    assert statuses == {1: WorkstreamStatus.resolving, 2: WorkstreamStatus.queued}
+    # a second call is a no-op while issue #1 is in flight
+    assert advance_issues(store, project) == 0
+    assert len(store.list(Task, project_id=project.id)) == 1
 
 
 def test_resolve_task_carries_issue_context():
     store = MemoryStore()
     project = issues_project(store)
     reconcile(store, project, [issue(42, "login broken", "stack trace here", ["http://x/s.png"])])
-    create_resolve_tasks(store, project)
+    advance_issues(store, project)
     task = store.list(Task, project_id=project.id)[0]
     assert task.branch == issue_branch(42) == "hive/issue-42"
     assert task.issue_number == 42
@@ -151,12 +158,10 @@ def test_compute_state_issues_mode():
 def test_activate_next_promotes_lowest_queued_when_idle():
     store = MemoryStore()
     project = issues_project(store)
-    reconcile(store, project, [issue(1), issue(2)])
     assert activate_next(store, project) is None  # nothing queued yet
-    for w in store.list(Workstream, project_id=project.id):
-        w.status = WorkstreamStatus.queued
-        w.order = w.issue_number
-        store.put(w)
+    for n in (2, 1):
+        store.put(Workstream(project_id=project.id, title=f"#{n}", status=WorkstreamStatus.queued,
+                             source=WorkstreamSource.issue, issue_number=n, order=n))
     activated = activate_next(store, project)
     assert activated.issue_number == 1 and activated.status == WorkstreamStatus.active
 
@@ -247,6 +252,43 @@ def test_scan_resolve_review_accept_lands(app, monkeypatch):
 
     assert merged == {"head": "hive/issue-1", "closed": 1}
     assert store.get(Workstream, ws_id).status == WorkstreamStatus.done
+
+
+def test_strict_sequencing_starts_next_issue_only_after_landing(app, monkeypatch):
+    client, store = app
+    pid = _issues_project_via_api(client)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    _pass_preflight(monkeypatch)
+    monkeypatch.setattr("hive.api.fetch_open_issues_full",
+                        lambda repo, token: [issue(1, "bug a"), issue(2, "bug b")])
+    monkeypatch.setattr("hive.api.merge_branch", lambda repo, head, token, message="": None)
+    monkeypatch.setattr("hive.api.resolve_issue_on_github", lambda repo, number, comment, token: None)
+
+    resp = client.post(f"/api/projects/{pid}/scan-issues").json()
+    assert resp["open_issues"] == 2 and resp["resolve_queued"] == 1  # only one started
+
+    def resolve_numbers():
+        return sorted(t.issue_number for t in store.list(Task, project_id=pid) if t.kind == TaskKind.resolve)
+
+    assert resolve_numbers() == [1]  # issue #2 is still queued, no task yet
+
+    # drive issue #1 all the way through resolve → review → land
+    _pump(client, store)
+    r1 = _poll(client, rid)
+    assert r1["issue_number"] == 1
+    _report(client, r1["id"], "fixed\nOUTCOME: FIXED")
+    _pump(client, store)
+    rev1 = _poll(client, rid)
+    assert rev1["kind"] == "review" and rev1["issue_number"] == 1
+    assert resolve_numbers() == [1]  # #2 still hasn't started while #1 is reviewing
+    _report(client, rev1["id"], "good\nREVIEW: ACCEPT")
+
+    # only now does issue #2 begin
+    assert store.get(Workstream, rev1["workstream_id"]).status == WorkstreamStatus.done
+    assert resolve_numbers() == [1, 2]
+    _pump(client, store)
+    r2 = _poll(client, rid)
+    assert r2["kind"] == "resolve" and r2["issue_number"] == 2
 
 
 def test_resolve_blocked_holds_issue(app, monkeypatch):

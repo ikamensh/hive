@@ -8,7 +8,7 @@ A project work source where Hive resolves a repo's open GitHub issues instead of
 
 Driven by the human scan + the task-result state machine — not the planner. The orchestrator's ordering/solve tooling (`order_issues`, `resolve_issue`, `prompts/orchestrator_issues.md`) is kept in the tree, dormant, for a future ordered variant; it is not on the active path.
 
-1. **Scan** (human-clicked, `POST /api/projects/{id}/scan-issues`; no automatic polling). For each open issue fetch **title, body, all comment text, and embedded image attachments**. Reconcile into one issue-workstream per issue (ingest new, cancel externally-closed, re-gate previously-blocked/rejected). Then create a **resolve task** per issue that needs one.
+1. **Scan** (human-clicked, `POST /api/projects/{id}/scan-issues`; no automatic polling). For each open issue fetch **title, body, all comment text, and embedded image attachments**. Reconcile into one issue-workstream per issue (ingest new as `queued`, cancel externally-closed, re-queue previously-blocked/rejected). Then **strictly one issue at a time** (`advance_issues`): promote the lowest-numbered queued issue and create its **resolve task**; the next issue starts only once this one lands or parks.
 2. **Resolve task** — codex `gpt-5.5`, one session, on a per-issue branch `hive/issue-<number>`:
    - **Clarify first**: classify bug vs feature and judge buildability. Bug reports are doable by default (the work is investigate → reproduce → fix). Two BLOCKED paths — both post a GitHub comment (via `gh`), make **no code change**, and end `OUTCOME: BLOCKED`: (a) a feature needing an expensive-to-reverse product/behavior decision (comment lists what must be decided); (b) a bug the agent **cannot reproduce** on the working branch — the referenced UI/behavior/code doesn't exist here (a reporter screenshot is not proof it's on this branch; it may have been filed against unpushed/local work). The agent must never invent or reconstruct a missing element; it comments what it couldn't find and on which branch.
    - **Fix in the same session** if clear: implement the fix, commit on the branch, push. Ends `OUTCOME: FIXED`. Reusing the session means the fix inherits the clarification's context for free — this is why clarify and fix are *not* split into two tasks (kodo session resume exists but is machine-local; one task avoids pinning and persistence).
@@ -35,15 +35,17 @@ kodo's codex session is **text-only** (`query(prompt: str, ...)`); there is no i
 ## Data model
 
 - `Project.work_source: WorkSource` = `spec` | `issues` (done).
-- `Workstream` (issue-workstream): `source=issue`, `issue_number`, `issue_url`, `branch = hive/issue-<n>`. `order` retained but unused (future ordered variant).
+- `Workstream` (issue-workstream): `source=issue`, `issue_number`, `issue_url`, `branch = hive/issue-<n>`, `order` (= issue number; lowest goes first).
+- **Strict per-issue sequencing** (`advance_issues`): at most one issue is in flight (`resolving`/`reviewing`) at a time. When none is, the lowest-`order` `queued` issue is promoted to `resolving` and its resolve task queued; called after every scan and every landing. This means each issue branches from a default branch that already includes prior landed fixes — issues that touch the same files can't conflict on the second merge.
 - Issue-workstream lifecycle (status):
+  - `queued` — ingested/awaiting its turn (no task yet).
   - `resolving` — resolve task pending/running.
   - `blocked_clarity` — resolve returned BLOCKED; agent commented on the issue. Awaits human clarification.
   - `reviewing` — review task pending/running.
   - `rejected` — review returned REJECT; agent commented with what went wrong + next approach.
   - `done` — accepted, merged into default, issue closed.
   - `cancelled` — issue closed on GitHub by a human.
-  - Re-scan re-gates `blocked_clarity`, `rejected`, and reopened `cancelled` back to `resolving` (new resolve task) so a clarified/reopened issue is retried.
+  - Re-scan re-queues any still-open issue that isn't `done` and has no live task (`blocked_clarity`/`rejected`/reopened `cancelled`/errored-mid-flight) so a clarified/reopened issue is retried in order.
 - `TaskKind`: `resolve`, `review` (replacing the interim `clarity` task kind). Result markers parsed deterministically (mirroring `parse_verdict`): resolve → `OUTCOME: BLOCKED|FIXED`; review → `REVIEW: ACCEPT|REJECT`.
 - `ProjectState`: `working` (a task pending/running), `blocked_clarity` (open issues remain but all are `blocked_clarity`/`rejected` — waiting on the human), `idle_no_open_issues` (queue drained).
 
@@ -59,7 +61,7 @@ Backend pipeline is built and unit/e2e-tested (`tests/test_issues.py`):
 2. ✅ `resolve` task kind + `prompts/resolve.md` (clarify→fix, codex `gpt-5.5`, branch `hive/issue-<n>`); `parse_resolve` (`OUTCOME: FIXED|BLOCKED`).
 3. ✅ `review` task kind + `prompts/review.md` (fresh codex `gpt-5.5`, fix-on-spot, rejection comment); `parse_review` (`REVIEW: ACCEPT|REJECT`).
 4. ✅ Deterministic state machine in `api.task_result` (`_land_resolve`/`_land_review`): resolve→review chaining, `merge_branch` (merges API) + `resolve_issue_on_github` on accept, escalate on landing failure; `compute_state` + supervisor skip the planner for issues projects.
-5. ✅ Interim batch `clarity` task removed (folded into resolve); ordering code (`activate_next`, `order_issues`, `resolve_issue`, `orchestrator_issues.md`) kept dormant.
+5. ✅ Strict per-issue sequencing (`advance_issues`): one issue through resolve→review→land before the next starts. Interim batch `clarity` task removed (folded into resolve); the spec-mode ordering code (`activate_next`, `order_issues`, `resolve_issue`, `orchestrator_issues.md`) kept dormant.
 
 6. ✅ Preflight gate (`hive/preflight.py`): control-plane checks + a runner self-check (push + gh auth); `scan-issues` is gated on the hard checks.
 7. ✅ UI pass: `work_source` toggle, Scan button, issue list grouped by lifecycle state with links to issue + branch, new state badges (`web/`).

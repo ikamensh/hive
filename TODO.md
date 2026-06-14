@@ -32,3 +32,17 @@ orchestrator, but `iterate` only sends a free-text note while `iteration.md`
 lives in the spec repo. Decide and implement the canonical path: who writes
 `iteration.md`, and how hive notices a direct git edit (until GitHub webhooks
 land, an idle project gets no heartbeat).
+
+## Issues mode — reject-then-retry resumes a stale branch
+Strict per-issue sequencing makes a *clean* run conflict-free: issue N+1's
+resolve task is created only after issue N lands, and `runner.checkout` branches
+the new `hive/issue-<N+1>` off freshly-fetched `origin/<default>` (which now
+includes N's merge). But when an issue is *re-attempted* after a REJECT (its
+`hive/issue-<n>` branch still exists on origin — we keep it for human
+debugging), `runner.checkout` resumes that existing branch (`base =
+origin/<branch>`) instead of rebasing on the now-newer default branch, so a
+retried issue can build against a stale base and reintroduce the conflict.
+Fix needs a small decision: on retry, rebase the kept branch onto the latest
+default, or branch fresh (and where to preserve the old attempt for debugging).
+Handle alongside the reject-retry UX. Refs: `hive/runner.py::checkout` (~line
+88), `hive/issues.py::reconcile`/`advance_issues`.

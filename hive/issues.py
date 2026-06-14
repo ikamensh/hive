@@ -8,8 +8,11 @@ Two concerns, kept separate so the store logic is testable without network:
   ops mapping issues to workstreams and queuing the codex resolve/review tasks.
 
 An issue becomes a `Workstream` (source=issue); the lifecycle is
-resolving → (blocked_clarity | reviewing) → (rejected | done). `order`/
-`activate_next` are the dormant ordered variant, kept for future reuse.
+queued → resolving → (blocked_clarity | reviewing) → (rejected | done).
+Sequencing is **strict per-issue**: `advance_issues` keeps at most one issue in
+the resolve→review pipeline at a time, so each issue branches from a default
+branch that already includes prior landed fixes. `activate_next`/`IN_FLIGHT` are
+a separate dormant variant used by the spec-mode orchestrator, kept for reuse.
 """
 
 from __future__ import annotations
@@ -245,9 +248,11 @@ def issue_branch(number: int) -> str:
 
 def reconcile(store, project: Project, issues: list[dict]) -> list[str]:
     """Sync issue-workstreams to the repo's open issues (full dicts from
-    `fetch_open_issues_full`). New issues, and previously blocked/rejected/closed
-    ones that are still open, (re-)enter as `resolving`; externally-closed ones
-    are cancelled; in-flight content is refreshed. Returns change notes."""
+    `fetch_open_issues_full`). New issues enter as `queued`; any still-open issue
+    that isn't `done` and has no live task is reset to `queued` (so a re-scan
+    restarts blocked/rejected/reopened or errored-mid-flight issues for another
+    attempt); externally-closed ones are cancelled; content is refreshed.
+    `advance_issues` then starts the next one. Returns change notes."""
     by_number = {w.issue_number: w for w in _issue_workstreams(store, project)}
     open_numbers = {i["number"] for i in issues}
     notes: list[str] = []
@@ -261,7 +266,7 @@ def reconcile(store, project: Project, issues: list[dict]) -> list[str]:
                     project_id=project.id,
                     title=f"#{issue['number']} {issue['title']}",
                     description=issue["doc"],
-                    status=WorkstreamStatus.resolving,
+                    status=WorkstreamStatus.queued,
                     source=WorkstreamSource.issue,
                     issue_number=issue["number"],
                     issue_url=issue["url"],
@@ -273,14 +278,13 @@ def reconcile(store, project: Project, issues: list[dict]) -> list[str]:
             continue
         ws.description = issue["doc"]  # pick up new comments/images
         ws.issue_attachments = issue["attachments"]
-        if ws.status in (
-            WorkstreamStatus.blocked_clarity,
-            WorkstreamStatus.rejected,
-            WorkstreamStatus.cancelled,
+        if (
+            ws.status not in (WorkstreamStatus.done, WorkstreamStatus.queued)
+            and not _has_live_task(store, project, ws.id)
         ):
-            ws.status = WorkstreamStatus.resolving  # clarified/reopened: retry
+            ws.status = WorkstreamStatus.queued  # blocked/rejected/reopened/errored: retry
             ws.parked_reason = ""
-            notes.append(f"re-opening issue #{issue['number']} for another attempt")
+            notes.append(f"re-queued issue #{issue['number']} for another attempt")
         store.put(ws)
 
     for number, ws in by_number.items():
@@ -297,9 +301,9 @@ def reconcile(store, project: Project, issues: list[dict]) -> list[str]:
     return notes
 
 
-def _has_open_task(store, project: Project, workstream_id: str, kind: TaskKind) -> bool:
+def _has_live_task(store, project: Project, workstream_id: str) -> bool:
     return any(
-        t.kind == kind and t.status in (TaskStatus.pending, TaskStatus.running)
+        t.status in (TaskStatus.pending, TaskStatus.running)
         for t in store.list(Task, project_id=project.id, workstream_id=workstream_id)
     )
 
@@ -339,18 +343,37 @@ def _make_issue_task(store, project: Project, ws: Workstream, kind: TaskKind, ba
     )
 
 
-def create_resolve_tasks(store, project: Project, backend: str = RESOLVE_BACKEND) -> int:
-    """Queue a resolve task (clarify→fix) for every `resolving` issue that has
-    none in flight. Deterministic — invoked by the scan action."""
-    created = 0
-    for ws in _issue_workstreams(store, project):
-        if ws.status != WorkstreamStatus.resolving:
-            continue
-        if _has_open_task(store, project, ws.id, TaskKind.resolve):
-            continue
-        _make_issue_task(store, project, ws, TaskKind.resolve, backend)
-        created += 1
-    return created
+def advance_issues(store, project: Project, backend: str = RESOLVE_BACKEND) -> int:
+    """Strict per-issue sequencing: keep at most one issue in the resolve→review
+    pipeline at a time. If an issue is already in flight (`resolving`/`reviewing`)
+    do nothing; otherwise promote the lowest-`order` `queued` issue to `resolving`
+    and queue its resolve task. Returns 1 if it started an issue, else 0.
+    Idempotent — call after every scan and every issue-task landing so the next
+    issue branches from a default branch that already has the prior fixes."""
+    wss = _issue_workstreams(store, project)
+    if any(
+        w.status in (WorkstreamStatus.resolving, WorkstreamStatus.reviewing) for w in wss
+    ):
+        return 0
+    queued = sorted(
+        (w for w in wss if w.status == WorkstreamStatus.queued),
+        key=lambda w: (w.order, w.issue_number),
+    )
+    if not queued:
+        return 0
+    nxt = queued[0]
+
+    def promote(w: Workstream) -> None:
+        w.status = WorkstreamStatus.resolving
+        w.parked_reason = ""
+
+    ws = store.update(Workstream, nxt.id, promote)
+    _make_issue_task(store, project, ws, TaskKind.resolve, backend)
+    log.info(
+        "advance: issue #%s → resolving (%d issue(s) still queued)",
+        ws.issue_number, len(queued) - 1,
+    )
+    return 1
 
 
 def create_review_task(store, project: Project, ws: Workstream, backend: str = RESOLVE_BACKEND) -> Task:

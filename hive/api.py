@@ -34,8 +34,8 @@ from hive.config import Config
 from hive.escalation import escalate
 from hive.github_repos import all_repos as list_github_repos
 from hive.issues import (
+    advance_issues,
     attachment_key,
-    create_resolve_tasks,
     create_review_task,
     download_issue_attachments,
     fetch_open_issues_full,
@@ -601,9 +601,9 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         downloaded = failed = 0
         if blobs is not None:
             downloaded, failed = download_issue_attachments(store, blobs, project, config.gh_token)
-        queued = create_resolve_tasks(store, project)
+        queued = advance_issues(store, project)
         log.info(
-            "scan %s: %d open issue(s), %d resolve task(s) queued, attachments %d ok / %d failed; changes: %s",
+            "scan %s: %d open issue(s), %d resolve task(s) started, attachments %d ok / %d failed; changes: %s",
             project_id, len(issues), queued, downloaded, failed, "; ".join(notes) or "none",
         )
         supervisor.wake(
@@ -1222,6 +1222,11 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             _land_resolve(store, task, body, config)
         elif task.kind == TaskKind.review and not body.cancelled:
             _land_review(store, task, body, config)
+        if task.kind in (TaskKind.resolve, TaskKind.review) and not body.cancelled:
+            # Strict per-issue: when this issue parked or landed, start the next.
+            project = store.get(Project, task.project_id)
+            if project:
+                advance_issues(store, project)
 
         outcome = "cancelled" if body.cancelled else ("failed" if body.is_error else "finished")
         verdict_note = (
