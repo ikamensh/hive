@@ -177,6 +177,13 @@ A leader lease in Firestore (`settings/leader_lease`) makes a *second* control p
 
 Two deliberately separated layers: a **supervisor** (plain deterministic code) owns the project state machine and dispatches work — serialized per repo, never faking progress when no usable backend exists — and an **orchestrator** (a stateful high-intelligence model session) plans, decomposes goals, picks tasks/backends, and decides when to ask you. Work is distributed to **runners** (this is your laptop in the quickstart; in production, a VM + your laptop) over long-poll, so it works behind NAT. Every change is verified by a *different* agent session than the one that wrote it.
 
+### Work source: iteration goal or GitHub issues
+
+A project's **work source** toggle picks where work comes from:
+
+- **spec** (default) — you set an iteration goal and the orchestrator decomposes it into workstreams.
+- **issues** — hive works the spec repo's open GitHub issues. Run **Preflight** first (`hive preflight <project>`) to check the run's preconditions — the GitHub token's write access, and a runner self-check that it can `git push` and use `gh`. Then press **Scan** (no automatic polling; scan refuses if a hard precondition fails); hive pulls each open issue with its comments and embedded images and runs a deterministic per-issue pipeline (no planner in the path). Each issue gets one warm agent session that **clarifies then fixes**: bug reports are doable by default (investigate → reproduce → fix); an underspecified feature is held back and the agent posts a GitHub comment saying exactly what must be decided first. A fix lands on a per-issue branch and is then handed to a **fresh, independent reviewer** agent that can correct small problems on the spot and decides accept or reject. On accept, hive merges the branch into the default branch and closes the issue; on reject, the agent comments with what went wrong and the branch is kept for debugging. Re-scan after you've clarified a blocked issue (or addressed a rejection) to retry it. See [`wiki/issues-mode.md`](wiki/issues-mode.md) for the full design.
+
 - [mission.md](mission.md) — what hive is and its principles.
 - [iteration.md](iteration.md) — the current iteration goal.
 - [wiki/architecture.md](wiki/architecture.md) — full system design.

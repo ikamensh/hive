@@ -27,6 +27,7 @@ from hive.models import (
     Runner,
     Task,
     TaskStatus,
+    WorkSource,
     Workstream,
     WorkstreamStatus,
 )
@@ -68,12 +69,21 @@ def compute_state(
         if any(t.backend in available_backends for t in pending):
             return ProjectState.working
         return ProjectState.blocked_resources
+    if project.work_source == WorkSource.issues:
+        # Deterministic per-issue pipeline: with no pending/running task (handled
+        # above), any non-terminal issue is waiting on a human — blocked at the
+        # clarify step, rejected at review, or stalled after an errored task that
+        # the next scan will retry. A drained queue is idle.
+        if any(
+            w.status not in (WorkstreamStatus.done, WorkstreamStatus.cancelled)
+            for w in workstreams
+        ):
+            return ProjectState.blocked_clarity
+        return ProjectState.idle_no_open_issues
     active = [w for w in workstreams if w.status == WorkstreamStatus.active]
     if open_question_count and not active:
         return ProjectState.blocked_questions
     if active:
-        # Nothing queued but directions are open: the orchestrator owes a
-        # decision — unless we've hit the daily budget and can't spend more.
         return ProjectState.blocked_budget if over_budget else ProjectState.working
     if open_question_count:
         return ProjectState.blocked_questions
@@ -269,6 +279,12 @@ class Supervisor:
                 continue
             self.dispatch(project)
             state = self.refresh_state(project)
+            if project.work_source == WorkSource.issues:
+                # Issues mode is a deterministic pipeline (scan + task_result state
+                # machine); the LLM planner is not in the path. Dispatch the queued
+                # resolve/review tasks and drop any events — no orchestrator wake.
+                self._events.pop(project.id, None)
+                continue
             if project.id in self._busy:
                 continue  # invocation in flight; events stay queued for the next step
             if self.over_budget(project):

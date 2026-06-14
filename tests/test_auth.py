@@ -1,6 +1,7 @@
 from urllib.parse import parse_qs, urlparse
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi.testclient import TestClient
 
@@ -57,6 +58,34 @@ def test_dev_auth_bootstraps_user_workspace_and_machine():
     assert "hive_session" in response.headers["set-cookie"]
     machines = store.list(Machine, workspace_id=config.workspace_id)
     assert [m.name for m in machines] == ["control-test"]
+
+
+def test_dev_auth_concurrent_file_store(tmp_path, monkeypatch):
+    """Local launch uses FileStore; the SPA polls /api/auth/me on every page."""
+    monkeypatch.setenv("HIVE_DATA_DIR", str(tmp_path))
+    from hive.api import production_app
+
+    client = TestClient(production_app())
+
+    def poll_auth():
+        response = client.get("/api/auth/me")
+        assert response.status_code == 200
+        return response.json()["user"]["github_login"]
+
+    def poll_projects():
+        response = client.get("/api/projects")
+        assert response.status_code == 200
+        return len(response.json())
+
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        auth_hits = list(pool.map(lambda _: poll_auth(), range(30)))
+        project_hits = list(pool.map(lambda _: poll_projects(), range(20)))
+
+    assert all(login == "ikamensh" for login in auth_hits)
+    assert all(count == 0 for count in project_hits)
+    user_file = tmp_path / "store" / "users" / "github:ikamensh.json"
+    assert user_file.is_file()
+    assert json.loads(user_file.read_text())["github_login"] == "ikamensh"
 
 
 def test_project_routes_are_workspace_scoped():

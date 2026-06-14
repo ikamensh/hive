@@ -33,6 +33,23 @@ from hive.backends import REGISTRY, probe_instructions
 from hive.config import Config
 from hive.escalation import escalate
 from hive.github_repos import all_repos as list_github_repos
+from hive.issues import (
+    attachment_key,
+    create_resolve_tasks,
+    create_review_task,
+    download_issue_attachments,
+    fetch_open_issues_full,
+    issue_branch,
+    merge_branch,
+    reconcile,
+    resolve_issue_on_github,
+)
+from hive.preflight import (
+    checks_payload,
+    codex_runner_usable,
+    create_preflight_task,
+    preflight_checks,
+)
 from hive.models import (
     Autonomy,
     Feedback,
@@ -51,7 +68,12 @@ from hive.models import (
     Task,
     TaskKind,
     TaskStatus,
+    Verdict,
+    WorkSource,
     Workstream,
+    WorkstreamStatus,
+    parse_resolve,
+    parse_review,
     parse_verdict,
 )
 from hive.specrepo import SpecRepo
@@ -86,6 +108,7 @@ class ProjectStart(BaseModel):
 class ProjectPatch(BaseModel):
     spec_repo: str | None = None
     mode: Mode | None = None
+    work_source: WorkSource | None = None
     autonomy: Autonomy | None = None
     guess_propensity: GuessPropensity | None = None
     prod_deploys: bool | None = None
@@ -164,6 +187,99 @@ def _ensure_probe_repo(data_dir: Path) -> Path:
         subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, timeout=60)
         subprocess.run(["git", "commit", "-m", "Initial probe repo"], cwd=repo, check=True, timeout=60)
     return repo
+
+
+def _set_ws_status(store, ws_id: str, status: WorkstreamStatus, reason: str) -> Workstream | None:
+    def mutate(ws: Workstream) -> None:
+        ws.status = status
+        ws.parked_reason = reason
+
+    return store.update(Workstream, ws_id, mutate)
+
+
+def _land_resolve(store, task: Task, body: "TaskResult", config: Config) -> None:
+    """Issues mode: a resolve task finished. FIXED → reviewing (queue the review);
+    BLOCKED/unparseable → blocked_clarity (the agent commented on the issue); an
+    execution error leaves it resolving so the next scan retries."""
+    if body.is_error:
+        log.warning("resolve task %s (issue #%s) errored; leaving 'resolving' for re-scan retry: %s",
+                    task.id, task.issue_number, body.text[:300])
+        return
+    if task.verdict == Verdict.none:
+        log.warning("resolve task %s (issue #%s) finished WITHOUT an `OUTCOME:` line — "
+                    "treating as BLOCKED. Tail: %s", task.id, task.issue_number, body.text[-300:])
+
+    def transition(ws: Workstream) -> None:
+        if ws.status != WorkstreamStatus.resolving:
+            return
+        if task.verdict == Verdict.accept:  # OUTCOME: FIXED
+            ws.status = WorkstreamStatus.reviewing
+            ws.parked_reason = ""
+        else:  # OUTCOME: BLOCKED, or no parseable outcome
+            ws.status = WorkstreamStatus.blocked_clarity
+            ws.parked_reason = "blocked at clarify step — see the GitHub issue comment"
+
+    ws = store.update(Workstream, task.workstream_id, transition)
+    if ws is None:
+        return
+    log.info("resolve task %s (issue #%s) verdict=%s → workstream %s",
+             task.id, task.issue_number, task.verdict, ws.status)
+    if ws.status == WorkstreamStatus.reviewing:
+        project = store.get(Project, task.project_id)
+        if project:
+            review = create_review_task(store, project, ws, backend=task.backend)
+            log.info("queued review task %s for issue #%s on %s", review.id, ws.issue_number, review.branch)
+
+
+def _land_review(store, task: Task, body: "TaskResult", config: Config) -> None:
+    """Issues mode: a review task finished. ACCEPT → merge the branch into the
+    default branch and close the issue (Hive, via the GitHub API); REJECT/error →
+    rejected (the agent commented). Landing failures escalate to a human."""
+    ws = store.get(Workstream, task.workstream_id)
+    if ws is None or ws.status != WorkstreamStatus.reviewing:
+        return
+    if body.is_error:
+        log.warning("review task %s (issue #%s) errored → rejected (re-scan to retry): %s",
+                    task.id, task.issue_number, body.text[:300])
+        _set_ws_status(store, ws.id, WorkstreamStatus.rejected, "review errored — re-scan to retry")
+        return
+    if task.verdict == Verdict.none:
+        log.warning("review task %s (issue #%s) finished WITHOUT a `REVIEW:` line — treating as REJECT. "
+                    "Tail: %s", task.id, task.issue_number, body.text[-300:])
+    if task.verdict != Verdict.accept:  # REVIEW: REJECT, or unparseable
+        log.info("review task %s (issue #%s) verdict=%s → rejected", task.id, task.issue_number, task.verdict)
+        _set_ws_status(
+            store, ws.id, WorkstreamStatus.rejected, "rejected at review — see the GitHub issue comment"
+        )
+        return
+    branch = issue_branch(ws.issue_number)
+    log.info("review task %s ACCEPTED issue #%s — merging %s and closing the issue",
+             task.id, ws.issue_number, branch)
+    try:
+        merge_branch(task.repo, branch, config.gh_token, message=f"Resolve #{ws.issue_number} via Hive")
+        resolve_issue_on_github(
+            task.repo,
+            ws.issue_number,
+            comment=f"Resolved by Hive — merged `{branch}` into the default branch.",
+            token=config.gh_token,
+        )
+    except Exception as exc:  # merge conflict / API failure: don't lose the work
+        log.error("landing issue #%s failed (merge/close): %s", ws.issue_number, exc)
+        escalate(
+            store,
+            f"Land issue #{ws.issue_number} failed",
+            instructions=(
+                f"The review accepted the fix on `{branch}`, but merging it into the "
+                f"default branch or closing issue #{ws.issue_number} failed:\n\n{exc}\n\n"
+                "Land it manually (the branch is intact)."
+            ),
+            project_id=task.project_id,
+            workspace_id=task.workspace_id,
+        )
+        _set_ws_status(store, ws.id, WorkstreamStatus.rejected, f"accepted but landing failed: {exc}")
+        return
+    log.info("issue #%s landed: merged + closed; workstream done", ws.issue_number)
+    _set_ws_status(store, ws.id, WorkstreamStatus.done, "")
 
 
 def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_runner=None) -> FastAPI:
@@ -461,6 +577,62 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         supervisor.wake(project_id, planning_wake_event(body.mission, body.iteration_goal))
         return project.model_dump()
 
+    @app.post("/api/projects/{project_id}/scan-issues")
+    def scan_issues(project_id: str, ctx: AuthContext = Depends(current)):
+        """Issues mode: pull the spec repo's open GitHub issues (with comments and
+        embedded images), reconcile them into issue-workstreams, and queue a codex
+        resolve task per actionable issue. Human-triggered — no automatic re-scan."""
+        project = require_project(project_id, ctx)
+        if project.work_source != WorkSource.issues:
+            raise HTTPException(400, "project is not in issues mode")
+        if not project.spec_repo.strip():
+            raise HTTPException(400, "spec_repo must be set before scanning")
+        hard_failed = [c for c in preflight_checks(store, config, project) if c.hard and not c.ok]
+        if hard_failed:
+            raise HTTPException(
+                409,
+                {
+                    "error": "preflight failed; fix these before scanning (see `hive preflight`)",
+                    "checks": checks_payload(hard_failed),
+                },
+            )
+        issues = fetch_open_issues_full(project.spec_repo, config.gh_token)
+        notes = reconcile(store, project, issues)
+        downloaded = failed = 0
+        if blobs is not None:
+            downloaded, failed = download_issue_attachments(store, blobs, project, config.gh_token)
+        queued = create_resolve_tasks(store, project)
+        log.info(
+            "scan %s: %d open issue(s), %d resolve task(s) queued, attachments %d ok / %d failed; changes: %s",
+            project_id, len(issues), queued, downloaded, failed, "; ".join(notes) or "none",
+        )
+        supervisor.wake(
+            project_id,
+            f"Issue scan: {len(issues)} open issue(s); {queued} resolve task(s) queued.",
+        )
+        return {
+            "open_issues": len(issues),
+            "resolve_queued": queued,
+            "attachments_downloaded": downloaded,
+            "attachments_failed": failed,
+            "changes": notes,
+        }
+
+    @app.post("/api/projects/{project_id}/issues-preflight")
+    def issues_preflight(project_id: str, ctx: AuthContext = Depends(current)):
+        """Check the preconditions an issues-mode run depends on, before launching
+        one. Returns the control-plane checks and, if they pass and a codex runner
+        is online, queues a runner self-check (push + gh auth) whose task id the
+        caller can poll for the agent-facing verdict."""
+        project = require_project(project_id, ctx)
+        checks = preflight_checks(store, config, project)
+        hard_ok = all(c.ok for c in checks if c.hard)
+        runner_task = None
+        if hard_ok and codex_runner_usable(store, project.workspace_id):
+            runner_task = create_preflight_task(store, project).id
+            supervisor.wake(project_id, "Issues preflight: runner self-check queued.")
+        return {"ok": hard_ok, "checks": checks_payload(checks), "runner_check_task": runner_task}
+
     @app.get("/api/projects/{project_id}")
     def get_project(project_id: str, ctx: AuthContext = Depends(current)):
         project = require_project(project_id, ctx)
@@ -497,6 +669,12 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 raise HTTPException(400, "cannot clear spec_repo after work has started")
         for key, value in updates.items():
             setattr(project, key, value)
+        if updates.get("work_source") == WorkSource.issues and project.spec_repo.strip():
+            supervisor.wake(
+                project_id,
+                "Switched to issues mode: scan the spec repo's open GitHub issues, plan a "
+                "resolution order (order_issues), and work them one at a time.",
+            )
         if note is not None:
             project.goal_complete = False
             project.goal_complete_note = ""
@@ -606,6 +784,19 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         task.trace_blob = key
         store.put(task)
         return {"ok": True}
+
+    @app.get("/api/tasks/{task_id}/attachments/{name}")
+    def get_attachment(task_id: str, name: str, workspace_id: str = Depends(runner_auth)):
+        """Runner-auth: serve an issue's image (downloaded on the control plane at
+        scan time) so the worker can materialize `.hive/issue-<n>/attachments/`
+        without its own GitHub credentials."""
+        task = store.get(Task, task_id)
+        if not task or task.workspace_id != workspace_id or blobs is None:
+            raise HTTPException(404)
+        data = blobs.get(attachment_key(workspace_id, task.project_id, task.issue_number, name))
+        if data is None:
+            raise HTTPException(404)
+        return Response(data, media_type="application/octet-stream")
 
     @app.get("/api/tasks/{task_id}/trace")
     def get_trace(task_id: str, ctx: AuthContext = Depends(current)):
@@ -947,6 +1138,11 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 task.status = TaskStatus.failed if body.is_error else TaskStatus.done
             if task.kind == TaskKind.verify and not body.cancelled:
                 task.verdict = parse_verdict(body.text)
+            if not body.cancelled and not body.is_error:
+                if task.kind == TaskKind.resolve:
+                    task.verdict = parse_resolve(body.text)
+                elif task.kind == TaskKind.review:
+                    task.verdict = parse_review(body.text)
             task.result_text = body.text
             task.is_error = body.is_error
             task.cost_usd = body.cost_usd
@@ -1022,9 +1218,17 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 )
             return {"ok": True}
 
+        if task.kind == TaskKind.resolve and not body.cancelled:
+            _land_resolve(store, task, body, config)
+        elif task.kind == TaskKind.review and not body.cancelled:
+            _land_review(store, task, body, config)
+
         outcome = "cancelled" if body.cancelled else ("failed" if body.is_error else "finished")
         verdict_note = (
-            f" verdict={task.verdict}" if task.kind == TaskKind.verify and not body.cancelled else ""
+            f" verdict={task.verdict}"
+            if task.kind in (TaskKind.verify, TaskKind.resolve, TaskKind.review)
+            and not body.cancelled
+            else ""
         )
         supervisor.wake(
             task.project_id,

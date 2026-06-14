@@ -2,14 +2,17 @@
 
 export type Mode = "build" | "maintain";
 export type Autonomy = "pr" | "direct_push";
+export type WorkSource = "spec" | "issues";
 export type GuessPropensity = "never" | "rarely" | "sometimes" | "often" | "always";
 export type ProjectState =
   | "working"
   | "blocked_questions"
   | "blocked_resources"
   | "blocked_budget"
+  | "blocked_clarity"
   | "idle_goal_complete"
-  | "idle_no_workstreams";
+  | "idle_no_workstreams"
+  | "idle_no_open_issues";
 
 export interface Project {
   id: string;
@@ -19,6 +22,7 @@ export interface Project {
   member_repos: string[];
   mode: Mode;
   autonomy: Autonomy;
+  work_source: WorkSource;
   guess_propensity: GuessPropensity;
   prod_deploys: boolean;
   paused: boolean;
@@ -29,14 +33,29 @@ export interface Project {
   created_at: number;
 }
 
+/** Spec-mode statuses plus the issues-mode per-issue lifecycle. */
+export type WorkstreamStatus =
+  | "active"
+  | "parked"
+  | "done"
+  | "resolving"
+  | "blocked_clarity"
+  | "reviewing"
+  | "rejected"
+  | "cancelled";
+
 export interface Workstream {
   id: string;
   workspace_id?: string;
   project_id: string;
   title: string;
   description: string;
-  status: "active" | "parked" | "done";
+  status: WorkstreamStatus;
   parked_reason: string;
+  // Issues mode: each workstream tracks one GitHub issue.
+  source?: "manual" | "issue";
+  issue_number?: number;
+  issue_url?: string;
   created_at: number;
 }
 
@@ -47,7 +66,7 @@ export interface Task {
   workstream_id: string;
   repo: string;
   branch: string;
-  kind: "work" | "verify" | "probe";
+  kind: "work" | "verify" | "probe" | "resolve" | "review";
   instructions: string;
   backend: string;
   model: string;
@@ -237,10 +256,17 @@ export interface ProjectPatch {
   spec_repo?: string;
   mode?: Mode;
   autonomy?: Autonomy;
+  work_source?: WorkSource;
   guess_propensity?: GuessPropensity;
   prod_deploys?: boolean;
   paused?: boolean;
   daily_budget_usd?: number;
   member_repos?: string[];
   new_iteration_note?: string;
+}
+
+export interface ScanResult {
+  open_issues: number;
+  resolve_queued: number;
+  changes: string[];
 }

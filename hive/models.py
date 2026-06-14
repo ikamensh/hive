@@ -65,6 +65,16 @@ class Mode(StrEnum):
     maintain = "maintain"
 
 
+class WorkSource(StrEnum):
+    """Where a project's work comes from. `spec` = the human sets an iteration
+    goal that the orchestrator decomposes into workstreams (the default flow).
+    `issues` = the orchestrator works the spec repo's open GitHub issues, one
+    at a time, in a planned sequence."""
+
+    spec = "spec"
+    issues = "issues"
+
+
 class Autonomy(StrEnum):
     pr = "pr"
     direct_push = "direct_push"
@@ -83,8 +93,10 @@ class ProjectState(StrEnum):
     blocked_questions = "blocked_questions"
     blocked_resources = "blocked_resources"
     blocked_budget = "blocked_budget"  # daily soft cap reached; resets at UTC midnight
+    blocked_clarity = "blocked_clarity"  # issues mode: open issues stuck on a human (blocked/rejected)
     idle_goal_complete = "idle_goal_complete"
     idle_no_workstreams = "idle_no_workstreams"
+    idle_no_open_issues = "idle_no_open_issues"  # issues mode: queue drained
 
 
 class Project(BaseModel):
@@ -94,6 +106,7 @@ class Project(BaseModel):
     spec_repo: str = ""  # git URL of the spec home; empty = draft (not yet configured)
     member_repos: list[str] = []  # git URLs; spec_repo included if it holds code
     mode: Mode = Mode.build
+    work_source: WorkSource = WorkSource.spec
     autonomy: Autonomy = Autonomy.direct_push
     guess_propensity: GuessPropensity = GuessPropensity.sometimes
     prod_deploys: bool = False
@@ -107,8 +120,24 @@ class Project(BaseModel):
 
 class WorkstreamStatus(StrEnum):
     active = "active"
+    queued = "queued"  # issues mode (dormant ordering variant): cleared, awaiting its turn
     parked = "parked"
     done = "done"
+    # issues-mode per-issue pipeline (see wiki/issues-mode.md):
+    resolving = "resolving"  # resolve task (clarify→fix) in flight
+    blocked_clarity = "blocked_clarity"  # resolve returned BLOCKED; agent commented on the issue
+    reviewing = "reviewing"  # review task in flight
+    rejected = "rejected"  # review returned REJECT; agent commented with the failure + next approach
+    cancelled = "cancelled"  # backing issue closed on GitHub by a human
+
+
+# Issue-workstream states the human must act on before Hive can make progress.
+ISSUE_BLOCKED = (WorkstreamStatus.blocked_clarity, WorkstreamStatus.rejected)
+
+
+class WorkstreamSource(StrEnum):
+    manual = "manual"  # decomposed from the iteration goal by the orchestrator
+    issue = "issue"  # ingested from a GitHub issue (issues mode)
 
 
 class Workstream(BaseModel):
@@ -119,6 +148,11 @@ class Workstream(BaseModel):
     description: str = ""
     status: WorkstreamStatus = WorkstreamStatus.active
     parked_reason: str = ""
+    source: WorkstreamSource = WorkstreamSource.manual
+    issue_number: int = 0  # GitHub issue number when source=issue
+    issue_url: str = ""
+    issue_attachments: list[str] = []  # embedded image URLs from the issue + comments
+    order: int = 0  # planned position in the issue queue (lower = sooner; dormant ordering variant)
     created_at: float = Field(default_factory=now)
 
 
@@ -134,6 +168,9 @@ class TaskKind(StrEnum):
     work = "work"
     verify = "verify"
     probe = "probe"
+    resolve = "resolve"  # issues mode: one codex session clarifies then (if clear) fixes
+    review = "review"  # issues mode: fresh agent reviews the fix, may fix on the spot
+    preflight = "preflight"  # issues mode: runner self-check (git push + gh auth) before a big run
 
 
 class Verdict(StrEnum):
@@ -156,6 +193,36 @@ def parse_verdict(text: str) -> Verdict:
     return found
 
 
+def parse_resolve(text: str) -> Verdict:
+    """Extract a resolve task's outcome (accept = FIXED → go to review, reject =
+    BLOCKED → the agent made no change and commented, because the issue was
+    underspecified or the bug could not be reproduced on the working branch).
+    Requires an `OUTCOME: FIXED|BLOCKED` line; the last one wins so quoted text
+    can't spoof."""
+    found = Verdict.none
+    for line in text.splitlines():
+        token = line.strip().upper()
+        if token.startswith("OUTCOME:") and "FIX" in token:
+            found = Verdict.accept
+        elif token.startswith("OUTCOME:") and "BLOCK" in token:
+            found = Verdict.reject
+    return found
+
+
+def parse_review(text: str) -> Verdict:
+    """Extract a review task's verdict (accept = ACCEPT → merge+close, reject =
+    REJECT → the agent commented with the failure). Requires a `REVIEW:
+    ACCEPT|REJECT` line; the last one wins."""
+    found = Verdict.none
+    for line in text.splitlines():
+        token = line.strip().upper()
+        if token.startswith("REVIEW:") and "ACCEPT" in token:
+            found = Verdict.accept
+        elif token.startswith("REVIEW:") and "REJECT" in token:
+            found = Verdict.reject
+    return found
+
+
 class Task(BaseModel):
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
@@ -165,6 +232,9 @@ class Task(BaseModel):
     branch: str = ""  # non-default branch to check out (PR-mode work and its verify/fix)
     kind: TaskKind = TaskKind.work
     instructions: str
+    issue_number: int = 0  # issues mode: the issue this task resolves/reviews
+    issue_doc: str = ""  # issues mode: full issue markdown (title+body+comments) → .hive ISSUE.md
+    issue_attachments: list[str] = []  # issues mode: image filenames the runner fetches from the control plane
     backend: str = "cursor"  # kodo backend name: claude | cursor | codex | gemini-cli
     model: str = ""  # backend default when empty
     status: TaskStatus = TaskStatus.pending

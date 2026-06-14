@@ -11,11 +11,16 @@ writer (the supervisor loop and the request threadpool both touch tasks). Plain
 from __future__ import annotations
 
 import json
+import logging
+import os
+import tempfile
 import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable, TypeVar
+
+log = logging.getLogger(__name__)
 
 from hive.models import (
     DEFAULT_WORKSPACE_ID,
@@ -215,9 +220,26 @@ class MemoryStore(StoreBase):
 
 def _atomic_write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, separators=(",", ":")))
-    tmp.replace(path)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(data, separators=(",", ":")))
+        os.replace(tmp_name, path)
+    except BaseException:
+        os.unlink(tmp_name)
+        raise
+
+
+def _read_json_file(path: Path, *, strict: bool) -> dict | None:
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        if strict:
+            raise ValueError(f"Corrupt store file {path}: {exc}") from exc
+        log.warning("Skipping corrupt store file %s: %s", path, exc)
+        return None
 
 
 class FileStore(MemoryStore):
@@ -246,7 +268,9 @@ class FileStore(MemoryStore):
             if not directory.is_dir():
                 continue
             for path in directory.glob("*.json"):
-                raw = json.loads(path.read_text())
+                raw = _read_json_file(path, strict=False)
+                if raw is None:
+                    continue
                 self._data[collection][raw["id"]] = raw
 
         settings = self.root / "settings"
@@ -254,16 +278,18 @@ class FileStore(MemoryStore):
             return
         org_path = settings / "org_context.json"
         if org_path.is_file():
-            self.org_context = json.loads(org_path.read_text()).get("text", "")
+            raw = _read_json_file(org_path, strict=True)
+            self.org_context = raw.get("text", "")
         for path in settings.glob("org_context_*.json"):
             workspace_id = path.stem.removeprefix("org_context_")
-            self._org_contexts[workspace_id] = json.loads(path.read_text()).get("text", "")
+            raw = _read_json_file(path, strict=True)
+            self._org_contexts[workspace_id] = raw.get("text", "")
         lease_path = settings / "leader_lease.json"
         if lease_path.is_file():
-            self._lease = json.loads(lease_path.read_text())
+            self._lease = _read_json_file(lease_path, strict=True)
         for path in settings.glob("leader_lease_*.json"):
             workspace_id = path.stem.removeprefix("leader_lease_")
-            self._leases[workspace_id] = json.loads(path.read_text())
+            self._leases[workspace_id] = _read_json_file(path, strict=True)
 
     def _persist_doc(self, collection: str, doc_id: str, raw: dict) -> None:
         _atomic_write_json(self._doc_path(collection, doc_id), raw)
@@ -287,38 +313,59 @@ class FileStore(MemoryStore):
             _atomic_write_json(self._settings_path(f"leader_lease_{workspace_id}.json"), lease)
 
     def put(self, obj: M) -> M:
-        result = super().put(obj)
-        collection = _COLLECTIONS[type(obj)]
-        self._persist_doc(collection, obj.id, self._data[collection][obj.id])
-        return result
+        with self._lock:
+            collection = _COLLECTIONS[type(obj)]
+            self._data[collection][obj.id] = obj.model_dump()
+            self._persist_doc(collection, obj.id, self._data[collection][obj.id])
+        return obj
 
     def update(self, model: type[M], id: str, mutate: Callable[[M], None]) -> M | None:
-        updated = super().update(model, id, mutate)
-        if updated is not None:
-            collection = _COLLECTIONS[model]
-            self._persist_doc(collection, id, self._data[collection][id])
-        return updated
+        with self._lock:
+            collection = self._data[_COLLECTIONS[model]]
+            raw = collection.get(id)
+            if raw is None:
+                return None
+            obj = model.model_validate(raw)
+            mutate(obj)
+            collection[obj.id] = obj.model_dump()
+            self._persist_doc(_COLLECTIONS[model], id, collection[id])
+            return obj
 
     def delete(self, model: type[M], id: str) -> None:
-        collection = _COLLECTIONS[model]
-        super().delete(model, id)
-        self._delete_doc(collection, id)
+        with self._lock:
+            collection = _COLLECTIONS[model]
+            self._data[collection].pop(id, None)
+            self._delete_doc(collection, id)
 
     def set_org_context(self, text: str, workspace_id: str = DEFAULT_WORKSPACE_ID) -> None:
-        super().set_org_context(text, workspace_id)
-        self._persist_org_context(workspace_id, text)
+        with self._lock:
+            if workspace_id == DEFAULT_WORKSPACE_ID:
+                self.org_context = text
+            else:
+                if not hasattr(self, "_org_contexts"):
+                    self._org_contexts = {}
+                self._org_contexts[workspace_id] = text
+            self._persist_org_context(workspace_id, text)
 
     def claim_leader(
         self, holder: str, ttl_s: float, workspace_id: str = DEFAULT_WORKSPACE_ID
     ) -> str:
-        owner = super().claim_leader(holder, ttl_s, workspace_id)
-        if owner == holder:
+        with self._lock:
             if workspace_id == DEFAULT_WORKSPACE_ID:
                 lease = self._lease
             else:
-                lease = self._leases[workspace_id]
+                if not hasattr(self, "_leases"):
+                    self._leases = {}
+                lease = self._leases.get(workspace_id)
+            if lease and lease["holder"] != holder and lease["expires"] > time.time():
+                return lease["holder"]
+            lease = {"holder": holder, "expires": time.time() + ttl_s}
+            if workspace_id == DEFAULT_WORKSPACE_ID:
+                self._lease = lease
+            else:
+                self._leases[workspace_id] = lease
             self._persist_lease(workspace_id, lease)
-        return owner
+            return holder
 
 
 class FirestoreStore(StoreBase):

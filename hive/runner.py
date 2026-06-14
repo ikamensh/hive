@@ -95,6 +95,78 @@ def checkout(repo_url: str, branch: str = "") -> Path:
     return path
 
 
+def _git(args: list[str], cwd: Path, timeout: float = 120.0) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
+
+
+def run_preflight(project_dir: Path) -> dict:
+    """Runner self-check for issues mode: prove this host can actually do the
+    agent-facing GitHub work — push a branch to the repo and use `gh` — so a
+    misconfigured runner is caught before a big run instead of mid-fix. Pushes a
+    throwaway branch and deletes it; runs `gh auth status`. Leaves no trace."""
+    results: list[tuple[str, bool, str]] = []
+
+    gh = subprocess.run(
+        ["gh", "auth", "status"], cwd=project_dir, capture_output=True, text=True, timeout=30
+    )
+    results.append(("gh auth status", gh.returncode == 0, (gh.stderr or gh.stdout).strip()[-500:]))
+
+    branch = f"hive/preflight-{int(time.time())}"
+    push_ok, detail = False, ""
+    try:
+        _git(["checkout", "-B", branch], project_dir, 30)
+        commit = _git(
+            ["-c", "user.email=preflight@hive.invalid", "-c", "user.name=Hive Preflight",
+             "commit", "--allow-empty", "-m", "hive preflight"],
+            project_dir, 30,
+        )
+        if commit.returncode != 0:
+            detail = (commit.stderr or commit.stdout).strip()[-500:]
+        else:
+            push = _git(["push", "-u", "origin", branch], project_dir)
+            push_ok = push.returncode == 0
+            detail = (push.stderr or push.stdout).strip()[-500:]
+            if push_ok:
+                _git(["push", "origin", "--delete", branch], project_dir)
+    except subprocess.SubprocessError as exc:
+        detail = str(exc)
+    results.append(("git push to origin", push_ok, detail))
+
+    ok = all(passed for _, passed, _ in results)
+    lines = [f"{'PASS' if p else 'FAIL'} {name}: {info}" for name, p, info in results]
+    return {"text": "RUNNER PREFLIGHT\n" + "\n".join(lines), "is_error": not ok}
+
+
+def prepare_issue_workspace(project_dir: Path, task: dict, headers: dict, auth) -> None:
+    """Issues mode: materialize the issue context into the checkout under
+    `.hive/issue-<n>/` (ISSUE.md + attachments), git-excluded so the agent never
+    commits it. Attachments are pulled from the control plane (which downloaded
+    them from GitHub at scan time with repo credentials), so the runner needs no
+    GitHub auth of its own."""
+    number = task.get("issue_number") or 0
+    if not number:
+        return
+    base = project_dir / ".hive" / f"issue-{number}"
+    attachments = base / "attachments"
+    attachments.mkdir(parents=True, exist_ok=True)
+    (base / "ISSUE.md").write_text(task.get("issue_doc", ""))
+    exclude = project_dir / ".git" / "info" / "exclude"
+    if exclude.exists() and ".hive/" not in exclude.read_text():
+        with exclude.open("a") as fh:
+            fh.write("\n.hive/\n")
+    names = task.get("issue_attachments") or []
+    if not names:
+        return
+    client = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=60.0, auth=auth)
+    for name in names:
+        try:
+            response = client.get(f"/api/tasks/{task['id']}/attachments/{name}")
+            response.raise_for_status()
+            (attachments / name).write_bytes(response.content)
+        except (httpx.HTTPError, OSError) as exc:
+            log.warning("attachment fetch failed (%s): %s", name, exc)
+
+
 def _upload_trace(task_id: str, log_file, headers: dict, auth) -> None:
     """Best-effort: ship the kodo JSONL run trace to the control plane so the
     operator can inspect what the agent actually did."""
@@ -117,6 +189,9 @@ def execute(task: dict, headers: dict, auth) -> dict:
         project_dir = checkout(task["repo"], task.get("branch", ""))
     except subprocess.SubprocessError as exc:
         return {"text": f"checkout failed: {exc}", "is_error": True}
+    if task["kind"] == "preflight":
+        return run_preflight(project_dir)
+    prepare_issue_workspace(project_dir, task, headers, auth)
 
     kodo_log.init(kodo_log.RunDir.create(project_dir))  # capture a per-task JSONL trace
     session = make_session(task["backend"], task.get("model", ""))

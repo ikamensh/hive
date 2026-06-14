@@ -9,8 +9,15 @@ import {
   MODE_OPTIONS,
   SegPicker,
   StateBadge,
+  WORK_SOURCE_OPTIONS,
 } from "../components/shared";
-import type { Autonomy, GuessPropensity, HumanTask, Mode, Project, ProjectPatch, Question, Task, Workstream } from "../types";
+import type { Autonomy, GuessPropensity, HumanTask, Mode, Project, ProjectPatch, Question, ScanResult, Task, Workstream, WorkstreamStatus } from "../types";
+
+/** Derive the issue's per-issue branch tree URL from its issue URL (`.../issues/42` → `.../tree/hive/issue-42`). */
+function issueBranchUrl(ws: Workstream): string | null {
+  if (!ws.issue_url || ws.issue_number === undefined) return null;
+  return ws.issue_url.replace(/\/issues\/\d+.*$/, `/tree/hive/issue-${ws.issue_number}`);
+}
 
 function buildSetupPatch(fields: {
   specRepo: string;
@@ -233,6 +240,14 @@ function TogglesBar({ project, onPatch }: { project: Project; onPatch: (p: Proje
           onChange={(autonomy) => onPatch({ autonomy })}
         />
       </div>
+      <div className="toggle-cell">
+        <span className="toggle-label">work source</span>
+        <SegPicker
+          value={project.work_source}
+          options={WORK_SOURCE_OPTIONS}
+          onChange={(work_source) => onPatch({ work_source })}
+        />
+      </div>
       <div className="toggle-cell grow">
         <span className="toggle-label">guess propensity</span>
         <GuessSlider value={project.guess_propensity} onChange={(guess_propensity) => onPatch({ guess_propensity })} />
@@ -300,6 +315,121 @@ function WorkstreamCard({ ws }: { ws: Workstream }) {
       {ws.description && <p>{ws.description}</p>}
       {ws.status === "parked" && ws.parked_reason && <p className="parked-reason">{ws.parked_reason}</p>}
     </article>
+  );
+}
+
+function ScanBar({ project, onScanned }: { project: Project; onScanned: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<ScanResult | null>(null);
+  const [error, setError] = useState("");
+  const noRepo = !project.spec_repo.trim();
+
+  const scan = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      setResult(await api.scanIssues(project.id));
+      onScanned();
+    } catch (e) {
+      setError((e as Error).message || "scan failed");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <section className="scan-bar reveal">
+      <div className="scan-text">
+        <h2>GitHub issues</h2>
+        <p className="muted">
+          Hive resolves this repo's open issues. Scan to ingest new issues and re-queue clarified or reopened ones.
+        </p>
+      </div>
+      <div className="scan-actions">
+        <button onClick={scan} disabled={busy || noRepo} title={noRepo ? "set a spec repo first" : undefined}>
+          {busy ? "scanning…" : "scan issues"}
+        </button>
+        {error && <span className="form-error">{error}</span>}
+        {result && !error && (
+          <span className="scan-summary">
+            {result.open_issues} open · {result.resolve_queued} queued
+            {result.changes.length > 0 && (
+              <ul>
+                {result.changes.map((c, i) => (
+                  <li key={i}>{c}</li>
+                ))}
+              </ul>
+            )}
+          </span>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function IssueCard({ ws }: { ws: Workstream }) {
+  const [open, setOpen] = useState(false);
+  const branch = issueBranchUrl(ws);
+  return (
+    <article className={`issue-card iss-${ws.status}`}>
+      <header>
+        <button className="issue-title" onClick={() => setOpen((v) => !v)}>
+          {ws.title}
+        </button>
+        <span className={`chip chip-iss-${ws.status}`}>{ws.status.replace(/_/g, " ")}</span>
+      </header>
+      {ws.parked_reason && <p className="parked-reason">{ws.parked_reason}</p>}
+      <div className="issue-links">
+        {ws.issue_url && (
+          <a href={ws.issue_url} target="_blank" rel="noreferrer">
+            issue #{ws.issue_number}
+          </a>
+        )}
+        {branch && (
+          <a href={branch} target="_blank" rel="noreferrer">
+            branch hive/issue-{ws.issue_number}
+          </a>
+        )}
+        {ws.description && (
+          <button className="issue-detail-toggle" onClick={() => setOpen((v) => !v)}>
+            {open ? "hide details" : "details"}
+          </button>
+        )}
+      </div>
+      {open && ws.description && <Markdown className="issue-detail" text={ws.description} />}
+    </article>
+  );
+}
+
+const ISSUE_GROUPS: { label: string; statuses: WorkstreamStatus[] }[] = [
+  { label: "in progress", statuses: ["resolving", "reviewing"] },
+  { label: "needs you", statuses: ["blocked_clarity", "rejected"] },
+  { label: "done", statuses: ["done", "cancelled"] },
+];
+
+function IssuesView({ workstreams }: { workstreams: Workstream[] }) {
+  const issues = workstreams.filter((w) => w.source === "issue");
+  return (
+    <section className="issues-view">
+      {issues.length === 0 && <p className="muted">no issues yet — scan to ingest open GitHub issues</p>}
+      {ISSUE_GROUPS.map((group) => {
+        const items = issues
+          .filter((w) => group.statuses.includes(w.status))
+          .sort((a, b) => b.created_at - a.created_at);
+        if (items.length === 0) return null;
+        return (
+          <div className="issue-group" key={group.label}>
+            <h3 className="issue-group-title">
+              {group.label} <span className="col-count">{items.length}</span>
+            </h3>
+            <div className="issue-grid">
+              {items.map((w) => (
+                <IssueCard key={w.id} ws={w} />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </section>
   );
 }
 
@@ -578,8 +708,8 @@ export default function ProjectPage() {
   const openTodos = human_tasks.filter((t) => t.status === "open").sort((a, b) => b.created_at - a.created_at);
   const inboxCount = openQs.length + openTodos.length;
   const sortedTasks = [...tasks].sort((a, b) => b.created_at - a.created_at);
-  const wsOrder = { active: 0, parked: 1, done: 2 };
-  const sortedWs = [...workstreams].sort((a, b) => wsOrder[a.status] - wsOrder[b.status]);
+  const wsOrder: Record<string, number> = { active: 0, parked: 1, done: 2 };
+  const sortedWs = [...workstreams].sort((a, b) => (wsOrder[a.status] ?? 9) - (wsOrder[b.status] ?? 9));
 
   const patch = async (p: ProjectPatch) => {
     await api.patchProject(id, p);
@@ -598,8 +728,44 @@ export default function ProjectPage() {
   };
 
   const configured = Boolean(project.spec_repo.trim());
+  const issuesMode = project.work_source === "issues";
   const needsSetup = !configured;
-  const needsStart = configured && workstreams.length === 0 && tasks.length === 0;
+  const needsStart = !issuesMode && configured && workstreams.length === 0 && tasks.length === 0;
+
+  const inboxCol = (
+    <section className="col col-inbox">
+      <h2 className="col-title">
+        inbox <span className="col-count">{inboxCount}</span>
+      </h2>
+      {inboxCount === 0 && <p className="muted">no open questions or todos — the hive is unblocked</p>}
+      {openTodos.map((t) => (
+        <HumanTaskCard key={t.id} task={t} onDone={refresh} />
+      ))}
+      {openQs.map((q) => (
+        <QuestionCard key={q.id} q={q} onAnswered={refresh} />
+      ))}
+      {answeredQs.length > 0 && (
+        <div className="answered-section">
+          <h3>answered</h3>
+          {answeredQs.map((q) => (
+            <AnsweredQuestion key={q.id} q={q} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+
+  const activityCol = (
+    <section className="col col-feed">
+      <h2 className="col-title">
+        activity <span className="col-count">{tasks.length}</span>
+      </h2>
+      {sortedTasks.length === 0 && <p className="muted">no tasks yet</p>}
+      {sortedTasks.map((t) => (
+        <TaskCard key={t.id} task={t} projectId={id} />
+      ))}
+    </section>
+  );
 
   return (
     <div className="page page-project">
@@ -616,50 +782,35 @@ export default function ProjectPage() {
       )}
       {project.goal_complete && <GoalBanner project={project} onPatch={patch} />}
       {configured && !needsStart && <TogglesBar project={project} onPatch={patch} />}
+      {configured && issuesMode && <ScanBar project={project} onScanned={refresh} />}
       {configured && !needsStart && <ProjectSettings project={project} onPatch={patch} />}
 
-      <div className="columns">
-        <section className="col col-ws">
-          <h2 className="col-title">
-            workstreams <span className="col-count">{workstreams.length}</span>
+      {issuesMode ? (
+        <>
+          <h2 className="col-title issues-title">
+            issues <span className="col-count">{workstreams.filter((w) => w.source === "issue").length}</span>
           </h2>
-          {sortedWs.length === 0 && <p className="muted">none yet — the supervisor will plan some</p>}
-          {sortedWs.map((w) => (
-            <WorkstreamCard key={w.id} ws={w} />
-          ))}
-        </section>
-
-        <section className="col col-inbox">
-          <h2 className="col-title">
-            inbox <span className="col-count">{inboxCount}</span>
-          </h2>
-          {inboxCount === 0 && <p className="muted">no open questions or todos — the hive is unblocked</p>}
-          {openTodos.map((t) => (
-            <HumanTaskCard key={t.id} task={t} onDone={refresh} />
-          ))}
-          {openQs.map((q) => (
-            <QuestionCard key={q.id} q={q} onAnswered={refresh} />
-          ))}
-          {answeredQs.length > 0 && (
-            <div className="answered-section">
-              <h3>answered</h3>
-              {answeredQs.map((q) => (
-                <AnsweredQuestion key={q.id} q={q} />
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="col col-feed">
-          <h2 className="col-title">
-            activity <span className="col-count">{tasks.length}</span>
-          </h2>
-          {sortedTasks.length === 0 && <p className="muted">no tasks yet</p>}
-          {sortedTasks.map((t) => (
-            <TaskCard key={t.id} task={t} projectId={id} />
-          ))}
-        </section>
-      </div>
+          <IssuesView workstreams={workstreams} />
+          <div className="columns columns-issues">
+            {inboxCol}
+            {activityCol}
+          </div>
+        </>
+      ) : (
+        <div className="columns">
+          <section className="col col-ws">
+            <h2 className="col-title">
+              workstreams <span className="col-count">{workstreams.length}</span>
+            </h2>
+            {sortedWs.length === 0 && <p className="muted">none yet — the supervisor will plan some</p>}
+            {sortedWs.map((w) => (
+              <WorkstreamCard key={w.id} ws={w} />
+            ))}
+          </section>
+          {inboxCol}
+          {activityCol}
+        </div>
+      )}
     </div>
   );
 }

@@ -2,10 +2,13 @@
 concurrency), and the derived convenience queries. FirestoreStore mirrors this
 API but needs GCP, so it is exercised only in deployment, not here."""
 
+import json
 import threading
 import time
 
-from hive.models import Question, QuestionStatus, Project, Resource, Task, TaskStatus
+import pytest
+
+from hive.models import Question, QuestionStatus, Project, Resource, Task, TaskStatus, User
 from hive.store import FileStore, MemoryStore, StoreBase
 from hive.storage import copy_store
 
@@ -105,6 +108,56 @@ def test_file_store_persists_across_restart(tmp_path):
 
 def test_file_store_is_a_storebase(tmp_path):
     assert isinstance(FileStore(tmp_path), StoreBase)
+
+
+def test_file_store_skips_corrupt_docs(tmp_path):
+    users = tmp_path / "users"
+    users.mkdir(parents=True)
+    good = User(id="github:good", github_login="good")
+    (users / "github:good.json").write_text(json.dumps(good.model_dump()))
+    (users / "github:bad.json").write_text('{"id":"github:bad","broken":')
+
+    store = FileStore(tmp_path)
+
+    assert store.get(User, "github:good") is not None
+    assert store.get(User, "github:bad") is None
+
+
+def test_file_store_rejects_corrupt_settings(tmp_path):
+    settings = tmp_path / "settings"
+    settings.mkdir(parents=True)
+    (settings / "org_context.json").write_text("{bad")
+
+    with pytest.raises(ValueError, match="Corrupt store file"):
+        FileStore(tmp_path)
+
+
+def test_file_store_concurrent_puts_same_doc(tmp_path):
+    """Parallel auth touches must not race on a shared .tmp path."""
+    store = FileStore(tmp_path)
+    errors: list[Exception] = []
+
+    def touch():
+        try:
+            store.put(
+                User(
+                    id="github:test",
+                    github_login="test",
+                    display_name="test",
+                    last_seen=time.time(),
+                )
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=touch) for _ in range(30)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert store.get(User, "github:test") is not None
 
 
 def test_copy_store_between_backends(tmp_path):

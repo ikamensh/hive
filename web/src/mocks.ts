@@ -12,6 +12,7 @@ import type {
   ProjectStart,
   Question,
   ResourcesPayload,
+  ScanResult,
   Subscription,
   Task,
   Workstream,
@@ -48,6 +49,13 @@ const mockGithubRepos: GithubRepo[] = [
     private: true,
     description: "Relay service",
   },
+  {
+    full_name: "acme/beacon",
+    ssh_url: "git@github.com:acme/beacon.git",
+    clone_url: "https://github.com/acme/beacon.git",
+    private: false,
+    description: "Beacon — issues-mode demo repo",
+  },
 ];
 
 const projects: Project[] = [
@@ -58,6 +66,7 @@ const projects: Project[] = [
     member_repos: ["git@github.com:acme/atlas-api.git", "git@github.com:acme/atlas-web.git"],
     mode: "build",
     autonomy: "direct_push",
+    work_source: "spec",
     guess_propensity: "sometimes",
     prod_deploys: false,
     paused: false,
@@ -74,6 +83,7 @@ const projects: Project[] = [
     member_repos: ["git@github.com:acme/relay.git"],
     mode: "build",
     autonomy: "pr",
+    work_source: "spec",
     guess_propensity: "often",
     prod_deploys: true,
     paused: false,
@@ -90,6 +100,7 @@ const projects: Project[] = [
     member_repos: ["git@github.com:acme/ledger.git"],
     mode: "maintain",
     autonomy: "direct_push",
+    work_source: "spec",
     guess_propensity: "rarely",
     prod_deploys: true,
     paused: false,
@@ -107,6 +118,7 @@ const projects: Project[] = [
     member_repos: [],
     mode: "build",
     autonomy: "direct_push",
+    work_source: "spec",
     guess_propensity: "never",
     prod_deploys: false,
     paused: true,
@@ -115,6 +127,23 @@ const projects: Project[] = [
     daily_budget_usd: 0,
     state: "blocked_resources",
     created_at: now - 3600 * 5,
+  },
+  {
+    id: "p-beacon",
+    name: "beacon",
+    spec_repo: "git@github.com:acme/beacon.git",
+    member_repos: [],
+    mode: "maintain",
+    autonomy: "direct_push",
+    work_source: "issues",
+    guess_propensity: "rarely",
+    prod_deploys: false,
+    paused: false,
+    goal_complete: false,
+    goal_complete_note: "",
+    daily_budget_usd: 0,
+    state: "blocked_clarity",
+    created_at: now - 86400 * 3,
   },
 ];
 
@@ -144,6 +173,86 @@ const workstreams: Workstream[] = [
     description: "Guided setup wizard for new orgs.",
     status: "done",
     parked_reason: "",
+    created_at: now - 86400 * 6,
+  },
+  {
+    id: "ws-issue-42",
+    project_id: "p-beacon",
+    source: "issue",
+    issue_number: 42,
+    issue_url: "https://github.com/acme/beacon/issues/42",
+    title: "#42 Login redirect drops the `next` query param",
+    description:
+      "## #42 Login redirect drops the `next` query param\n\nWhen an unauthenticated user hits a deep link, we bounce them to `/login` but the `?next=` param is lost, so after sign-in they always land on the dashboard.\n\n**Steps to reproduce**\n\n1. Open `/reports/usage` while logged out\n2. Sign in\n3. You land on `/` instead of `/reports/usage`\n\n---\n\n**comment by @maintainer:**\nLikely the `LoginForm` submit handler isn't forwarding `location.state.from`.",
+    status: "resolving",
+    parked_reason: "",
+    created_at: now - 3600 * 8,
+  },
+  {
+    id: "ws-issue-51",
+    project_id: "p-beacon",
+    source: "issue",
+    issue_number: 51,
+    issue_url: "https://github.com/acme/beacon/issues/51",
+    title: "#51 Add export-to-CSV for the audit log",
+    description:
+      "## #51 Add export-to-CSV for the audit log\n\nIt'd be great to export the audit log to CSV from the admin view.\n\nNo strong opinion on columns or filtering — whatever is easiest.",
+    status: "blocked_clarity",
+    parked_reason:
+      "Underspecified feature: which columns, time range, and whether to respect the active filter all need a product decision. Commented on the issue asking.",
+    created_at: now - 3600 * 30,
+  },
+  {
+    id: "ws-issue-37",
+    project_id: "p-beacon",
+    source: "issue",
+    issue_number: 37,
+    issue_url: "https://github.com/acme/beacon/issues/37",
+    title: "#37 Dark-mode toggle flickers on first paint",
+    description:
+      "## #37 Dark-mode toggle flickers on first paint\n\nThe theme is read from `localStorage` in a `useEffect`, so the light theme paints for one frame before switching to dark. Set the theme before first paint (inline script in `<head>`).",
+    status: "reviewing",
+    parked_reason: "",
+    created_at: now - 3600 * 5,
+  },
+  {
+    id: "ws-issue-29",
+    project_id: "p-beacon",
+    source: "issue",
+    issue_number: 29,
+    issue_url: "https://github.com/acme/beacon/issues/29",
+    title: "#29 Rate limiter rejects valid bursts",
+    description:
+      "## #29 Rate limiter rejects valid bursts\n\nThe token-bucket refill math is off by a factor of the window size, so legitimate bursts get 429s.",
+    status: "rejected",
+    parked_reason:
+      "Review rejected: the fix widened the bucket but broke the per-IP isolation test. Recommended approach: fix the refill rate, keep buckets per-IP. Commented on the issue.",
+    created_at: now - 86400 * 2,
+  },
+  {
+    id: "ws-issue-18",
+    project_id: "p-beacon",
+    source: "issue",
+    issue_number: 18,
+    issue_url: "https://github.com/acme/beacon/issues/18",
+    title: "#18 Typo in onboarding email subject",
+    description:
+      "## #18 Typo in onboarding email subject\n\n\"Welcom to Beacon\" → \"Welcome to Beacon\".",
+    status: "done",
+    parked_reason: "",
+    created_at: now - 86400 * 4,
+  },
+  {
+    id: "ws-issue-12",
+    project_id: "p-beacon",
+    source: "issue",
+    issue_number: 12,
+    issue_url: "https://github.com/acme/beacon/issues/12",
+    title: "#12 Investigate flaky upload test",
+    description:
+      "## #12 Investigate flaky upload test\n\nClosed by a maintainer — turned out to be a CI runner issue, not a product bug.",
+    status: "cancelled",
+    parked_reason: "Issue closed on GitHub by a human.",
     created_at: now - 86400 * 6,
   },
 ];
@@ -261,6 +370,59 @@ const tasks: Task[] = [
     started_at: now - 86400 + 60,
     finished_at: now - 86400 + 2760,
   },
+  {
+    id: "t-r1",
+    project_id: "p-beacon",
+    workstream_id: "ws-issue-42",
+    repo: "git@github.com:acme/beacon.git",
+    branch: "hive/issue-42",
+    kind: "resolve",
+    instructions: "Clarify then fix issue #42 (login redirect drops `next`). See .hive/issue-42/ISSUE.md.",
+    backend: "codex",
+    model: "gpt-5.5",
+    status: "running",
+    runner_id: "r-hex1",
+    delivered: true,
+    cancel_requested: false,
+    verdict: "none",
+    trace_blob: "",
+    result_text: "",
+    is_error: false,
+    cost_usd: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    prompt_versions: { resolve: "mock" },
+    created_at: now - 600,
+    started_at: now - 540,
+    finished_at: 0,
+  },
+  {
+    id: "t-r2",
+    project_id: "p-beacon",
+    workstream_id: "ws-issue-18",
+    repo: "git@github.com:acme/beacon.git",
+    branch: "hive/issue-18",
+    kind: "review",
+    instructions: "Review the fix for issue #18 on branch hive/issue-18.",
+    backend: "codex",
+    model: "gpt-5.5",
+    status: "done",
+    runner_id: "r-hex1",
+    delivered: true,
+    cancel_requested: false,
+    verdict: "accept",
+    trace_blob: "traces/t-r2.jsonl",
+    result_text:
+      "Subject corrected to \"Welcome to Beacon\" and the snapshot test updated.\n\nREVIEW: ACCEPT",
+    is_error: false,
+    cost_usd: 0.21,
+    input_tokens: 48000,
+    output_tokens: 2200,
+    prompt_versions: { review: "mock" },
+    created_at: now - 86400 * 4 + 300,
+    started_at: now - 86400 * 4 + 360,
+    finished_at: now - 86400 * 4 + 720,
+  },
 ];
 
 const resourcesPayload: ResourcesPayload = {
@@ -351,6 +513,7 @@ export const api = {
       member_repos: [],
       mode: "build",
       autonomy: "direct_push",
+      work_source: "spec",
       guess_propensity: "sometimes",
       prod_deploys: false,
       paused: false,
@@ -392,6 +555,25 @@ export const api = {
       project.goal_complete_note = "";
     }
     return structuredClone(project);
+  },
+
+  scanIssues: async (id: string): Promise<ScanResult> => {
+    const project = projects.find((p) => p.id === id);
+    if (!project) throw new Error("not found");
+    if (project.work_source !== "issues") throw new Error("project is not in issues mode");
+    if (!project.spec_repo.trim()) throw new Error("spec_repo required");
+    const open = workstreams.filter(
+      (w) => w.project_id === id && w.source === "issue" && w.status !== "done" && w.status !== "cancelled",
+    );
+    return {
+      open_issues: open.length,
+      resolve_queued: open.filter((w) => w.status === "resolving").length,
+      changes: [
+        "re-gated #51 (blocked_clarity) → resolving",
+        "re-gated #29 (rejected) → resolving",
+        "no new open issues",
+      ],
+    };
   },
 
   answerQuestion: async (id: string, answer: string): Promise<Question> => {

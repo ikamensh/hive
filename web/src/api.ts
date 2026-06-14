@@ -10,6 +10,7 @@ import type {
   ProjectStart,
   Question,
   ResourcesPayload,
+  ScanResult,
   StorageExportResult,
   StorageInfo,
   Subscription,
@@ -56,6 +57,8 @@ const realApi = {
   project: (id: string) => http<ProjectDetail>(`/api/projects/${id}`),
   patchProject: (id: string, patch: ProjectPatch) =>
     http<Project>(`/api/projects/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  scanIssues: (id: string) =>
+    http<ScanResult>(`/api/projects/${id}/scan-issues`, { method: "POST" }),
   answerQuestion: (id: string, answer: string) =>
     http<Question>(`/api/questions/${id}/answer`, { method: "POST", body: JSON.stringify({ answer }) }),
   feedback: async (project_id: string, target_id: string, verdict: "up" | "down", comment: string) => {
