@@ -452,7 +452,7 @@ textarea:focus {
     text-align: center;
   }
   .account-menu {
-    margin-left: auto;
+    margin-left: 0;
   }
   .account-chip {
     max-width: 128px;
@@ -1731,11 +1731,22 @@ textarea:focus {
 }
 .storage-export-form input {
   flex: 1 1 180px;
+  min-width: 0;
 }
 .storage-export-ok {
   margin-top: 10px;
   color: var(--green);
   font-size: 13px;
+}
+
+@media (max-width: 720px) {
+  .storage-export-form {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+  .storage-export-form button {
+    width: 100%;
+  }
 }
 
 .runner-grid {
