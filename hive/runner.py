@@ -6,9 +6,12 @@ Run directly: `python -m hive.runner`. Configuration via environment:
 
 from __future__ import annotations
 
+import base64
+import contextlib
 import logging
 import os
 import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -51,6 +54,15 @@ EXHAUSTED_PATTERNS = re.compile(
     r"rate.?limit|quota|usage.?limit|plan.?limit|too many requests|429\b|subscription|billing",
     re.IGNORECASE,
 )
+GITHUB_URL = re.compile(
+    r"^(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)"
+    r"(?P<repo>[\w.-]+/[\w.-]+?)(?:\.git)?/?$",
+    re.IGNORECASE,
+)
+
+
+class CheckoutError(RuntimeError):
+    """A user-facing checkout failure with stderr and without secret material."""
 
 
 def detect_backends() -> list[str]:
@@ -62,6 +74,153 @@ def discovery_payload() -> tuple[list[str], list[dict]]:
     return detected_backend_names(discoveries), [asdict(d) for d in discoveries]
 
 
+def _github_repo(repo_url: str) -> str:
+    match = GITHUB_URL.match(repo_url.strip())
+    return match.group("repo") if match else ""
+
+
+def _runner_github_token() -> str:
+    if token := (os.environ.get("HIVE_GH_TOKEN") or os.environ.get("GH_TOKEN") or "").strip():
+        return token
+    preferred = (
+        os.environ.get("HIVE_GITHUB_LOGIN", "").strip()
+        or os.environ.get("HIVE_ALLOWED_GITHUB_USERS", "ikamensh").split(",")[0].strip()
+    )
+    if not preferred:
+        return ""
+    try:
+        from hive.github_repos import gh_token_for
+    except Exception:
+        return ""
+    try:
+        return gh_token_for(preferred).strip()
+    except Exception:
+        return ""
+
+
+def _git_auth_overlay(token: str) -> dict[str, str]:
+    if not token:
+        return {}
+    try:
+        index = int(os.environ.get("GIT_CONFIG_COUNT", "0") or "0")
+    except ValueError:
+        index = 0
+    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    return {
+        "GIT_CONFIG_COUNT": str(index + 1),
+        f"GIT_CONFIG_KEY_{index}": "http.https://github.com/.extraheader",
+        f"GIT_CONFIG_VALUE_{index}": f"AUTHORIZATION: basic {basic}",
+    }
+
+
+def _checkout_plan(repo_url: str) -> tuple[str, dict[str, str]]:
+    repo = _github_repo(repo_url)
+    if not repo:
+        return repo_url, {}
+    token = _runner_github_token()
+    if not token:
+        return repo_url, {}
+    return f"https://github.com/{repo}.git", _git_auth_overlay(token)
+
+
+def _with_env(overlay: dict[str, str]) -> dict[str, str] | None:
+    return {**os.environ, **overlay} if overlay else None
+
+
+@contextlib.contextmanager
+def _git_auth_environment(repo_url: str):
+    _checkout_url, overlay = _checkout_plan(repo_url)
+    if not overlay:
+        yield
+        return
+    previous = {key: os.environ.get(key) for key in overlay}
+    os.environ.update(overlay)
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _tail(text: str | bytes | None, limit: int = 1600) -> str:
+    if text is None:
+        return ""
+    if isinstance(text, bytes):
+        text = text.decode(errors="replace")
+    return text.strip()[-limit:]
+
+
+def _format_checkout_failure(
+    *,
+    repo_url: str,
+    branch: str,
+    args: list[str],
+    returncode: int | str,
+    stdout: str | bytes | None,
+    stderr: str | bytes | None,
+) -> str:
+    target = f"{repo_url} ({branch})" if branch else repo_url
+    lines = [
+        f"checkout failed for {target}",
+        f"{shlex.join(['git', *args])} exited {returncode}",
+    ]
+    detail = _tail(stderr) or _tail(stdout)
+    if detail:
+        lines.append(detail)
+    if _github_repo(repo_url):
+        lines.append(
+            "For private GitHub repos, set HIVE_GH_TOKEN on the runner or configure "
+            "runner git/SSH access for the same GitHub account."
+        )
+    return "\n".join(lines)
+
+
+def _run_checkout_git(
+    args: list[str],
+    *,
+    cwd: Path | None,
+    timeout: float,
+    env: dict[str, str] | None,
+    repo_url: str,
+    branch: str,
+) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            check=True,
+            timeout=timeout,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise CheckoutError(
+            _format_checkout_failure(
+                repo_url=repo_url,
+                branch=branch,
+                args=args,
+                returncode=exc.returncode,
+                stdout=exc.stdout,
+                stderr=exc.stderr,
+            )
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise CheckoutError(
+            _format_checkout_failure(
+                repo_url=repo_url,
+                branch=branch,
+                args=args,
+                returncode=f"timeout after {exc.timeout}s",
+                stdout=exc.stdout,
+                stderr=exc.stderr,
+            )
+        ) from exc
+
+
 def checkout(repo_url: str, branch: str = "") -> Path:
     """Fresh-ish checkout: clone once, fetch, then hard-reset to the target.
 
@@ -69,29 +228,72 @@ def checkout(repo_url: str, branch: str = "") -> Path:
     With a branch, checks out that branch — existing on origin (verify/fix of
     PR-mode work) or freshly created off the default (the first PR-mode work
     task, which then pushes it)."""
-    slug = repo_url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
+    checkout_url, auth_overlay = _checkout_plan(repo_url)
+    env = _with_env(auth_overlay)
+    slug = checkout_url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
     path = WORKDIR / slug
     if path.exists():
-        subprocess.run(["git", "fetch", "origin"], cwd=path, check=True, timeout=300)
+        if checkout_url != repo_url:
+            _run_checkout_git(
+                ["remote", "set-url", "origin", checkout_url],
+                cwd=path,
+                timeout=60,
+                env=env,
+                repo_url=checkout_url,
+                branch=branch,
+            )
+        _run_checkout_git(
+            ["fetch", "origin"], cwd=path, timeout=300, env=env, repo_url=checkout_url, branch=branch
+        )
     else:
         WORKDIR.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["git", "clone", repo_url, str(path)], check=True, timeout=600)
+        _run_checkout_git(
+            ["clone", checkout_url, str(path)],
+            cwd=None,
+            timeout=600,
+            env=env,
+            repo_url=checkout_url,
+            branch=branch,
+        )
     default_head = subprocess.run(
         ["git", "symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
-        cwd=path, capture_output=True, text=True,
+        cwd=path, capture_output=True, text=True, env=env,
     ).stdout.strip() or "origin/main"
     if branch:
         on_origin = subprocess.run(
             ["git", "ls-remote", "--heads", "origin", branch],
-            cwd=path, capture_output=True, text=True, timeout=60,
+            cwd=path, capture_output=True, text=True, timeout=60, env=env,
         ).stdout.strip()
         base = f"origin/{branch}" if on_origin else default_head
         if on_origin:
-            subprocess.run(["git", "fetch", "origin", branch], cwd=path, check=True, timeout=120)
-        subprocess.run(["git", "checkout", "-B", branch, base], cwd=path, check=True, timeout=60)
+            _run_checkout_git(
+                ["fetch", "origin", branch],
+                cwd=path,
+                timeout=120,
+                env=env,
+                repo_url=checkout_url,
+                branch=branch,
+            )
+        _run_checkout_git(
+            ["checkout", "-B", branch, base],
+            cwd=path,
+            timeout=60,
+            env=env,
+            repo_url=checkout_url,
+            branch=branch,
+        )
     else:
-        subprocess.run(["git", "reset", "--hard", default_head], cwd=path, check=True, timeout=60)
-    subprocess.run(["git", "clean", "-fd"], cwd=path, check=True, timeout=60)
+        _run_checkout_git(
+            ["reset", "--hard", default_head],
+            cwd=path,
+            timeout=60,
+            env=env,
+            repo_url=checkout_url,
+            branch=branch,
+        )
+    _run_checkout_git(
+        ["clean", "-fd"], cwd=path, timeout=60, env=env, repo_url=checkout_url, branch=branch
+    )
     return path
 
 
@@ -187,47 +389,51 @@ def execute(task: dict, headers: dict, auth) -> dict:
 
     try:
         project_dir = checkout(task["repo"], task.get("branch", ""))
+    except CheckoutError as exc:
+        return {"text": str(exc), "is_error": True}
     except subprocess.SubprocessError as exc:
         return {"text": f"checkout failed: {exc}", "is_error": True}
     if task["kind"] == "preflight":
-        return run_preflight(project_dir)
+        with _git_auth_environment(task["repo"]):
+            return run_preflight(project_dir)
     prepare_issue_workspace(project_dir, task, headers, auth)
 
-    kodo_log.init(kodo_log.RunDir.create(project_dir))  # capture a per-task JSONL trace
-    session = make_session(
-        task["backend"],
-        task.get("model", ""),
-        task.get("session_handle", ""),
-    )
-    cancelled = threading.Event()
-    stop_watch = threading.Event()
+    with _git_auth_environment(task["repo"]):
+        kodo_log.init(kodo_log.RunDir.create(project_dir))  # capture a per-task JSONL trace
+        session = make_session(
+            task["backend"],
+            task.get("model", ""),
+            task.get("session_handle", ""),
+        )
+        cancelled = threading.Event()
+        stop_watch = threading.Event()
 
-    def watch_for_cancel() -> None:
-        # Poll the task; on an operator cancel request, terminate the session,
-        # which unblocks Agent.run in its worker thread.
-        watcher = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=15.0, auth=auth)
-        while not stop_watch.wait(CANCEL_POLL_S):
-            try:
-                state = watcher.get(f"/api/tasks/{task['id']}").json()
-            except httpx.HTTPError:
-                continue
-            if state.get("cancel_requested"):
-                cancelled.set()
-                session.terminate()
-                return
+        def watch_for_cancel() -> None:
+            # Poll the task; on an operator cancel request, terminate the session,
+            # which unblocks Agent.run in its worker thread.
+            watcher = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=15.0, auth=auth)
+            while not stop_watch.wait(CANCEL_POLL_S):
+                try:
+                    state = watcher.get(f"/api/tasks/{task['id']}").json()
+                except httpx.HTTPError:
+                    continue
+                if state.get("cancel_requested"):
+                    cancelled.set()
+                    session.terminate()
+                    return
 
-    watcher_thread = threading.Thread(target=watch_for_cancel, daemon=True)
-    watcher_thread.start()
-    try:
-        with Agent(session, max_turns=100, timeout_s=TASK_TIMEOUT_S) as agent:
-            result = agent.run(task["instructions"], project_dir, agent_name=task["kind"])
-    except BaseException:
-        if cancelled.is_set():
-            return {"text": "Task cancelled by operator.", "cancelled": True}
-        raise
-    finally:
-        stop_watch.set()
-        _upload_trace(task["id"], kodo_log.get_log_file(), headers, auth)
+        watcher_thread = threading.Thread(target=watch_for_cancel, daemon=True)
+        watcher_thread.start()
+        try:
+            with Agent(session, max_turns=100, timeout_s=TASK_TIMEOUT_S) as agent:
+                result = agent.run(task["instructions"], project_dir, agent_name=task["kind"])
+        except BaseException:
+            if cancelled.is_set():
+                return {"text": "Task cancelled by operator.", "cancelled": True}
+            raise
+        finally:
+            stop_watch.set()
+            _upload_trace(task["id"], kodo_log.get_log_file(), headers, auth)
 
     if cancelled.is_set():
         return {"text": "Task cancelled by operator.", "cancelled": True}
