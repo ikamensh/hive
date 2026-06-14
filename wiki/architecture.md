@@ -4,12 +4,12 @@ Condensed current understanding of hive's design. Originated from a design inter
 
 ## 1. Core concepts
 
-- **Project** — a mission + iteration goal + a set of one or more git repos (multi-repo from the start). Operational wiring lives in the app DB: per-project policy (toggles), import/intake status, and the authoritative list of member repos (managed via the web UI; the wiki may describe each repo's role, but the DB list is the registry).
+- **Project** — a mission + iteration goal + a set of one or more git repos (multi-repo from the start). Operational wiring lives in the app DB: per-project policy (toggles), intake status, and the authoritative list of member repos (managed via the web UI; the wiki may describe each repo's role, but the DB list is the registry).
 - **Spec home** — one git repo per project containing:
   - `mission.md` — high-level goal, rarely changes.
   - `iteration.md` — the current timeboxed goal (user stories / "using system, steps X lead to Y").
   - `iterations/` — archive of completed iterations, each with a short outcome note. Git history technically preserves this, but an explicit archive is better UX for agents and humans.
-  - Importing an existing repo is the normal first path: Hive clones/indexes the repo, detects existing spec files, mines bounded repo evidence when they are absent, then runs intake/critique before planning. See `wiki/project-intake.md`.
+  - Spec-mode projects pass through intake before planning: a trusted scout agent runs in a repo checkout, reflects its understanding of mission / next iteration / next steps, interviews the user when needed, then pushes durable spec files after approval. See `wiki/project-intake.md`.
   - The iteration goal is set or confirmed *through hive* (web UI / `hive iterate` / intake), which is authoritative and clears goal-completion; the orchestrator then distills it into `iteration.md` and archives the prior one to `iterations/`. Hand-editing `iteration.md` via git is not observed in MVP (no webhook yet), so direct edits require an explicit import/critique refresh.
   - `wiki/` — condensed, current understanding of the project, curated by agents and corrected by the human. Includes `infrastructure.md` (deployed services, URLs, how to deploy, where logs/secrets live).
   - `input-log/` — raw user inputs (clarification answers, free-text feedback) preserved verbatim for later re-evaluation. The wiki is the distillation; the log is the source.
@@ -31,7 +31,7 @@ Plain code that owns the project state machine and computes the state purely fro
 - `blocked: infra` — (post-MVP) infrastructure drift/problem needs human action.
 - `idle: goal complete` — the iteration goal is fully built; waiting for the human to set the next one.
 
-The supervisor wakes the orchestrator on events: task finished, question answered, resource cooldown expired, heartbeat timer, (later) GitHub webhook.
+The supervisor wakes the orchestrator on events: intake accepted, task finished, question answered, resource cooldown expired, heartbeat timer, (later) GitHub webhook.
 
 ### 2.2 Orchestrator (AI, stateful)
 
@@ -48,9 +48,13 @@ A high-intelligence model session that plans and decides: decomposes the iterati
 - When a workstream hits a blocking question it is **parked** and the orchestrator picks the next task from an unblocked workstream — the system stays busy if any direction is clear.
 - True parallelism within a repo (git worktrees, kodo-style parallel stages) is a later opt-in.
 
-### 2.4 Standard opening workstreams
+### 2.4 Intake and standard opening workstreams
 
-1. **Intake / Workstream 0: spec clarification** — import existing spec material, mine bounded repo evidence when needed, and interview the user until the iteration is buildable. Opens with a **spec critique** run (see `wiki/spec-critique.md`): parallel LLM critics + adjudicator surface underspecified/contradictory spec items, which form the interview's first batch of questions. Re-runnable on demand from the project page, with staleness ("spec changed since last critique") tracked.
+Before the build orchestrator plans spec-mode work, a mandatory **intake scout** aligns the project with the user and pushes `mission.md`, `iteration.md`, and supporting wiki/input-log notes. Intake is a stateful runner-backed agent conversation, not an implementation workstream.
+
+Once intake is accepted, the orchestrator may open:
+
+1. **Workstream 0: spec clarification** — only if active work still exposes a material ambiguity missed by intake. It can use the same clarification protocol and may rerun spec critique on demand (see `wiki/spec-critique.md`).
 2. **Workstream 1: infra bootstrap** — repo skeleton, test harness, CI — *sized to the project*. A narrow script project gets pytest and nothing else. Skipped when not warranted.
 
 ## 3. Clarification protocol
@@ -105,8 +109,8 @@ In MVP the only channel is the web UI inbox (user visits the page, sees work sta
 
 Screens, in priority order:
 
-1. **Project list** — one row per project with the supervisor state badge: `working (+current task)`, `blocked: questions (3)`, `blocked: resources (resumes 16:40)`, `blocked: infra`, `idle: goal complete`. The "is hive healthy" glance.
-2. **Project page** — import/intake panel for projects that are not yet active (repo picker, import status, spec preview, clarity check, intake inbox), then workstream board (running / blocked / parked / done per stream), the **inbox** (clarification questions answered in place — **free-text-first with the agent's proposed options as accelerators** — plus escalations and infra alerts), activity feed (tasks with outcome, cost, links to commits/PRs and full traces), and the toggles panel: mode (build/maintain), autonomy (PR vs direct-push), guess-propensity dial, prod-deploy switch.
+1. **Project list** — one row per project with the supervisor state badge: `intake`, `working (+current task)`, `blocked: questions (3)`, `blocked: resources (resumes 16:40)`, `blocked: infra`, `idle: goal complete`. The "is hive healthy" glance.
+2. **Project page** — dedicated intake panel for spec-mode projects that are not yet active (repo picker / create private repo, trusted-scout resource status, latest brief, material questions, answer/correction composer, proceed-with-assumptions, approve-and-finalize), then workstream board (running / blocked / parked / done per stream), the **inbox** (clarification questions answered in place — **free-text-first with the agent's proposed options as accelerators** — plus escalations and infra alerts), activity feed (tasks with outcome, cost, links to commits/PRs and full traces), and the toggles panel: mode (build/maintain), autonomy (PR vs direct-push), guess-propensity dial, prod-deploy switch.
 3. **Resources page** — vault credentials, runners and status, quota estimates and cooldowns, spend today/this week.
 4. Deep trace inspection reuses kodo's JSONL viewer.
 
@@ -116,7 +120,7 @@ Deferred: analytics, multi-user management, notification channels, mobile polish
 
 GEPA-style prompt optimization (reflective mutation from execution traces + natural-language feedback, Pareto frontier of candidates) is **post-MVP**, but the MVP builds the logging because it's needed for visibility anyway and it is where the future GEPA inputs live:
 
-- **Prompt store with overlays**: each agent role (orchestrator, worker, verifier, intake — intake = the spec-critique critics/adjudicator, `wiki/spec-critique.md`) has a versioned base prompt + optional **per-project** and **per-user** overlays (user taste, e.g. anti-bloat rules, travels across projects). Every task records the prompt versions it ran with. Later, GEPA mutates exactly the overlays — base prompts stay product code, overlays are the evolvable genome.
+- **Prompt store with overlays**: each agent role (orchestrator, worker, verifier, intake scout, spec critic/adjudicator) has a versioned base prompt + optional **per-project** and **per-user** overlays (user taste, e.g. anti-bloat rules, travels across projects). Every task records the prompt versions it ran with. Later, GEPA mutates exactly the overlays — base prompts stay product code, overlays are the evolvable genome.
 - **Episodes**: per-task full trace (kodo JSONL format), outcome (verified/rejected/abandoned), cost, duration, prompt versions.
 - **Feedback**: explicit 👍/👎 + free text on any task/PR/question (free text matters most for GEPA); implicit signals — PR merged untouched vs amended, clarification answer contradicting an agent guess, verification rejection reasons.
 - No automatic prompt self-modification in the live loop — per-project adaptation in MVP comes from wiki/spec accumulation only.

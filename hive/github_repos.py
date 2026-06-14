@@ -298,3 +298,79 @@ def validate_repo(
                 "GitHub unavailable — run `gh auth login` or set HIVE_GH_TOKEN"
             ) from None
         return _view_via_api(full_name, token)
+
+
+def _create_via_api(name: str, token: str, *, private: bool, description: str) -> dict:
+    headers = {**_GH_HEADERS, "Authorization": f"Bearer {token}"}
+    response = httpx.post(
+        "https://api.github.com/user/repos",
+        json={
+            "name": name,
+            "private": private,
+            "description": description,
+            "auto_init": True,
+        },
+        headers=headers,
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    repo = response.json()
+    return _shape(
+        str(repo.get("full_name", "")),
+        str(repo.get("ssh_url", "")),
+        bool(repo.get("private")),
+        str(repo.get("description") or ""),
+    )
+
+
+def _create_via_gh_cli(name: str, *, private: bool, description: str) -> dict:
+    args = [
+        "gh",
+        "repo",
+        "create",
+        name,
+        "--confirm",
+        "--clone=false",
+    ]
+    args.append("--private" if private else "--public")
+    if description.strip():
+        args.extend(["--description", description.strip()])
+    proc = subprocess.run(args, capture_output=True, text=True, timeout=60)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or "gh repo create failed")
+    created = (proc.stdout or proc.stderr).strip().splitlines()[-1].strip()
+    return validate_repo(created or name)
+
+
+def create_repo(
+    name: str,
+    *,
+    private: bool = True,
+    description: str = "",
+    github_login: str = "",
+    user_token: str = "",
+    config_token: str = "",
+) -> dict:
+    """Create a GitHub repo for greenfield intake."""
+    repo_name = name.strip()
+    if not re.fullmatch(r"[\w.-]+", repo_name):
+        raise ValueError("repo name may contain only letters, numbers, ., _, and -")
+    login = github_login.strip().lower()
+    if user_token.strip():
+        return _create_via_api(repo_name, user_token.strip(), private=private, description=description)
+    active = _gh_active_login()
+    if login and active and active.lower() != login:
+        token = _resolve_config_token(config_token, login)
+        if token:
+            return _create_via_api(repo_name, token, private=private, description=description)
+        raise RuntimeError(
+            f"gh is logged in as {active} but Hive session is {login} — "
+            "sign out/in to Hive (GitHub login) or set HIVE_GH_TOKEN"
+        )
+    try:
+        return _create_via_gh_cli(repo_name, private=private, description=description)
+    except (RuntimeError, FileNotFoundError, json.JSONDecodeError):
+        token = _resolve_config_token(config_token, login)
+        if not token:
+            raise RuntimeError("GitHub unavailable — run `gh auth login` or set HIVE_GH_TOKEN") from None
+        return _create_via_api(repo_name, token, private=private, description=description)

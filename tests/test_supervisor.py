@@ -9,6 +9,8 @@ import asyncio
 import time
 
 from hive.models import (
+    AgentConversation,
+    ConversationStatus,
     HumanTask,
     OrchestratorRun,
     Project,
@@ -78,6 +80,26 @@ def test_questions_block_only_when_nothing_active():
 def test_no_workstreams_is_idle():
     p = Project(name="p", spec_repo="x")
     assert compute_state(p, [], 0, [], set()) == ProjectState.idle_no_workstreams
+
+
+def test_supervisor_holds_new_spec_project_in_intake_until_approved():
+    store = MemoryStore()
+    project = store.put(Project(name="p", spec_repo="x"))
+    sup = make_supervisor(store)
+    assert sup.refresh_state(project) == ProjectState.intake
+
+    conversation = store.put(
+        AgentConversation(
+            project_id=project.id,
+            repo=project.spec_repo,
+            backend="codex",
+            model="gpt-5.5",
+            status=ConversationStatus.done,
+        )
+    )
+    project.intake_conversation_id = conversation.id
+    store.put(project)
+    assert sup.refresh_state(project) == ProjectState.idle_no_workstreams
 
 
 def test_dispatch_serializes_per_repo():

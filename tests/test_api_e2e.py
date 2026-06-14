@@ -17,6 +17,8 @@ from hive.blobstore import LocalBlobStore
 from hive.config import Config
 from hive.llm.openai import OpenAIAdapter
 from hive.models import (
+    AgentConversation,
+    ConversationStatus,
     HumanTask,
     HumanTaskStatus,
     OrchestratorRun,
@@ -39,7 +41,26 @@ def _configure_project(client, pid, spec_repo="https://example.com/spec.git", **
     client.patch(f"/api/projects/{pid}", json={"spec_repo": spec_repo, **patch})
 
 
+def _complete_intake(client, pid):
+    store = client.app.state.store
+    project = store.get(Project, pid)
+    conversation = store.put(
+        AgentConversation(
+            workspace_id=project.workspace_id,
+            project_id=pid,
+            repo=project.spec_repo,
+            backend="codex",
+            model="gpt-5.5",
+            status=ConversationStatus.done,
+            latest_brief="Mission:\nBuild the thing.\n\nNext iteration:\nShip the first loop.",
+        )
+    )
+    project.intake_conversation_id = conversation.id
+    store.put(project)
+
+
 def _start_project(client, pid, mission="", iteration_goal=""):
+    _complete_intake(client, pid)
     client.post(f"/api/projects/{pid}/start", json={
         "mission": mission,
         "iteration_goal": iteration_goal,
@@ -76,10 +97,11 @@ class ScriptedOrchestrator:
         elif any(t.kind == TaskKind.work and t.status == "done" for t in tasks) and not any(
             t.kind == TaskKind.verify for t in tasks
         ):
-            ws_id = tasks[0].workstream_id
-            tools.create_task(ws_id, "https://example.com/app.git", "verify it", kind="verify")
+            work = next(t for t in tasks if t.kind == TaskKind.work and t.status == "done")
+            tools.create_task(work.workstream_id, "https://example.com/app.git", "verify it", kind="verify")
         elif any(t.kind == TaskKind.verify and t.status == "done" for t in tasks) and not questions:
-            tools.ask_user("Should we also add B? My recommendation: yes.", tasks[0].workstream_id)
+            work = next(t for t in tasks if t.kind == TaskKind.work)
+            tools.ask_user("Should we also add B? My recommendation: yes.", work.workstream_id)
 
 
 class ScriptedOpenAIAdapter(OpenAIAdapter):
@@ -197,7 +219,15 @@ def test_start_requires_spec_repo(harness):
     assert len(orch.invocations) == 0
 
 
-def test_create_project_brief_wakes_orchestrator(harness):
+def test_start_requires_completed_intake(harness):
+    client, store, orch = harness
+    project = client.post("/api/projects", json={"name": "draft"}).json()
+    _configure_project(client, project["id"])
+    assert client.post(f"/api/projects/{project['id']}/start", json={}).status_code == 409
+    assert len(orch.invocations) == 0
+
+
+def test_start_after_intake_wakes_orchestrator_and_ignores_legacy_brief(harness):
     client, store, orch = harness
 
     project = _create_started(
@@ -209,9 +239,10 @@ def test_create_project_brief_wakes_orchestrator(harness):
     _pump(client, store)
 
     event = orch.invocations[0][0]
-    assert "Make local Hive setup dependable" in event
-    assert "Prove agents can register" in event
-    assert "commit_to_spec" in event
+    assert "approved intake" in event
+    assert "Legacy start brief was ignored" in event
+    assert "Make local Hive setup dependable" not in event
+    assert "Prove agents can register" not in event
     assert store.get(Project, project["id"]).name == "briefed"
 
 
@@ -830,6 +861,96 @@ def test_human_task_done_wakes_project(harness):
     sup._events.clear()
     client.post(f"/api/human-tasks/{task['id']}/done")
     assert sup._events.get(pid)  # completing the action re-evaluates work that waited on it
+
+
+def test_intake_conversation_queues_scout_and_handoff_to_orchestrator(harness):
+    client, store, orch = harness
+    project = client.post("/api/projects", json={"name": "intake-demo"}).json()
+    pid = project["id"]
+    _configure_project(client, pid, "https://example.com/spec.git")
+    rid = _register_usable_runner(client, backend="codex")
+
+    conversation = client.post(f"/api/projects/{pid}/intake/start").json()
+    assert conversation["backend"] == "codex"
+    assert conversation["model"] == "gpt-5.5"
+
+    _pump(client, store)
+    first = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert first["kind"] == "intake"
+    assert first["conversation_id"] == conversation["id"]
+    assert first["conversation_turn"] == "initial"
+    assert "Mission:" in first["instructions"]
+
+    client.post(
+        f"/api/tasks/{first['id']}/result",
+        json={
+            "text": (
+                "Mission:\nBuild Hive.\n\n"
+                "Next iteration:\nMake intake work.\n\n"
+                "Likely next steps:\n- Wire scout turns\n- Persist approved specs\n\n"
+                "Assumptions:\n- Push mode is acceptable.\n\n"
+                "Questions:\n(none)"
+            ),
+            "session_handle": "session-1",
+        },
+        headers=RUNNER_HEADERS,
+    )
+    saved = store.get(AgentConversation, conversation["id"])
+    assert saved.status == "open"
+    assert saved.session_handle == "session-1"
+    assert "Make intake work" in saved.latest_brief
+
+    queued = client.post(
+        f"/api/conversations/{conversation['id']}/message",
+        json={"action": "approve"},
+    ).json()["task"]
+    assert queued["conversation_turn"] == "finalize"
+    _pump(client, store)
+    final = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert final["id"] == queued["id"]
+    assert final["session_handle"] == "session-1"
+    assert "Commit and push" in final["instructions"]
+
+    client.post(
+        f"/api/tasks/{final['id']}/result",
+        json={"text": "Committed and pushed abc123", "session_handle": "session-2"},
+        headers=RUNNER_HEADERS,
+    )
+    _pump(client, store)
+    finished = store.get(AgentConversation, conversation["id"])
+    assert finished.status == "done"
+    assert any("Intake accepted" in event for batch in orch.invocations for event in batch)
+
+
+def test_intake_approval_requires_ready_brief(harness):
+    client, store, _orch = harness
+    project = client.post("/api/projects", json={"name": "intake-questions"}).json()
+    pid = project["id"]
+    _configure_project(client, pid, "https://example.com/spec.git")
+    rid = _register_usable_runner(client, backend="codex")
+    conversation = client.post(f"/api/projects/{pid}/intake/start").json()
+
+    _pump(client, store)
+    first = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    client.post(
+        f"/api/tasks/{first['id']}/result",
+        json={
+            "text": (
+                "Mission:\nBuild Hive.\n\n"
+                "Next iteration:\nMake intake work.\n\n"
+                "Likely next steps:\n- Wire scout turns\n\n"
+                "Assumptions:\n- Push mode is acceptable.\n\n"
+                "Questions:\nShould this include mobile UI?"
+            ),
+        },
+        headers=RUNNER_HEADERS,
+    )
+
+    blocked = client.post(f"/api/conversations/{conversation['id']}/message", json={"action": "approve"})
+    assert blocked.status_code == 409
+    proceed = client.post(f"/api/conversations/{conversation['id']}/message", json={"action": "proceed"})
+    assert proceed.status_code == 200
+    assert proceed.json()["task"]["conversation_turn"] == "proceed"
 
 
 def _pump(client, store, rounds: int = 4):

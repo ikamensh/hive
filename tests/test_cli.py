@@ -47,15 +47,48 @@ def test_cli_drives_full_loop(harness):
     pid = project["id"]
     cli(client, "set", pid, "--spec-repo", "https://example.com/spec.git",
         "--member-repos", "https://example.com/app.git")
-    cli(client, "start", pid, "--mission", "Ship the demo", "--iteration-goal", "Build the first loop")
+
+    scout_rid = _register_usable_runner(client, name="scout", backend="codex")
+    conversation = cli(client, "intake-start", pid)
+    _pump(client, store)
+    intake = client.post(f"/api/runners/{scout_rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert intake["kind"] == "intake"
+    client.post(
+        f"/api/tasks/{intake['id']}/result",
+        json={
+            "text": (
+                "Mission:\nShip the demo.\n\n"
+                "Next iteration:\nBuild the first loop.\n\n"
+                "Likely next steps:\n- Queue the first workstream\n- Verify the loop\n\n"
+                "Assumptions:\n- Direct push is acceptable.\n\n"
+                "Questions:\n(none)"
+            ),
+            "session_handle": "mock-intake",
+        },
+        headers=RUNNER_HEADERS,
+    )
+    approved = cli(client, "intake-approve", conversation["id"])
+    assert approved["task"]["conversation_turn"] == "finalize"
+    _pump(client, store)
+    finalize = client.post(f"/api/runners/{scout_rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert finalize["conversation_turn"] == "finalize"
+    client.post(
+        f"/api/tasks/{finalize['id']}/result",
+        json={"text": "Specs pushed at abc123."},
+        headers=RUNNER_HEADERS,
+    )
+    # The scripted planner queues normal work on cursor; make that resource
+    # visible before planning so the resource-aware tool accepts the task.
+    rid = _register_usable_runner(client, name="fake")
+    cli(client, "start", pid)
     assert cli(client, "projects")[0]["id"] == pid
     _pump(client, store)
 
     detail = cli(client, "show", pid)
-    assert len(detail["workstreams"]) == 1 and len(detail["tasks"]) == 1
+    build_tasks = [task for task in detail["tasks"] if task["kind"] not in ("intake", "probe")]
+    assert len(detail["workstreams"]) == 1 and len(build_tasks) == 1
 
     # fake runner executes work + verify tasks over the real protocol
-    rid = _register_usable_runner(client, name="fake")
     for text in ("implemented, tests pass", "VERDICT: ACCEPT"):
         _pump(client, store)
         task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
@@ -64,7 +97,7 @@ def test_cli_drives_full_loop(harness):
     _pump(client, store)
 
     assert cli(client, "resources")["runners"][0]["online"]
-    full_task = cli(client, "task", detail["tasks"][0]["id"])
+    full_task = cli(client, "task", build_tasks[0]["id"])
     assert "implement feature" in full_task["instructions"]
 
     question = cli(client, "show", pid)["questions"][0]

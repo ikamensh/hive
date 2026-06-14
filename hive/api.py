@@ -33,6 +33,7 @@ from hive.backends import REGISTRY, probe_instructions
 from hive.config import Config
 from hive.escalation import escalate
 from hive.github_repos import all_repos as list_github_repos
+from hive.github_repos import create_repo as create_github_repo
 from hive.issues import (
     advance_issues,
     attachment_key,
@@ -51,7 +52,9 @@ from hive.preflight import (
     preflight_checks,
 )
 from hive.models import (
+    AgentConversation,
     Autonomy,
+    ConversationStatus,
     Feedback,
     GuessPropensity,
     HumanTask,
@@ -59,6 +62,7 @@ from hive.models import (
     Machine,
     Mode,
     Project,
+    ProjectState,
     Question,
     QuestionStatus,
     Resource,
@@ -118,6 +122,16 @@ class ProjectPatch(BaseModel):
     new_iteration_note: str | None = None  # set when starting the next iteration
 
 
+class IntakeMessage(BaseModel):
+    message: str = ""
+    action: str = "message"  # message | proceed | approve
+
+
+class ProjectRepoCreate(BaseModel):
+    name: str = ""
+    private: bool = True
+
+
 class AnswerBody(BaseModel):
     answer: str
 
@@ -160,6 +174,7 @@ class TaskResult(BaseModel):
     output_tokens: int = 0
     resource_exhausted: bool = False  # rate limit / quota detected by runner
     cancelled: bool = False  # runner stopped the task on an operator cancel request
+    session_handle: str = ""  # backend session id/chat id for conversation continuation
 
 
 class ResourcePatch(BaseModel):
@@ -318,6 +333,194 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         """
         url = project.spec_repo
         return bool(config.gh_token.strip()) or url.startswith("file://") or Path(url).exists()
+
+    def trusted_intake_capacity(workspace_id: str) -> tuple[str, str, str]:
+        """Return (backend, model, runner_id) for the first trusted intake scout
+        capacity. Intake is high leverage, so no weaker fallback in MVP."""
+        online = {r.id: r for r in store.list(Runner, workspace_id=workspace_id) if r.online()}
+        preferences = [("codex", "gpt-5.5"), ("claude", "opus")]
+        for backend, model in preferences:
+            for resource in store.list(Resource, workspace_id=workspace_id, backend=backend):
+                runner = online.get(resource.runner_id)
+                if runner and backend in runner.backends and resource.available():
+                    return backend, model, runner.id
+        raise HTTPException(
+            409,
+            "intake requires a usable trusted scout backend (codex gpt-5.5 or claude opus)",
+        )
+
+    def intake_context(conversation: AgentConversation) -> str:
+        recent = conversation.transcript[-8:]
+        transcript = "\n\n".join(
+            f"{item.get('role', 'unknown')}:\n{item.get('text', '').strip()}"
+            for item in recent
+            if item.get("text", "").strip()
+        )
+        return "\n".join(
+            [
+                "Current intake context:",
+                "",
+                "Latest brief:",
+                conversation.latest_brief.strip() or "(none yet)",
+                "",
+                "Recent transcript:",
+                transcript or "(none)",
+                "",
+            ]
+        )
+
+    def _intake_section(text: str, heading: str) -> str:
+        pattern = re.compile(
+            rf"(?ims)^(?:#+\s*)?{re.escape(heading)}\s*:?\s*$\s*(.*?)(?=^(?:#+\s*)?[A-Za-z][A-Za-z ]{{1,40}}\s*:?\s*$|\Z)"
+        )
+        match = pattern.search(text)
+        return match.group(1).strip() if match else ""
+
+    def intake_brief_ready(text: str) -> bool:
+        """Derive approval readiness from the scout brief itself, not a label.
+
+        The prompt asks for these section headings; if the scout omits them or
+        leaves material questions, the user can answer/correct or choose
+        proceed-with-assumptions to get a revised brief.
+        """
+        required = ["Mission", "Next iteration", "Likely next steps", "Assumptions", "Questions"]
+        if any(not _intake_section(text, heading) for heading in required):
+            return False
+        questions = re.sub(r"^[\\s>*#`\\-•0-9.)]+", "", _intake_section(text, "Questions").strip(), flags=re.M)
+        normalized = re.sub(r"[^a-z]+", " ", questions.lower()).strip()
+        return normalized in {
+            "",
+            "none",
+            "n a",
+            "no questions",
+            "no material questions",
+            "no remaining questions",
+            "no remaining material questions",
+        }
+
+    def intake_prompt(
+        project: Project,
+        conversation: AgentConversation,
+        turn: str,
+        user_text: str = "",
+    ) -> str:
+        if turn == "initial":
+            org_context = store.get_org_context(project.workspace_id).strip()
+            return "\n".join(
+                [
+                    "You are Hive's intake scout.",
+                    "",
+                    "Goal: understand this project well enough that the user can confirm or correct Hive before work starts.",
+                    "",
+                    "Inspect the repo. Prefer mission.md, iteration.md, and wiki/ over README guesses. "
+                    "You may run cheap diagnostic commands. You may browse public docs for external "
+                    "packages/APIs/services, but do not leak private repo content.",
+                    "Do not commit, push, deploy, send external messages, or create Hive workstreams/tasks.",
+                    "",
+                    f"Project name: {project.name}",
+                    f"Spec/code repo: {project.spec_repo}",
+                    f"Member repos: {', '.join(project.member_repos) or '(none)'}",
+                    f"Guess propensity: {project.guess_propensity}",
+                    "",
+                    "Org context:",
+                    org_context or "(none)",
+                    "",
+                    "Return a compact brief with these sections:",
+                    "",
+                    "Mission:",
+                    "The long-term vision.",
+                    "",
+                    "Next iteration:",
+                    "The concrete, verifiable next goal Hive should probably work toward.",
+                    "",
+                    "Likely next steps:",
+                    "3-5 high-level steps, not implementation tasks.",
+                    "",
+                    "Assumptions:",
+                    "Cheap or reasonable assumptions you made instead of asking.",
+                    "",
+                    "Questions:",
+                    "Only questions whose answers would materially change what Hive builds.",
+                    "",
+                    "Evidence:",
+                    "The files, commands, or public sources that shaped your understanding.",
+                ]
+            )
+        if turn == "proceed":
+            return (
+                intake_context(conversation)
+                + "\n"
+                "The user chose to proceed with current information and accepts the risk of "
+                "wrong assumptions.\n\n"
+                "Finalize the brief using current repo/spec context. Do not ask more questions "
+                "unless work would be impossible rather than merely risky. Clearly list the "
+                "assumptions you are making. Do not commit or push yet."
+            )
+        if turn == "finalize":
+            return (
+                intake_context(conversation)
+                + "\n"
+                "The user approved the latest intake brief.\n\n"
+                "Update durable spec files to match it. You may edit:\n"
+                "- mission.md\n"
+                "- iteration.md\n"
+                "- wiki/intake.md\n"
+                "- input-log/* intake records\n\n"
+                "Preserve coherent existing mission/iteration text. Rewrite stale or wrong "
+                "content when needed. Do not modify product code. Commit and push the spec "
+                "changes. Report the commit SHA."
+            )
+        return (
+            intake_context(conversation)
+            + "\n"
+            "The user responded during intake:\n\n"
+            f"{user_text.strip()}\n\n"
+            "Update your understanding. Self-answer minor follow-ups. Return the revised "
+            "brief and only the remaining material questions. Do not commit or push yet."
+        )
+
+    def queue_intake_turn(
+        project: Project,
+        conversation: AgentConversation,
+        turn: str,
+        user_text: str = "",
+    ) -> Task:
+        if any(
+            t.status in (TaskStatus.pending, TaskStatus.running)
+            for t in store.list(Task, workspace_id=project.workspace_id, project_id=project.id)
+            if t.kind == TaskKind.intake and t.conversation_id == conversation.id
+        ):
+            raise HTTPException(409, "intake scout is already running")
+        task = store.put(
+            Task(
+                workspace_id=project.workspace_id,
+                project_id=project.id,
+                workstream_id="",
+                repo=conversation.repo,
+                kind=TaskKind.intake,
+                instructions=intake_prompt(project, conversation, turn, user_text),
+                conversation_id=conversation.id,
+                conversation_turn=turn,
+                session_handle=conversation.session_handle,
+                backend=conversation.backend,
+                model=conversation.model,
+                prompt_versions={"intake": "inline-v1"},
+            )
+        )
+
+        def mark(conv: AgentConversation) -> None:
+            conv.status = ConversationStatus.finalizing if turn == "finalize" else ConversationStatus.running
+            conv.last_task_id = task.id
+            conv.updated_at = time.time()
+            if user_text.strip():
+                conv.transcript.append({"role": "user", "text": user_text.strip()})
+
+        updated = store.update(AgentConversation, conversation.id, mark)
+        if updated:
+            project.intake_conversation_id = updated.id
+            project.state = ProjectState.intake
+            store.put(project)
+        return task
 
     def record_answer_input_log(
         project: Project, question: Question, answer: str, answered_at: float
@@ -548,19 +751,13 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def list_projects(ctx: AuthContext = Depends(current)):
         return [p.model_dump() for p in store.list(Project, workspace_id=ctx.workspace_id)]
 
-    def planning_wake_event(mission: str, iteration_goal: str) -> str:
-        mission = mission.strip()
-        iteration_goal = iteration_goal.strip()
-        if mission or iteration_goal:
-            return (
-                "Project started with an initial brief from the user.\n\n"
-                f"Mission:\n{mission or '(not provided)'}\n\n"
-                f"Initial iteration goal:\n{iteration_goal or '(not provided)'}\n\n"
-                "Your FIRST action must be commit_to_spec: write the mission to mission.md "
-                "and the iteration goal to iteration.md, preserving any existing useful spec "
-                "context. Only then plan the opening workstreams."
-            )
-        return "Project configured. Plan the opening workstreams."
+    def intake_is_done(project: Project) -> bool:
+        if project.work_source != WorkSource.spec:
+            return True
+        if not project.intake_conversation_id:
+            return False
+        conversation = store.get(AgentConversation, project.intake_conversation_id)
+        return bool(conversation and conversation.status == ConversationStatus.done)
 
     @app.post("/api/projects")
     def create_project(body: ProjectCreate, ctx: AuthContext = Depends(current)):
@@ -574,8 +771,111 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         project = require_project(project_id, ctx)
         if not project.spec_repo.strip():
             raise HTTPException(400, "spec_repo must be set before starting")
-        supervisor.wake(project_id, planning_wake_event(body.mission, body.iteration_goal))
+        if not intake_is_done(project):
+            raise HTTPException(409, "complete project intake before starting planning")
+        note = "Project start requested after approved intake. Plan from the durable spec."
+        if body.mission.strip() or body.iteration_goal.strip():
+            note += "\n\nLegacy start brief was ignored because intake specs are authoritative."
+        supervisor.wake(project_id, note)
         return project.model_dump()
+
+    @app.post("/api/projects/{project_id}/intake/start")
+    def start_intake(project_id: str, ctx: AuthContext = Depends(current)):
+        project = require_project(project_id, ctx)
+        if project.work_source != WorkSource.spec:
+            raise HTTPException(400, "intake is only for spec-mode projects")
+        if project.autonomy != Autonomy.direct_push:
+            raise HTTPException(400, "intake currently supports direct_push projects only")
+        if not project.spec_repo.strip():
+            raise HTTPException(400, "spec_repo must be set before intake")
+        if project.intake_conversation_id:
+            existing = store.get(AgentConversation, project.intake_conversation_id)
+            if existing and existing.status in (
+                ConversationStatus.open,
+                ConversationStatus.running,
+                ConversationStatus.finalizing,
+            ):
+                return existing.model_dump()
+        backend, model, _runner_id = trusted_intake_capacity(ctx.workspace_id)
+        conversation = store.put(
+            AgentConversation(
+                workspace_id=ctx.workspace_id,
+                project_id=project.id,
+                repo=project.spec_repo,
+                backend=backend,
+                model=model,
+                status=ConversationStatus.open,
+            )
+        )
+        project.intake_conversation_id = conversation.id
+        project.state = ProjectState.intake
+        store.put(project)
+        queue_intake_turn(project, conversation, "initial")
+        return store.get(AgentConversation, conversation.id).model_dump()
+
+    @app.post("/api/projects/{project_id}/repo")
+    def create_project_repo(
+        project_id: str,
+        body: ProjectRepoCreate,
+        ctx: AuthContext = Depends(current),
+    ):
+        project = require_project(project_id, ctx)
+        if project.spec_repo.strip():
+            raise HTTPException(409, "project already has a spec repo")
+        login, _user_token = auth.github_credentials(ctx.user)
+        default_name = re.sub(r"[^A-Za-z0-9._-]+", "-", project.name.strip().lower()).strip("-")
+        name = body.name.strip() or default_name or f"hive-project-{project.id}"
+        try:
+            repo = create_github_repo(
+                name,
+                private=body.private,
+                description=f"Hive project: {project.name}",
+                github_login=login,
+                user_token=ctx.user.github_access_token,
+                config_token=config.gh_token,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text[:1000] if exc.response is not None else str(exc)
+            raise HTTPException(exc.response.status_code if exc.response else 502, detail) from exc
+        project.spec_repo = repo["ssh_url"] or repo["clone_url"]
+        project.member_repos = [project.spec_repo]
+        project.state = ProjectState.intake
+        store.put(project)
+        return {"project": project.model_dump(), "repo": repo}
+
+    @app.post("/api/conversations/{conversation_id}/message")
+    def conversation_message(
+        conversation_id: str,
+        body: IntakeMessage,
+        ctx: AuthContext = Depends(current),
+    ):
+        conversation = store.get(AgentConversation, conversation_id)
+        if not conversation or conversation.workspace_id != ctx.workspace_id:
+            raise HTTPException(404)
+        project = require_project(conversation.project_id, ctx)
+        if conversation.role != "intake":
+            raise HTTPException(400, "unsupported conversation role")
+        if conversation.status in (ConversationStatus.done, ConversationStatus.failed):
+            raise HTTPException(409, f"conversation is {conversation.status}")
+        action = body.action.strip().lower() or "message"
+        if action not in {"message", "proceed", "approve"}:
+            raise HTTPException(400, "action must be message, proceed, or approve")
+        if action == "message" and not body.message.strip():
+            raise HTTPException(400, "message is required")
+        if action == "approve" and project.autonomy != Autonomy.direct_push:
+            raise HTTPException(400, "intake finalization currently supports direct_push projects only")
+        if action == "approve" and not intake_brief_ready(conversation.latest_brief):
+            raise HTTPException(
+                409,
+                "intake brief is not ready to approve; answer/correct it or proceed with assumptions first",
+            )
+        turn = "finalize" if action == "approve" else ("proceed" if action == "proceed" else "message")
+        task = queue_intake_turn(project, conversation, turn, body.message)
+        return {"conversation": store.get(AgentConversation, conversation.id).model_dump(), "task": task.model_dump()}
 
     @app.post("/api/projects/{project_id}/scan-issues")
     def scan_issues(project_id: str, ctx: AuthContext = Depends(current)):
@@ -655,6 +955,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             "human_tasks": [
                 t.model_dump()
                 for t in store.list(HumanTask, workspace_id=ctx.workspace_id, project_id=project_id)
+            ],
+            "conversations": [
+                c.model_dump()
+                for c in store.list(AgentConversation, workspace_id=ctx.workspace_id, project_id=project_id)
             ],
             "spend_today": supervisor.spend_today(project_id),
         }
@@ -1216,6 +1520,44 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                     ),
                     workspace_id=workspace_id,
                 )
+            return {"ok": True}
+
+        if task.kind == TaskKind.intake and task.conversation_id:
+            def update_conversation(conversation: AgentConversation) -> None:
+                conversation.updated_at = task.finished_at
+                if body.session_handle.strip():
+                    conversation.session_handle = body.session_handle.strip()
+                if body.cancelled:
+                    conversation.status = ConversationStatus.open
+                    conversation.transcript.append({"role": "system", "text": "Intake turn cancelled."})
+                    return
+                if body.is_error:
+                    conversation.status = ConversationStatus.failed
+                    conversation.latest_brief = body.text
+                    conversation.transcript.append({"role": "assistant", "text": body.text})
+                    return
+                conversation.latest_brief = body.text
+                conversation.transcript.append({"role": "assistant", "text": body.text})
+                conversation.status = (
+                    ConversationStatus.done
+                    if task.conversation_turn == "finalize"
+                    else ConversationStatus.open
+                )
+
+            conversation = store.update(AgentConversation, task.conversation_id, update_conversation)
+            project = store.get(Project, task.project_id)
+            if project and conversation:
+                if conversation.status == ConversationStatus.done:
+                    project.state = ProjectState.idle_no_workstreams
+                    store.put(project)
+                    supervisor.wake(
+                        task.project_id,
+                        f"Intake accepted and pushed by scout task {task.id}. Plan from the durable spec.\n"
+                        f"Result:\n{body.text[:6000]}",
+                    )
+                elif conversation.status == ConversationStatus.open:
+                    project.state = ProjectState.intake
+                    store.put(project)
             return {"ok": True}
 
         if task.kind == TaskKind.resolve and not body.cancelled:

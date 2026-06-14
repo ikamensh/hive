@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AuthInfo,
+  AgentConversation,
   HumanTask,
   GithubRepo,
+  IntakeMessage,
   Project,
   ProjectCreate,
   ProjectDetail,
   ProjectPatch,
+  ProjectRepoCreate,
   ProjectStart,
   Question,
   ResourcesPayload,
@@ -57,6 +60,18 @@ const realApi = {
   project: (id: string) => http<ProjectDetail>(`/api/projects/${id}`),
   patchProject: (id: string, patch: ProjectPatch) =>
     http<Project>(`/api/projects/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  createProjectRepo: (id: string, body: ProjectRepoCreate) =>
+    http<{ project: Project; repo: GithubRepo }>(`/api/projects/${id}/repo`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  startIntake: (id: string) =>
+    http<AgentConversation>(`/api/projects/${id}/intake/start`, { method: "POST" }),
+  conversationMessage: (id: string, body: IntakeMessage) =>
+    http<{ conversation: AgentConversation; task: Task }>(`/api/conversations/${id}/message`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   scanIssues: (id: string) =>
     http<ScanResult>(`/api/projects/${id}/scan-issues`, { method: "POST" }),
   answerQuestion: (id: string, answer: string) =>

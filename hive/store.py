@@ -23,6 +23,7 @@ from typing import Callable, TypeVar
 log = logging.getLogger(__name__)
 
 from hive.models import (
+    AgentConversation,
     DEFAULT_WORKSPACE_ID,
     Feedback,
     HumanTask,
@@ -44,6 +45,7 @@ from hive.models import (
 
 M = TypeVar(
     "M",
+    AgentConversation,
     User,
     Workspace,
     WorkspaceMembership,
@@ -61,6 +63,7 @@ M = TypeVar(
 )
 
 _COLLECTIONS: dict[type, str] = {
+    AgentConversation: "agent_conversations",
     User: "users",
     Workspace: "workspaces",
     WorkspaceMembership: "workspace_memberships",

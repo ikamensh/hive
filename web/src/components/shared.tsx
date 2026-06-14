@@ -13,6 +13,7 @@ export function Markdown({ text, className = "" }: { text: string; className?: s
 }
 
 const STATE_META: Record<ProjectState, { label: string; cls: string }> = {
+  intake: { label: "intake", cls: "questions" },
   working: { label: "working", cls: "working" },
   blocked_questions: { label: "needs answers", cls: "questions" },
   blocked_resources: { label: "no resources", cls: "resources" },

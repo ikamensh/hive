@@ -402,6 +402,46 @@ textarea:focus {
   border-color: var(--line);
 }
 
+@media (max-width: 720px) {
+  .shell {
+    padding: 0 16px 48px;
+  }
+  .topbar {
+    flex-wrap: wrap;
+    gap: 10px 12px;
+    align-items: center;
+  }
+  .brand small,
+  .storage-chip,
+  .account-mode,
+  .q-counter .q-label {
+    display: none;
+  }
+  .topbar nav {
+    order: 4;
+    width: 100%;
+  }
+  .topbar nav a {
+    flex: 1;
+    text-align: center;
+  }
+  .account-menu {
+    margin-left: auto;
+  }
+  .account-chip {
+    max-width: 128px;
+    padding: 0 10px;
+  }
+  .account-user {
+    max-width: 82px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .q-counter {
+    gap: 0;
+  }
+}
+
 .offline-banner {
   display: flex;
   align-items: center;
@@ -622,6 +662,19 @@ textarea:focus {
 .chip-done {
   color: var(--ink-faint);
 }
+.chip-open {
+  color: var(--green);
+  border-color: #5fd6a433;
+}
+.chip-running,
+.chip-finalizing {
+  color: var(--accent);
+  border-color: #5b8cff33;
+}
+.chip-failed {
+  color: var(--red);
+  border-color: #ff6b6b44;
+}
 .chip-kind-work {
   color: var(--accent);
   border-color: #5b8cff33;
@@ -633,6 +686,10 @@ textarea:focus {
 .chip-kind-probe {
   color: var(--ink-dim);
   border-color: var(--line);
+}
+.chip-kind-intake {
+  color: var(--green);
+  border-color: #5fd6a433;
 }
 .chip-kind-resolve {
   color: var(--accent);
@@ -818,6 +875,49 @@ textarea:focus {
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-faint);
+}
+.field-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.create-repo-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+.trusted-scouts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.trusted-scouts > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.intake-brief {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  background: var(--bg-raise);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+}
+.intake-brief > header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.intake-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 .setup-actions {
   display: flex;

@@ -89,6 +89,7 @@ class GuessPropensity(StrEnum):
 
 
 class ProjectState(StrEnum):
+    intake = "intake"  # spec mode: intake scout is aligning the project before planning
     working = "working"
     blocked_questions = "blocked_questions"
     blocked_resources = "blocked_resources"
@@ -114,8 +115,41 @@ class Project(BaseModel):
     daily_budget_usd: float = 0.0  # 0 = no cap; else soft cap on today's task spend
     goal_complete: bool = False
     goal_complete_note: str = ""
+    intake_conversation_id: str = ""
     state: ProjectState = ProjectState.idle_no_workstreams  # cached by supervisor
     created_at: float = Field(default_factory=now)
+
+
+class ConversationRole(StrEnum):
+    intake = "intake"
+
+
+class ConversationStatus(StrEnum):
+    open = "open"  # ready for a user message / approval, or no turn queued yet
+    running = "running"  # an agent turn is pending/running
+    finalizing = "finalizing"  # approved; scout is committing/pushing durable spec
+    done = "done"
+    failed = "failed"
+
+
+class AgentConversation(BaseModel):
+    """A durable multi-turn agent thread. `Task` remains the execution ledger;
+    a conversation owns continuity across those task turns."""
+
+    id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    project_id: str
+    role: ConversationRole = ConversationRole.intake
+    repo: str
+    backend: str
+    model: str = ""
+    status: ConversationStatus = ConversationStatus.open
+    session_handle: str = ""  # backend resume id when available
+    latest_brief: str = ""
+    transcript: list[dict[str, str]] = []  # compact fallback when true resume is unavailable
+    last_task_id: str = ""
+    created_at: float = Field(default_factory=now)
+    updated_at: float = Field(default_factory=now)
 
 
 class WorkstreamStatus(StrEnum):
@@ -168,6 +202,7 @@ class TaskKind(StrEnum):
     work = "work"
     verify = "verify"
     probe = "probe"
+    intake = "intake"
     resolve = "resolve"  # issues mode: one codex session clarifies then (if clear) fixes
     review = "review"  # issues mode: fresh agent reviews the fix, may fix on the spot
     preflight = "preflight"  # issues mode: runner self-check (git push + gh auth) before a big run
@@ -232,6 +267,9 @@ class Task(BaseModel):
     branch: str = ""  # non-default branch to check out (PR-mode work and its verify/fix)
     kind: TaskKind = TaskKind.work
     instructions: str
+    conversation_id: str = ""
+    conversation_turn: str = ""  # intake: initial | message | proceed | finalize
+    session_handle: str = ""  # runner resumes this backend session when possible
     issue_number: int = 0  # issues mode: the issue this task resolves/reviews
     issue_doc: str = ""  # issues mode: full issue markdown (title+body+comments) → .hive ISSUE.md
     issue_attachments: list[str] = []  # issues mode: image filenames the runner fetches from the control plane

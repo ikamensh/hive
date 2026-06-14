@@ -194,7 +194,11 @@ def execute(task: dict, headers: dict, auth) -> dict:
     prepare_issue_workspace(project_dir, task, headers, auth)
 
     kodo_log.init(kodo_log.RunDir.create(project_dir))  # capture a per-task JSONL trace
-    session = make_session(task["backend"], task.get("model", ""))
+    session = make_session(
+        task["backend"],
+        task.get("model", ""),
+        task.get("session_handle", ""),
+    )
     cancelled = threading.Event()
     stop_watch = threading.Event()
 
@@ -237,6 +241,15 @@ def execute(task: dict, headers: dict, auth) -> dict:
             is_error,
             backend=task.get("backend", ""),
         )
+    session_handle = ""
+    session_id = getattr(session, "session_id", None)
+    if callable(session_id):
+        try:
+            session_handle = session_id() or ""
+        except Exception:
+            session_handle = ""
+    elif session_id:
+        session_handle = str(session_id)
     return {
         "text": text,
         "is_error": is_error,
@@ -244,6 +257,7 @@ def execute(task: dict, headers: dict, auth) -> dict:
         "input_tokens": query.input_tokens or 0,
         "output_tokens": query.output_tokens or 0,
         "resource_exhausted": bool(is_error and EXHAUSTED_PATTERNS.search(text)),
+        "session_handle": session_handle,
     }
 
 

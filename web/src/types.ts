@@ -5,6 +5,7 @@ export type Autonomy = "pr" | "direct_push";
 export type WorkSource = "spec" | "issues";
 export type GuessPropensity = "never" | "rarely" | "sometimes" | "often" | "always";
 export type ProjectState =
+  | "intake"
   | "working"
   | "blocked_questions"
   | "blocked_resources"
@@ -29,6 +30,7 @@ export interface Project {
   daily_budget_usd: number;
   goal_complete: boolean;
   goal_complete_note: string;
+  intake_conversation_id: string;
   state: ProjectState;
   created_at: number;
 }
@@ -66,8 +68,11 @@ export interface Task {
   workstream_id: string;
   repo: string;
   branch: string;
-  kind: "work" | "verify" | "probe" | "resolve" | "review";
+  kind: "work" | "verify" | "probe" | "intake" | "resolve" | "review" | "preflight";
   instructions: string;
+  conversation_id: string;
+  conversation_turn: string;
+  session_handle: string;
   backend: string;
   model: string;
   status: "pending" | "running" | "done" | "failed" | "cancelled";
@@ -85,6 +90,23 @@ export interface Task {
   created_at: number;
   started_at: number;
   finished_at: number;
+}
+
+export interface AgentConversation {
+  id: string;
+  workspace_id?: string;
+  project_id: string;
+  role: "intake";
+  repo: string;
+  backend: string;
+  model: string;
+  status: "open" | "running" | "finalizing" | "done" | "failed";
+  session_handle: string;
+  latest_brief: string;
+  transcript: { role: string; text: string }[];
+  last_task_id: string;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface Question {
@@ -105,6 +127,7 @@ export interface ProjectDetail {
   tasks: Task[];
   questions: Question[];
   human_tasks: HumanTask[];
+  conversations: AgentConversation[];
 }
 
 export interface GithubRepo {
@@ -250,6 +273,16 @@ export interface ProjectCreate {
 export interface ProjectStart {
   mission?: string;
   iteration_goal?: string;
+}
+
+export interface IntakeMessage {
+  action?: "message" | "proceed" | "approve";
+  message?: string;
+}
+
+export interface ProjectRepoCreate {
+  name?: string;
+  private?: boolean;
 }
 
 export interface ProjectPatch {

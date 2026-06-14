@@ -65,10 +65,28 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("create", help="create a project (name only; configure in project view)")
     p.add_argument("name")
 
-    p = sub.add_parser("start", help="start planning for a configured project")
+    p = sub.add_parser("start", help="wake planning after approved project intake")
     p.add_argument("project_id")
-    p.add_argument("--mission", default="", help="initial mission to write into the spec repo")
-    p.add_argument("--iteration-goal", default="", help="first iteration goal to write into the spec repo")
+    p.add_argument("--mission", default="", help=argparse.SUPPRESS)
+    p.add_argument("--iteration-goal", default="", help=argparse.SUPPRESS)
+
+    p = sub.add_parser("repo-create", help="create a private greenfield repo for a project")
+    p.add_argument("project_id")
+    p.add_argument("--name", default="")
+    p.add_argument("--public", action="store_true")
+
+    p = sub.add_parser("intake-start", help="start the project intake scout")
+    p.add_argument("project_id")
+
+    p = sub.add_parser("intake-send", help="send an intake answer or correction")
+    p.add_argument("conversation_id")
+    p.add_argument("message")
+
+    p = sub.add_parser("intake-proceed", help="tell intake to proceed with current assumptions")
+    p.add_argument("conversation_id")
+
+    p = sub.add_parser("intake-approve", help="approve the latest intake brief and finalize specs")
+    p.add_argument("conversation_id")
 
     p = sub.add_parser("show", help="project detail: workstreams, tasks, questions")
     p.add_argument("project_id")
@@ -283,6 +301,26 @@ def run(args: argparse.Namespace, client) -> dict | list:
         r = client.post(f"/api/projects/{args.project_id}/start", json={
             "mission": args.mission,
             "iteration_goal": args.iteration_goal,
+        })
+    elif c == "repo-create":
+        r = client.post(f"/api/projects/{args.project_id}/repo", json={
+            "name": args.name,
+            "private": not args.public,
+        })
+    elif c == "intake-start":
+        r = client.post(f"/api/projects/{args.project_id}/intake/start")
+    elif c == "intake-send":
+        r = client.post(f"/api/conversations/{args.conversation_id}/message", json={
+            "action": "message",
+            "message": args.message,
+        })
+    elif c == "intake-proceed":
+        r = client.post(f"/api/conversations/{args.conversation_id}/message", json={
+            "action": "proceed",
+        })
+    elif c == "intake-approve":
+        r = client.post(f"/api/conversations/{args.conversation_id}/message", json={
+            "action": "approve",
         })
     elif c == "show":
         r = client.get(f"/api/projects/{args.project_id}")

@@ -29,29 +29,37 @@ SUBSCRIPTION_WARNING_PATTERNS = re.compile(
 )
 
 
-def _claude(model: str):
+def _claude(model: str, resume_session: str = ""):
     from kodo.sessions.claude import ClaudeSession
 
-    return ClaudeSession(model=model) if model else ClaudeSession()
+    kwargs = {"resume_session_id": resume_session} if resume_session else {}
+    return ClaudeSession(model=model, **kwargs) if model else ClaudeSession(**kwargs)
 
 
-def _cursor(model: str):
+def _cursor(model: str, resume_session: str = ""):
     from kodo.sessions.cursor import CursorSession
 
-    return CursorSession(model=model) if model else CursorSession()
+    kwargs = {"resume_chat_id": resume_session} if resume_session else {}
+    return CursorSession(model=model, **kwargs) if model else CursorSession(**kwargs)
 
 
-def _codex(model: str):
+def _codex(model: str, resume_session: str = ""):
     from kodo.sessions.codex import CodexSession
 
     sandbox = "danger-full-access"
-    return CodexSession(model=model, sandbox=sandbox) if model else CodexSession(sandbox=sandbox)
+    kwargs = {"resume_session_id": resume_session} if resume_session else {}
+    return (
+        CodexSession(model=model, sandbox=sandbox, **kwargs)
+        if model
+        else CodexSession(sandbox=sandbox, **kwargs)
+    )
 
 
-def _gemini_cli(model: str):
+def _gemini_cli(model: str, resume_session: str = ""):
     from kodo.sessions.gemini_cli import GeminiCliSession
 
-    return GeminiCliSession(model=model) if model else GeminiCliSession()
+    kwargs = {"resume_session": True} if resume_session else {}
+    return GeminiCliSession(model=model, **kwargs) if model else GeminiCliSession(**kwargs)
 
 
 @dataclass(frozen=True)
@@ -62,7 +70,7 @@ class Backend:
     Hive probe task that launches the agent against a throwaway repository."""
 
     name: str
-    make_session: Callable[[str], object]
+    make_session: Callable[[str, str], object]
     binary: str
     preflight: tuple[str, ...]
     login_hint: str
@@ -127,12 +135,12 @@ REGISTRY: dict[str, Backend] = {
 BACKEND_NAMES: tuple[str, ...] = tuple(REGISTRY)
 
 
-def make_session(backend: str, model: str = ""):
+def make_session(backend: str, model: str = "", resume_session: str = ""):
     """Build a kodo session for `backend`. Raises on an unknown backend rather
     than guessing — the registry is the contract."""
     if backend not in REGISTRY:
         raise ValueError(f"unknown backend {backend!r}; known: {BACKEND_NAMES}")
-    return REGISTRY[backend].make_session(model)
+    return REGISTRY[backend].make_session(model, resume_session)
 
 
 def _snippet(text: str, limit: int = 500) -> str:

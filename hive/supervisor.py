@@ -19,6 +19,8 @@ from typing import Callable
 
 from hive.escalation import escalate
 from hive.models import (
+    AgentConversation,
+    ConversationStatus,
     DEFAULT_WORKSPACE_ID,
     OrchestratorRun,
     Project,
@@ -26,6 +28,7 @@ from hive.models import (
     Resource,
     Runner,
     Task,
+    TaskKind,
     TaskStatus,
     WorkSource,
     Workstream,
@@ -164,6 +167,35 @@ class Supervisor:
         return project.daily_budget_usd > 0 and self.spend_today(project.id) >= project.daily_budget_usd
 
     def refresh_state(self, project: Project) -> ProjectState:
+        if project.work_source == WorkSource.spec:
+            conversation = self.store.get(AgentConversation, project.intake_conversation_id)
+            if conversation and conversation.status == ConversationStatus.done:
+                pass
+            elif conversation and conversation.status in (
+                ConversationStatus.open,
+                ConversationStatus.running,
+                ConversationStatus.finalizing,
+            ):
+                if project.state != ProjectState.intake:
+                    project.state = ProjectState.intake
+                    self.store.put(project)
+                return ProjectState.intake
+            elif not project.goal_complete:
+                workstreams = self.store.list(
+                    Workstream, workspace_id=self.workspace_id, project_id=project.id
+                )
+                tasks = [
+                    t
+                    for t in self.store.list(
+                        Task, workspace_id=self.workspace_id, project_id=project.id
+                    )
+                    if t.kind not in (TaskKind.intake, TaskKind.probe)
+                ]
+                if not workstreams and not tasks:
+                    if project.state != ProjectState.intake:
+                        project.state = ProjectState.intake
+                        self.store.put(project)
+                    return ProjectState.intake
         workstreams = self.store.list(
             Workstream, workspace_id=self.workspace_id, project_id=project.id
         )
@@ -284,6 +316,10 @@ class Supervisor:
                 # machine); the LLM planner is not in the path. Dispatch the queued
                 # resolve/review tasks and drop any events — no orchestrator wake.
                 self._events.pop(project.id, None)
+                continue
+            if state == ProjectState.intake:
+                # Intake is a runner-backed scout conversation. It can dispatch
+                # tasks above, but it is not the build orchestrator's turn yet.
                 continue
             if project.id in self._busy:
                 continue  # invocation in flight; events stay queued for the next step

@@ -2,13 +2,16 @@
 // the UI stays interactive for screenshots and offline development.
 
 import type {
+  AgentConversation,
   AuthInfo,
   GithubRepo,
   HumanTask,
+  IntakeMessage,
   Project,
   ProjectCreate,
   ProjectDetail,
   ProjectPatch,
+  ProjectRepoCreate,
   ProjectStart,
   Question,
   ResourcesPayload,
@@ -73,6 +76,7 @@ const projects: Project[] = [
     goal_complete: false,
     goal_complete_note: "",
     daily_budget_usd: 0,
+    intake_conversation_id: "conv-atlas",
     state: "blocked_questions",
     created_at: now - 86400 * 6,
   },
@@ -90,6 +94,7 @@ const projects: Project[] = [
     goal_complete: false,
     goal_complete_note: "",
     daily_budget_usd: 0,
+    intake_conversation_id: "",
     state: "working",
     created_at: now - 86400 * 2,
   },
@@ -108,6 +113,7 @@ const projects: Project[] = [
     goal_complete_note:
       "All v1 invoicing flows shipped and verified. Remaining backlog is empty; test suite green across both repos.",
     daily_budget_usd: 0,
+    intake_conversation_id: "",
     state: "idle_goal_complete",
     created_at: now - 86400 * 30,
   },
@@ -125,6 +131,7 @@ const projects: Project[] = [
     goal_complete: false,
     goal_complete_note: "",
     daily_budget_usd: 0,
+    intake_conversation_id: "",
     state: "blocked_resources",
     created_at: now - 3600 * 5,
   },
@@ -142,8 +149,33 @@ const projects: Project[] = [
     goal_complete: false,
     goal_complete_note: "",
     daily_budget_usd: 0,
+    intake_conversation_id: "",
     state: "blocked_clarity",
     created_at: now - 86400 * 3,
+  },
+];
+
+const conversations: AgentConversation[] = [
+  {
+    id: "conv-atlas",
+    project_id: "p-atlas",
+    role: "intake",
+    repo: "git@github.com:acme/atlas-spec.git",
+    backend: "claude",
+    model: "opus",
+    status: "open",
+    session_handle: "mock-atlas-intake",
+    latest_brief:
+      "## What I understand\n\nAtlas is a multi-repo SaaS project. The long-term mission is to make customer usage, auth, and onboarding reliable enough for paid pilots.\n\n## Next iteration\n\nShip a small hardening pass: refresh-token rotation, billing-meter decisions, and onboarding validation fixes.\n\n## Needs you\n\nConfirm the pricing unit before billing work starts.",
+    transcript: [
+      {
+        role: "assistant",
+        text: "I inspected the specs and current repos. Atlas is ready for a hardening-focused first iteration, pending the pricing-unit decision.",
+      },
+    ],
+    last_task_id: "t-intake-1",
+    created_at: now - 86400 * 6 + 120,
+    updated_at: now - 3600,
   },
 ];
 
@@ -292,6 +324,36 @@ const questions: Question[] = [
 
 const tasks: Task[] = [
   {
+    id: "t-intake-1",
+    project_id: "p-atlas",
+    workstream_id: "",
+    repo: "git@github.com:acme/atlas-spec.git",
+    branch: "",
+    kind: "intake",
+    instructions: "Inspect the repo and state mission, next iteration, next steps, and material questions.",
+    conversation_id: "conv-atlas",
+    conversation_turn: "initial",
+    session_handle: "mock-atlas-intake",
+    backend: "claude",
+    model: "opus",
+    status: "done",
+    runner_id: "r-hex1",
+    delivered: true,
+    cancel_requested: false,
+    verdict: "none",
+    trace_blob: "traces/t-intake-1.jsonl",
+    result_text:
+      "## What I understand\n\nAtlas is a multi-repo SaaS project. The long-term mission is to make customer usage, auth, and onboarding reliable enough for paid pilots.\n\n## Next iteration\n\nShip a small hardening pass: refresh-token rotation, billing-meter decisions, and onboarding validation fixes.\n\n## Needs you\n\nConfirm the pricing unit before billing work starts.",
+    is_error: false,
+    cost_usd: 0.44,
+    input_tokens: 62000,
+    output_tokens: 3400,
+    prompt_versions: { intake: "mock" },
+    created_at: now - 3600 * 5,
+    started_at: now - 3600 * 5 + 20,
+    finished_at: now - 3600 * 4,
+  },
+  {
     id: "t-1",
     project_id: "p-atlas",
     workstream_id: "ws-auth",
@@ -299,6 +361,9 @@ const tasks: Task[] = [
     branch: "",
     kind: "work",
     instructions: "Implement refresh token rotation per spec §4.2",
+    conversation_id: "",
+    conversation_turn: "",
+    session_handle: "",
     backend: "claude",
     model: "",
     status: "done",
@@ -326,6 +391,9 @@ const tasks: Task[] = [
     branch: "",
     kind: "verify",
     instructions: "Verify refresh rotation against spec §4.2",
+    conversation_id: "",
+    conversation_turn: "",
+    session_handle: "",
     backend: "codex",
     model: "",
     status: "running",
@@ -352,6 +420,9 @@ const tasks: Task[] = [
     branch: "",
     kind: "work",
     instructions: "Fix wizard step 3 validation",
+    conversation_id: "",
+    conversation_turn: "",
+    session_handle: "",
     backend: "cursor",
     model: "",
     status: "failed",
@@ -378,6 +449,9 @@ const tasks: Task[] = [
     branch: "hive/issue-42",
     kind: "resolve",
     instructions: "Clarify then fix issue #42 (login redirect drops `next`). See .hive/issue-42/ISSUE.md.",
+    conversation_id: "",
+    conversation_turn: "",
+    session_handle: "",
     backend: "codex",
     model: "gpt-5.5",
     status: "running",
@@ -404,6 +478,9 @@ const tasks: Task[] = [
     branch: "hive/issue-18",
     kind: "review",
     instructions: "Review the fix for issue #18 on branch hive/issue-18.",
+    conversation_id: "",
+    conversation_turn: "",
+    session_handle: "",
     backend: "codex",
     model: "gpt-5.5",
     status: "done",
@@ -424,6 +501,51 @@ const tasks: Task[] = [
     finished_at: now - 86400 * 4 + 720,
   },
 ];
+
+function makeIntakeTask(
+  project: Project,
+  conversation: AgentConversation,
+  turn: string,
+  status: Task["status"],
+  message: string,
+): Task {
+  const started = status === "pending" ? 0 : Date.now() / 1000;
+  const finished = status === "done" || status === "failed" || status === "cancelled" ? Date.now() / 1000 : 0;
+  const task: Task = {
+    id: `t-intake-${Math.random().toString(36).slice(2, 8)}`,
+    project_id: project.id,
+    workstream_id: "",
+    repo: conversation.repo,
+    branch: "",
+    kind: "intake",
+    instructions: message || `Intake ${turn} turn`,
+    conversation_id: conversation.id,
+    conversation_turn: turn,
+    session_handle: conversation.session_handle,
+    backend: conversation.backend,
+    model: conversation.model,
+    status,
+    runner_id: status === "pending" ? "" : "r-hex1",
+    delivered: status !== "pending",
+    cancel_requested: false,
+    verdict: "none",
+    trace_blob: status === "done" ? `traces/${conversation.id}-${turn}.jsonl` : "",
+    result_text:
+      status === "done"
+        ? "## Intake brief\n\nMission, next iteration, and next steps updated from the latest scout turn."
+        : "",
+    is_error: status === "failed",
+    cost_usd: status === "done" ? 0.18 : 0,
+    input_tokens: status === "done" ? 24000 : 0,
+    output_tokens: status === "done" ? 1800 : 0,
+    prompt_versions: { intake: "mock" },
+    created_at: Date.now() / 1000,
+    started_at: started,
+    finished_at: finished,
+  };
+  tasks.unshift(task);
+  return task;
+}
 
 const resourcesPayload: ResourcesPayload = {
   machines: [
@@ -520,6 +642,7 @@ export const api = {
       daily_budget_usd: 0,
       goal_complete: false,
       goal_complete_note: "",
+      intake_conversation_id: "",
       state: "idle_no_workstreams",
       created_at: Date.now() / 1000,
     };
@@ -534,6 +657,81 @@ export const api = {
     return structuredClone(project);
   },
 
+  createProjectRepo: async (id: string, body: ProjectRepoCreate): Promise<{ project: Project; repo: GithubRepo }> => {
+    const project = projects.find((p) => p.id === id);
+    if (!project) throw new Error("not found");
+    const owner = "acme";
+    const name = (body.name || project.name).trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-|-$/g, "");
+    if (!name) throw new Error("repo name required");
+    const repo: GithubRepo = {
+      full_name: `${owner}/${name}`,
+      ssh_url: `git@github.com:${owner}/${name}.git`,
+      clone_url: `https://github.com/${owner}/${name}.git`,
+      private: body.private ?? true,
+      description: `${project.name} spec home`,
+    };
+    mockGithubRepos.unshift(repo);
+    project.spec_repo = repo.ssh_url;
+    project.member_repos = [repo.ssh_url];
+    project.state = "intake";
+    return structuredClone({ project, repo });
+  },
+
+  startIntake: async (id: string): Promise<AgentConversation> => {
+    const project = projects.find((p) => p.id === id);
+    if (!project) throw new Error("not found");
+    if (!project.spec_repo.trim()) throw new Error("spec_repo required");
+    const existing = conversations.find((c) => c.id === project.intake_conversation_id && c.status !== "done");
+    if (existing) return structuredClone(existing);
+    const conversation: AgentConversation = {
+      id: `conv-${Math.random().toString(36).slice(2, 8)}`,
+      project_id: id,
+      role: "intake",
+      repo: project.spec_repo,
+      backend: "claude",
+      model: "opus",
+      status: "running",
+      session_handle: "",
+      latest_brief: "",
+      transcript: [],
+      last_task_id: "",
+      created_at: Date.now() / 1000,
+      updated_at: Date.now() / 1000,
+    };
+    conversations.push(conversation);
+    project.intake_conversation_id = conversation.id;
+    project.state = "intake";
+    const task = makeIntakeTask(project, conversation, "initial", "running", "Inspect the project and produce an intake brief.");
+    conversation.last_task_id = task.id;
+    return structuredClone(conversation);
+  },
+
+  conversationMessage: async (
+    id: string,
+    body: IntakeMessage,
+  ): Promise<{ conversation: AgentConversation; task: Task }> => {
+    const conversation = conversations.find((c) => c.id === id);
+    if (!conversation) throw new Error("not found");
+    const project = projects.find((p) => p.id === conversation.project_id);
+    if (!project) throw new Error("project not found");
+    const action = body.action || "message";
+    const status = action === "approve" ? "done" : "open";
+    const turn = action === "approve" ? "finalize" : action === "proceed" ? "proceed" : "message";
+    const task = makeIntakeTask(project, conversation, turn, "done", body.message || "");
+    conversation.status = status;
+    conversation.session_handle = conversation.session_handle || "mock-intake-session";
+    conversation.latest_brief =
+      action === "approve"
+        ? `${conversation.latest_brief || "## Approved intake\n\nSpecs accepted."}\n\nSpecs were finalized and pushed.`
+        : `${conversation.latest_brief || "## Intake brief"}\n\n${body.message ? `User said: ${body.message}` : "Proceeding with stated assumptions."}`;
+    conversation.transcript.push({ role: "user", text: body.message || action });
+    conversation.transcript.push({ role: "assistant", text: conversation.latest_brief });
+    conversation.last_task_id = task.id;
+    conversation.updated_at = Date.now() / 1000;
+    if (action === "approve") project.state = "idle_no_workstreams";
+    return structuredClone({ conversation, task });
+  },
+
   project: async (id: string): Promise<ProjectDetail> => {
     const project = projects.find((p) => p.id === id);
     if (!project) throw new Error("not found");
@@ -543,6 +741,7 @@ export const api = {
       tasks: tasks.filter((t) => t.project_id === id),
       questions: questions.filter((q) => q.project_id === id),
       human_tasks: humanTasks.filter((t) => t.project_id === id),
+      conversations: conversations.filter((c) => c.project_id === id),
     });
   },
 

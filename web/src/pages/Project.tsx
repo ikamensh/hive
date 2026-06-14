@@ -11,7 +11,7 @@ import {
   StateBadge,
   WORK_SOURCE_OPTIONS,
 } from "../components/shared";
-import type { Autonomy, GuessPropensity, HumanTask, Mode, Project, ProjectPatch, Question, ScanResult, Task, Workstream, WorkstreamStatus } from "../types";
+import type { AgentConversation, Autonomy, GuessPropensity, HumanTask, Mode, Project, ProjectPatch, Question, ResourceInfo, ScanResult, Task, Workstream, WorkstreamStatus } from "../types";
 
 /** Derive the issue's per-issue branch tree URL from its issue URL (`.../issues/42` → `.../tree/hive/issue-42`). */
 function issueBranchUrl(ws: Workstream): string | null {
@@ -38,19 +38,61 @@ function buildSetupPatch(fields: {
   };
 }
 
+function scoutStateLabel(resource: ResourceInfo): string {
+  if (resource.available) return "ready";
+  if (resource.enabled === false) return "disabled";
+  if (resource.cooldown_until > Date.now() / 1000) return "cooldown";
+  return resource.usability_status === "usable" ? "unavailable" : resource.usability_status;
+}
+
+function intakeSection(text: string, heading: string): string {
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = text.match(
+    new RegExp(`(?:^|\\n)(?:#+\\s*)?${escaped}\\s*:?\\s*\\n([\\s\\S]*?)(?=\\n(?:#+\\s*)?[A-Za-z][A-Za-z ]{1,40}\\s*:?\\s*\\n|$)`, "i"),
+  );
+  return match?.[1]?.trim() ?? "";
+}
+
+function intakeBriefReady(text: string): boolean {
+  const required = ["Mission", "Next iteration", "Likely next steps", "Assumptions", "Questions"];
+  if (required.some((heading) => !intakeSection(text, heading))) return false;
+  const normalized = intakeSection(text, "Questions")
+    .replace(/^[\s>*#`\-•0-9.)]+/gm, "")
+    .toLowerCase()
+    .replace(/[^a-z]+/g, " ")
+    .trim();
+  return new Set([
+    "",
+    "none",
+    "n a",
+    "no questions",
+    "no material questions",
+    "no remaining questions",
+    "no remaining material questions",
+  ]).has(normalized);
+}
+
 function ProjectSetup({
   project,
+  conversation,
+  trustedScouts,
   onSave,
-  onStart,
+  onCreateRepo,
+  onStartIntake,
+  onConversationMessage,
 }: {
   project: Project;
+  conversation: AgentConversation | null;
+  trustedScouts: ResourceInfo[];
   onSave: (patch: ProjectPatch) => Promise<void>;
-  onStart: (patch: ProjectPatch, mission: string, iterationGoal: string) => Promise<void>;
+  onCreateRepo: (repoName: string) => Promise<void>;
+  onStartIntake: (patch: ProjectPatch) => Promise<void>;
+  onConversationMessage: (conversationId: string, action: "message" | "proceed" | "approve", message?: string) => Promise<void>;
 }) {
   const [specRepo, setSpecRepo] = useState(project.spec_repo);
   const [memberRepos, setMemberRepos] = useState(project.member_repos);
-  const [mission, setMission] = useState("");
-  const [iterationGoal, setIterationGoal] = useState("");
+  const [repoName, setRepoName] = useState(project.name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-|-$/g, ""));
+  const [intakeMessage, setIntakeMessage] = useState("");
   const [mode, setMode] = useState<Mode>(project.mode);
   const [autonomy, setAutonomy] = useState<Autonomy>(project.autonomy);
   const [guess, setGuess] = useState<GuessPropensity>(project.guess_propensity);
@@ -62,14 +104,17 @@ function ProjectSetup({
 
   const fields = { specRepo, memberRepos, mode, autonomy, guess, dailyBudget };
   const draft = !project.spec_repo.trim();
+  const intakeRunning = conversation?.status === "running" || conversation?.status === "finalizing";
+  const intakeDone = conversation?.status === "done";
+  const intakeReady = intakeBriefReady(conversation?.latest_brief ?? "");
 
   const save = async () => {
     setBusy(true);
     setError("");
     try {
       await onSave(buildSetupPatch(fields));
-    } catch {
-      setError("save failed");
+    } catch (e) {
+      setError((e as Error).message || "save failed");
     }
     setBusy(false);
   };
@@ -83,9 +128,33 @@ function ProjectSetup({
     setBusy(true);
     setError("");
     try {
-      await onStart(buildSetupPatch(fields), mission.trim(), iterationGoal.trim());
-    } catch {
-      setError("start failed — is spec repo reachable?");
+      await onStartIntake(buildSetupPatch(fields));
+    } catch (e) {
+      setError((e as Error).message || "intake failed to start");
+    }
+    setBusy(false);
+  };
+
+  const createRepo = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await onCreateRepo(repoName.trim());
+    } catch (e) {
+      setError((e as Error).message || "repo creation failed");
+    }
+    setBusy(false);
+  };
+
+  const sendConversation = async (action: "message" | "proceed" | "approve") => {
+    if (!conversation) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onConversationMessage(conversation.id, action, intakeMessage.trim());
+      if (action === "message") setIntakeMessage("");
+    } catch (e) {
+      setError((e as Error).message || "could not send intake message");
     }
     setBusy(false);
   };
@@ -93,11 +162,11 @@ function ProjectSetup({
   return (
     <section className="setup-panel reveal">
       <header className="setup-head">
-        <h2>{draft ? "Configure project" : "Ready to start"}</h2>
+        <h2>{intakeDone ? "Intake complete" : draft ? "Configure intake" : "Project intake"}</h2>
         <p className="muted">
           {draft
-            ? "Set up repos and policy, then start planning when ready."
-            : "Repos saved — add a brief and start planning, or save changes first."}
+            ? "Choose a repo, or create one for this project, then start the scout."
+            : "The scout aligns mission, next iteration, and assumptions before planning starts."}
         </p>
       </header>
       <form className="setup-form" onSubmit={start}>
@@ -113,24 +182,17 @@ function ProjectSetup({
           member repos
           <RepoListEditor repos={memberRepos} onChange={setMemberRepos} />
         </label>
-        <label>
-          mission
-          <textarea
-            value={mission}
-            onChange={(e) => setMission(e.target.value)}
-            rows={3}
-            placeholder="What should Hive understand about this project?"
-          />
-        </label>
-        <label>
-          first iteration goal
-          <textarea
-            value={iterationGoal}
-            onChange={(e) => setIterationGoal(e.target.value)}
-            rows={3}
-            placeholder="What should agents accomplish first?"
-          />
-        </label>
+        {draft && (
+          <div className="create-repo-row">
+            <label>
+              new private repo
+              <input value={repoName} onChange={(e) => setRepoName(e.target.value)} placeholder="repo-name" />
+            </label>
+            <button type="button" className="ghost" onClick={createRepo} disabled={busy || !repoName.trim()}>
+              create repo
+            </button>
+          </div>
+        )}
         <div className="dial-grid">
           <label>
             mode
@@ -156,13 +218,59 @@ function ProjectSetup({
             placeholder="0"
           />
         </label>
+        <div className="trusted-scouts">
+          <span className="field-label">trusted scouts</span>
+          <div>
+            {trustedScouts.length === 0 && <span className="chip chip-failed">unavailable</span>}
+            {trustedScouts.map((resource) => (
+              <span
+                className={`chip ${resource.available ? "chip-open" : "chip-failed"}`}
+                key={resource.id}
+                title={resource.disabled_reason || resource.last_exhaustion_text || resource.last_probe_text}
+              >
+                {resource.backend === "codex" ? "codex gpt-5.5" : "claude opus"} · {scoutStateLabel(resource)}
+              </span>
+            ))}
+          </div>
+        </div>
         {error && <p className="form-error">{error}</p>}
+        {conversation && (
+          <div className={`intake-brief intake-${conversation.status}`}>
+            <header>
+              <span className={`chip chip-${conversation.status}`}>{conversation.status}</span>
+              <span className="muted">{conversation.backend} {conversation.model}</span>
+            </header>
+            {conversation.latest_brief ? <Markdown text={conversation.latest_brief} /> : <p className="muted">waiting for the scout brief</p>}
+            {!intakeDone && (
+              <div className="intake-actions">
+                <textarea
+                  value={intakeMessage}
+                  onChange={(e) => setIntakeMessage(e.target.value)}
+                  rows={4}
+                  placeholder="Answer or correct the scout..."
+                  disabled={busy || intakeRunning}
+                />
+                <div className="setup-actions">
+                  <button type="button" className="ghost" onClick={() => sendConversation("message")} disabled={busy || intakeRunning || !intakeMessage.trim()}>
+                    send answer
+                  </button>
+                  <button type="button" className="ghost" onClick={() => sendConversation("proceed")} disabled={busy || intakeRunning}>
+                    proceed with assumptions
+                  </button>
+                  <button type="button" onClick={() => sendConversation("approve")} disabled={busy || intakeRunning || !intakeReady}>
+                    approve and finalize
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         <div className="setup-actions">
           <button type="button" className="ghost" onClick={save} disabled={busy}>
             {busy ? "saving…" : "save"}
           </button>
-          <button type="submit" disabled={busy || !specRepo.trim()}>
-            {busy ? "starting…" : "start planning"}
+          <button type="submit" disabled={busy || !specRepo.trim() || intakeRunning || intakeDone || Boolean(conversation)}>
+            {busy ? "starting…" : conversation ? "intake started" : "start intake"}
           </button>
         </div>
       </form>
@@ -697,12 +805,17 @@ function TaskCard({ task, projectId }: { task: Task; projectId: string }) {
 export default function ProjectPage() {
   const { id = "" } = useParams();
   const { data, failed, refresh } = usePoll(() => api.project(id), [id]);
+  const { data: resources } = usePoll(() => api.resources(), [], 8000);
 
   if (!data) {
     return <div className="page">{failed ? <p className="muted">project unreachable</p> : <p className="muted">loading…</p>}</div>;
   }
 
-  const { project, workstreams, tasks, questions, human_tasks } = data;
+  const { project, workstreams, tasks, questions, human_tasks, conversations } = data;
+  const intakeConversation =
+    conversations.find((c) => c.id === project.intake_conversation_id) ??
+    [...conversations].sort((a, b) => b.created_at - a.created_at)[0] ??
+    null;
   const openQs = questions.filter((q) => q.status === "open").sort((a, b) => b.created_at - a.created_at);
   const answeredQs = questions.filter((q) => q.status === "answered").sort((a, b) => b.answered_at - a.answered_at);
   const openTodos = human_tasks.filter((t) => t.status === "open").sort((a, b) => b.created_at - a.created_at);
@@ -721,16 +834,35 @@ export default function ProjectPage() {
     refresh();
   };
 
-  const startPlanning = async (p: ProjectPatch, mission: string, iterationGoal: string) => {
+  const createRepo = async (repoName: string) => {
+    await api.createProjectRepo(id, { name: repoName, private: true });
+    refresh();
+  };
+
+  const startIntake = async (p: ProjectPatch) => {
     await api.patchProject(id, p);
-    await api.startProject(id, { mission, iteration_goal: iterationGoal });
+    await api.startIntake(id);
+    refresh();
+  };
+
+  const sendIntakeMessage = async (
+    conversationId: string,
+    action: "message" | "proceed" | "approve",
+    message = "",
+  ) => {
+    await api.conversationMessage(conversationId, { action, message });
     refresh();
   };
 
   const configured = Boolean(project.spec_repo.trim());
   const issuesMode = project.work_source === "issues";
-  const needsSetup = !configured;
-  const needsStart = !issuesMode && configured && workstreams.length === 0 && tasks.length === 0;
+  const nonIntakeTasks = tasks.filter((t) => t.kind !== "intake" && t.kind !== "probe");
+  const intakeDone = intakeConversation?.status === "done";
+  const needsSetup = !issuesMode && (!configured || (workstreams.length === 0 && nonIntakeTasks.length === 0 && !intakeDone));
+  const needsStart = false;
+  const trustedScouts = (resources?.resources ?? []).filter((resource) =>
+    resource.backend === "codex" || resource.backend === "claude",
+  );
 
   const inboxCol = (
     <section className="col col-inbox">
@@ -777,39 +909,50 @@ export default function ProjectPage() {
         <StateBadge state={project.state} questionCount={openQs.length} />
       </div>
 
-      {(needsSetup || needsStart) && (
-        <ProjectSetup project={project} onSave={saveSetup} onStart={startPlanning} />
-      )}
-      {project.goal_complete && <GoalBanner project={project} onPatch={patch} />}
-      {configured && !needsStart && <TogglesBar project={project} onPatch={patch} />}
-      {configured && issuesMode && <ScanBar project={project} onScanned={refresh} />}
-      {configured && !needsStart && <ProjectSettings project={project} onPatch={patch} />}
-
-      {issuesMode ? (
-        <>
-          <h2 className="col-title issues-title">
-            issues <span className="col-count">{workstreams.filter((w) => w.source === "issue").length}</span>
-          </h2>
-          <IssuesView workstreams={workstreams} />
-          <div className="columns columns-issues">
-            {inboxCol}
-            {activityCol}
-          </div>
-        </>
+      {needsSetup || needsStart ? (
+        <ProjectSetup
+          project={project}
+          conversation={intakeConversation}
+          trustedScouts={trustedScouts}
+          onSave={saveSetup}
+          onCreateRepo={createRepo}
+          onStartIntake={startIntake}
+          onConversationMessage={sendIntakeMessage}
+        />
       ) : (
-        <div className="columns">
-          <section className="col col-ws">
-            <h2 className="col-title">
-              workstreams <span className="col-count">{workstreams.length}</span>
-            </h2>
-            {sortedWs.length === 0 && <p className="muted">none yet — the supervisor will plan some</p>}
-            {sortedWs.map((w) => (
-              <WorkstreamCard key={w.id} ws={w} />
-            ))}
-          </section>
-          {inboxCol}
-          {activityCol}
-        </div>
+        <>
+          {project.goal_complete && <GoalBanner project={project} onPatch={patch} />}
+          {configured && !needsStart && <TogglesBar project={project} onPatch={patch} />}
+          {configured && issuesMode && <ScanBar project={project} onScanned={refresh} />}
+          {configured && !needsStart && <ProjectSettings project={project} onPatch={patch} />}
+
+          {issuesMode ? (
+            <>
+              <h2 className="col-title issues-title">
+                issues <span className="col-count">{workstreams.filter((w) => w.source === "issue").length}</span>
+              </h2>
+              <IssuesView workstreams={workstreams} />
+              <div className="columns columns-issues">
+                {inboxCol}
+                {activityCol}
+              </div>
+            </>
+          ) : (
+            <div className="columns">
+              <section className="col col-ws">
+                <h2 className="col-title">
+                  workstreams <span className="col-count">{workstreams.length}</span>
+                </h2>
+                {sortedWs.length === 0 && <p className="muted">none yet — the supervisor will plan some</p>}
+                {sortedWs.map((w) => (
+                  <WorkstreamCard key={w.id} ws={w} />
+                ))}
+              </section>
+              {inboxCol}
+              {activityCol}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
