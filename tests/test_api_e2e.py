@@ -411,6 +411,50 @@ def test_rate_limited_result_sets_cooldown(harness):
     assert res["last_exhaustion_at"] > 0
 
 
+def test_duplicate_task_result_is_ignored(harness):
+    client, store, _orch = harness
+    project = store.put(Project(name="duplicate-result", spec_repo="https://example.com/spec.git"))
+    ws = store.put(Workstream(project_id=project.id, title="build"))
+    rid = _register_usable_runner(client, name="dup-runner")
+    resource = store.list(Resource)[0]
+    task = store.put(
+        Task(
+            project_id=project.id,
+            workstream_id=ws.id,
+            repo="https://example.com/app.git",
+            instructions="implement feature",
+            status=TaskStatus.running,
+            runner_id=rid,
+        )
+    )
+
+    assert client.post(
+        f"/api/tasks/{task.id}/result",
+        json={"text": "done", "cost_usd": 1.0},
+        headers=RUNNER_HEADERS,
+    ).json() == {"ok": True}
+    ignored = client.post(
+        f"/api/tasks/{task.id}/result",
+        json={
+            "text": "429 rate limit",
+            "is_error": True,
+            "resource_exhausted": True,
+            "cost_usd": 2.0,
+        },
+        headers=RUNNER_HEADERS,
+    ).json()
+
+    assert ignored["ignored"] is True
+    finished = store.get(Task, task.id)
+    assert finished.status == TaskStatus.done
+    assert finished.result_text == "done"
+    updated = store.get(Resource, resource.id)
+    assert updated.total_tasks == resource.total_tasks + 1
+    assert updated.total_cost_usd == resource.total_cost_usd + 1.0
+    assert updated.cooldown_until == 0
+    assert updated.last_exhaustion_text == ""
+
+
 # Real message from `codex exec` when the ChatGPT subscription window is exhausted.
 CODEX_QUOTA_ERROR = (
     "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage "
@@ -549,6 +593,19 @@ def test_resource_probe_marks_usable_and_failed(harness):
     assert resource.usability_status == "failed"
     assert not resource.available()
     assert store.list(HumanTask)[0].title == "Fix cursor login on probe-runner"
+
+    queued = client.post(f"/api/resources/{resource.id}/probe").json()
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert task["id"] == queued["task"]["id"]
+    client.post(
+        f"/api/tasks/{task['id']}/result",
+        json={"text": PROBE_MARKER},
+        headers=RUNNER_HEADERS,
+    )
+    resource = store.get(Resource, resource.id)
+    assert resource.usability_status == "usable"
+    assert resource.available()
+    assert store.list(HumanTask)[0].status == HumanTaskStatus.done
 
     patched = client.patch(
         f"/api/resources/{resource.id}",

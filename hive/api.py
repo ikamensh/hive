@@ -936,7 +936,11 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if not existing or existing.workspace_id != workspace_id:
             raise HTTPException(404)
 
+        finished_at = time.time()
+
         def record(task: Task) -> None:
+            if task.status != TaskStatus.running:
+                return
             if body.cancelled:
                 task.status = TaskStatus.cancelled
             else:
@@ -948,20 +952,20 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             task.cost_usd = body.cost_usd
             task.input_tokens = body.input_tokens
             task.output_tokens = body.output_tokens
-            task.finished_at = time.time()
+            task.finished_at = finished_at
 
         task = store.update(Task, task_id, record)
         if task is None:
             raise HTTPException(404)
+        if task.finished_at != finished_at:
+            return {"ok": True, "ignored": True, "status": task.status}
 
-        probe_resource_enabled = True
+        probe_resources: list[Resource] = []
 
         def account(resource: Resource) -> None:
-            nonlocal probe_resource_enabled
             resource.total_tasks += 1
             resource.total_cost_usd += body.cost_usd
             if task.kind == TaskKind.probe and resource.last_probe_task_id == task.id:
-                probe_resource_enabled = resource.enabled
                 resource.last_probe_at = task.finished_at
                 resource.last_probe_text = body.text[:2000]
                 if body.cancelled:
@@ -987,11 +991,17 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             runner_id=task.runner_id,
             backend=task.backend,
         ):
-            store.update(Resource, resource.id, account)
+            updated = store.update(Resource, resource.id, account)
+            if updated and task.kind == TaskKind.probe and updated.last_probe_task_id == task.id:
+                probe_resources.append(updated)
 
         if task.kind == TaskKind.probe:
+            if not body.cancelled and not body.is_error and not body.resource_exhausted:
+                for resource in probe_resources:
+                    if resource.enabled:
+                        complete_resource_login_todos(resource)
             if (
-                probe_resource_enabled
+                any(resource.enabled for resource in probe_resources)
                 and body.is_error
                 and not body.resource_exhausted
                 and HUMAN_FIX_PATTERNS.search(body.text)
