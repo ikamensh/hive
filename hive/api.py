@@ -63,16 +63,15 @@ def _iso_utc(epoch: float) -> str:
 
 class ProjectCreate(BaseModel):
     name: str
-    spec_repo: str
-    member_repos: list[str] = []
+
+
+class ProjectStart(BaseModel):
     mission: str = ""
     iteration_goal: str = ""
-    mode: Mode = Mode.build
-    autonomy: Autonomy = Autonomy.direct_push
-    guess_propensity: GuessPropensity = GuessPropensity.sometimes
 
 
 class ProjectPatch(BaseModel):
+    spec_repo: str | None = None
     mode: Mode | None = None
     autonomy: Autonomy | None = None
     guess_propensity: GuessPropensity | None = None
@@ -250,23 +249,33 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
     def list_projects():
         return [p.model_dump() for p in store.list(Project)]
 
-    @app.post("/api/projects")
-    def create_project(body: ProjectCreate):
-        project = store.put(Project(**body.model_dump(exclude={"mission", "iteration_goal"})))
-        mission = body.mission.strip()
-        iteration_goal = body.iteration_goal.strip()
+    def planning_wake_event(mission: str, iteration_goal: str) -> str:
+        mission = mission.strip()
+        iteration_goal = iteration_goal.strip()
         if mission or iteration_goal:
-            event = (
-                "Project created with an initial brief from the user.\n\n"
+            return (
+                "Project started with an initial brief from the user.\n\n"
                 f"Mission:\n{mission or '(not provided)'}\n\n"
                 f"Initial iteration goal:\n{iteration_goal or '(not provided)'}\n\n"
                 "Your FIRST action must be commit_to_spec: write the mission to mission.md "
                 "and the iteration goal to iteration.md, preserving any existing useful spec "
                 "context. Only then plan the opening workstreams."
             )
-        else:
-            event = "Project created. Plan the opening workstreams."
-        supervisor.wake(project.id, event)
+        return "Project configured. Plan the opening workstreams."
+
+    @app.post("/api/projects")
+    def create_project(body: ProjectCreate):
+        project = store.put(Project(name=body.name.strip()))
+        return project.model_dump()
+
+    @app.post("/api/projects/{project_id}/start")
+    def start_project(project_id: str, body: ProjectStart):
+        project = store.get(Project, project_id)
+        if not project:
+            raise HTTPException(404)
+        if not project.spec_repo.strip():
+            raise HTTPException(400, "spec_repo must be set before starting")
+        supervisor.wake(project_id, planning_wake_event(body.mission, body.iteration_goal))
         return project.model_dump()
 
     @app.get("/api/projects/{project_id}")
@@ -280,6 +289,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
             "tasks": [t.model_dump() for t in store.list(Task, project_id=project_id, limit=50)],
             "questions": [q.model_dump() for q in store.list(Question, project_id=project_id)],
             "human_tasks": [t.model_dump() for t in store.list(HumanTask, project_id=project_id)],
+            "spend_today": supervisor.spend_today(project_id),
         }
 
     @app.patch("/api/projects/{project_id}")
@@ -289,6 +299,9 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
             raise HTTPException(404)
         updates = body.model_dump(exclude_none=True)
         note = updates.pop("new_iteration_note", None)
+        if "spec_repo" in updates and not updates["spec_repo"].strip():
+            if store.list(Workstream, project_id=project_id):
+                raise HTTPException(400, "cannot clear spec_repo after work has started")
         for key, value in updates.items():
             setattr(project, key, value)
         if note is not None:

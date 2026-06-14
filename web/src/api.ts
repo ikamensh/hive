@@ -5,6 +5,7 @@ import type {
   ProjectCreate,
   ProjectDetail,
   ProjectPatch,
+  ProjectStart,
   Question,
   ResourcesPayload,
   Subscription,
@@ -33,6 +34,8 @@ const realApi = {
   projects: () => http<Project[]>("/api/projects"),
   createProject: (body: ProjectCreate) =>
     http<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
+  startProject: (id: string, body: ProjectStart) =>
+    http<Project>(`/api/projects/${id}/start`, { method: "POST", body: JSON.stringify(body) }),
   project: (id: string) => http<ProjectDetail>(`/api/projects/${id}`),
   patchProject: (id: string, patch: ProjectPatch) =>
     http<Project>(`/api/projects/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),

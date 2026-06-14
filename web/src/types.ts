@@ -136,16 +136,15 @@ export interface HumanTask {
 
 export interface ProjectCreate {
   name: string;
-  spec_repo: string;
-  member_repos: string[];
-  mission: string;
-  iteration_goal: string;
-  mode: Mode;
-  autonomy: Autonomy;
-  guess_propensity: GuessPropensity;
+}
+
+export interface ProjectStart {
+  mission?: string;
+  iteration_goal?: string;
 }
 
 export interface ProjectPatch {
+  spec_repo?: string;
   mode?: Mode;
   autonomy?: Autonomy;
   guess_propensity?: GuessPropensity;

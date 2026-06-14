@@ -9,7 +9,220 @@ import {
   SegPicker,
   StateBadge,
 } from "../components/shared";
-import type { HumanTask, Project, ProjectPatch, Question, Task, Workstream } from "../types";
+import type { Autonomy, GuessPropensity, HumanTask, Mode, Project, ProjectPatch, Question, Task, Workstream } from "../types";
+
+function buildSetupPatch(fields: {
+  specRepo: string;
+  memberRepos: string;
+  mode: Mode;
+  autonomy: Autonomy;
+  guess: GuessPropensity;
+  dailyBudget: string;
+}): ProjectPatch {
+  const budget = parseFloat(fields.dailyBudget);
+  return {
+    spec_repo: fields.specRepo.trim(),
+    member_repos: fields.memberRepos
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean),
+    mode: fields.mode,
+    autonomy: fields.autonomy,
+    guess_propensity: fields.guess,
+    daily_budget_usd: Number.isFinite(budget) && budget >= 0 ? budget : 0,
+  };
+}
+
+function ProjectSetup({
+  project,
+  onSave,
+  onStart,
+}: {
+  project: Project;
+  onSave: (patch: ProjectPatch) => Promise<void>;
+  onStart: (patch: ProjectPatch, mission: string, iterationGoal: string) => Promise<void>;
+}) {
+  const [specRepo, setSpecRepo] = useState(project.spec_repo);
+  const [memberRepos, setMemberRepos] = useState(project.member_repos.join("\n"));
+  const [mission, setMission] = useState("");
+  const [iterationGoal, setIterationGoal] = useState("");
+  const [mode, setMode] = useState<Mode>(project.mode);
+  const [autonomy, setAutonomy] = useState<Autonomy>(project.autonomy);
+  const [guess, setGuess] = useState<GuessPropensity>(project.guess_propensity);
+  const [dailyBudget, setDailyBudget] = useState(
+    project.daily_budget_usd > 0 ? String(project.daily_budget_usd) : "",
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const fields = { specRepo, memberRepos, mode, autonomy, guess, dailyBudget };
+  const draft = !project.spec_repo.trim();
+
+  const save = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await onSave(buildSetupPatch(fields));
+    } catch {
+      setError("save failed");
+    }
+    setBusy(false);
+  };
+
+  const start = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!specRepo.trim()) {
+      setError("spec repo URL is required");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await onStart(buildSetupPatch(fields), mission.trim(), iterationGoal.trim());
+    } catch {
+      setError("start failed — is spec repo reachable?");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <section className="setup-panel reveal">
+      <header className="setup-head">
+        <h2>{draft ? "Configure project" : "Ready to start"}</h2>
+        <p className="muted">
+          {draft
+            ? "Set up repos and policy, then start planning when ready."
+            : "Repos saved — add a brief and start planning, or save changes first."}
+        </p>
+      </header>
+      <form className="setup-form" onSubmit={start}>
+        <label>
+          spec repo URL
+          <input
+            value={specRepo}
+            onChange={(e) => setSpecRepo(e.target.value)}
+            required
+            placeholder="git@github.com:org/project-spec.git"
+          />
+        </label>
+        <label>
+          member repos (one per line)
+          <textarea value={memberRepos} onChange={(e) => setMemberRepos(e.target.value)} rows={3} />
+        </label>
+        <label>
+          mission
+          <textarea
+            value={mission}
+            onChange={(e) => setMission(e.target.value)}
+            rows={3}
+            placeholder="What should Hive understand about this project?"
+          />
+        </label>
+        <label>
+          first iteration goal
+          <textarea
+            value={iterationGoal}
+            onChange={(e) => setIterationGoal(e.target.value)}
+            rows={3}
+            placeholder="What should agents accomplish first?"
+          />
+        </label>
+        <div className="dial-grid">
+          <label>
+            mode
+            <SegPicker value={mode} options={MODE_OPTIONS} onChange={setMode} />
+          </label>
+          <label>
+            autonomy
+            <SegPicker value={autonomy} options={AUTONOMY_OPTIONS} onChange={setAutonomy} />
+          </label>
+        </div>
+        <label>
+          guess propensity
+          <GuessSlider value={guess} onChange={setGuess} />
+        </label>
+        <label>
+          daily budget (USD, 0 = no cap)
+          <input
+            type="number"
+            min={0}
+            step={1}
+            value={dailyBudget}
+            onChange={(e) => setDailyBudget(e.target.value)}
+            placeholder="0"
+          />
+        </label>
+        {error && <p className="form-error">{error}</p>}
+        <div className="setup-actions">
+          <button type="button" className="ghost" onClick={save} disabled={busy}>
+            {busy ? "saving…" : "save"}
+          </button>
+          <button type="submit" disabled={busy || !specRepo.trim()}>
+            {busy ? "starting…" : "start planning"}
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
+function ProjectSettings({
+  project,
+  onPatch,
+}: {
+  project: Project;
+  onPatch: (p: ProjectPatch) => void;
+}) {
+  const [memberRepos, setMemberRepos] = useState(project.member_repos.join("\n"));
+  const [dailyBudget, setDailyBudget] = useState(
+    project.daily_budget_usd > 0 ? String(project.daily_budget_usd) : "",
+  );
+  const [busy, setBusy] = useState(false);
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    const budget = parseFloat(dailyBudget);
+    await onPatch({
+      member_repos: memberRepos
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean),
+      daily_budget_usd: Number.isFinite(budget) && budget >= 0 ? budget : 0,
+    });
+    setBusy(false);
+  };
+
+  return (
+    <details className="project-settings">
+      <summary>settings</summary>
+      <form onSubmit={save} className="settings-form">
+        <label>
+          spec repo
+          <input value={project.spec_repo} readOnly />
+        </label>
+        <label>
+          member repos (one per line)
+          <textarea value={memberRepos} onChange={(e) => setMemberRepos(e.target.value)} rows={3} />
+        </label>
+        <label>
+          daily budget (USD)
+          <input
+            type="number"
+            min={0}
+            step={1}
+            value={dailyBudget}
+            onChange={(e) => setDailyBudget(e.target.value)}
+            placeholder="0"
+          />
+        </label>
+        <button type="submit" disabled={busy}>
+          {busy ? "saving…" : "save settings"}
+        </button>
+      </form>
+    </details>
+  );
+}
 
 function TogglesBar({ project, onPatch }: { project: Project; onPatch: (p: ProjectPatch) => void }) {
   return (
@@ -379,18 +592,37 @@ export default function ProjectPage() {
     refresh();
   };
 
+  const saveSetup = async (p: ProjectPatch) => {
+    await api.patchProject(id, p);
+    refresh();
+  };
+
+  const startPlanning = async (p: ProjectPatch, mission: string, iterationGoal: string) => {
+    await api.patchProject(id, p);
+    await api.startProject(id, { mission, iteration_goal: iterationGoal });
+    refresh();
+  };
+
+  const configured = Boolean(project.spec_repo.trim());
+  const needsSetup = !configured;
+  const needsStart = configured && workstreams.length === 0 && tasks.length === 0;
+
   return (
     <div className="page page-project">
       <div className="page-head">
         <h1>
           {project.name}
-          <span className="head-repo">{repoShort(project.spec_repo)}</span>
+          {configured && <span className="head-repo">{repoShort(project.spec_repo)}</span>}
         </h1>
         <StateBadge state={project.state} questionCount={openQs.length} />
       </div>
 
+      {(needsSetup || needsStart) && (
+        <ProjectSetup project={project} onSave={saveSetup} onStart={startPlanning} />
+      )}
       {project.goal_complete && <GoalBanner project={project} onPatch={patch} />}
-      <TogglesBar project={project} onPatch={patch} />
+      {configured && !needsStart && <TogglesBar project={project} onPatch={patch} />}
+      {configured && !needsStart && <ProjectSettings project={project} onPatch={patch} />}
 
       <div className="columns">
         <section className="col col-ws">

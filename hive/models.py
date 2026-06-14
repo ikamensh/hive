@@ -47,7 +47,7 @@ class ProjectState(StrEnum):
 class Project(BaseModel):
     id: str = Field(default_factory=new_id)
     name: str
-    spec_repo: str  # git URL of the spec home; may equal a member repo
+    spec_repo: str = ""  # git URL of the spec home; empty = draft (not yet configured)
     member_repos: list[str] = []  # git URLs; spec_repo included if it holds code
     mode: Mode = Mode.build
     autonomy: Autonomy = Autonomy.direct_push

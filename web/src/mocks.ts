@@ -7,6 +7,7 @@ import type {
   ProjectCreate,
   ProjectDetail,
   ProjectPatch,
+  ProjectStart,
   Question,
   ResourcesPayload,
   Subscription,
@@ -252,11 +253,11 @@ export const api = {
     const p: Project = {
       id: `p-${Math.random().toString(36).slice(2, 8)}`,
       name: body.name,
-      spec_repo: body.spec_repo,
-      member_repos: body.member_repos,
-      mode: body.mode,
-      autonomy: body.autonomy,
-      guess_propensity: body.guess_propensity,
+      spec_repo: "",
+      member_repos: [],
+      mode: "build",
+      autonomy: "direct_push",
+      guess_propensity: "sometimes",
       prod_deploys: false,
       paused: false,
       daily_budget_usd: 0,
@@ -267,6 +268,13 @@ export const api = {
     };
     projects.push(p);
     return structuredClone(p);
+  },
+
+  startProject: async (id: string, _body: ProjectStart): Promise<Project> => {
+    const project = projects.find((p) => p.id === id);
+    if (!project) throw new Error("not found");
+    if (!project.spec_repo.trim()) throw new Error("spec_repo required");
+    return structuredClone(project);
   },
 
   project: async (id: string): Promise<ProjectDetail> => {

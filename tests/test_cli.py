@@ -37,10 +37,11 @@ def harness(tmp_path):
 def test_cli_drives_full_loop(harness):
     client, store = harness
 
-    project = cli(client, "create", "demo", "https://example.com/spec.git",
-                  "--member-repos", "https://example.com/app.git",
-                  "--mission", "Ship the demo", "--iteration-goal", "Build the first loop")
+    project = cli(client, "create", "demo")
     pid = project["id"]
+    cli(client, "set", pid, "--spec-repo", "https://example.com/spec.git",
+        "--member-repos", "https://example.com/app.git")
+    cli(client, "start", pid, "--mission", "Ship the demo", "--iteration-goal", "Build the first loop")
     assert cli(client, "projects")[0]["id"] == pid
     _pump(client, store)
 
@@ -87,7 +88,8 @@ def test_cli_agents_and_probe(harness):
 
 def test_cli_settings_and_admin(harness):
     client, _store = harness
-    pid = cli(client, "create", "p", "https://example.com/s.git")["id"]
+    pid = cli(client, "create", "p")["id"]
+    cli(client, "set", pid, "--spec-repo", "https://example.com/s.git")
 
     patched = cli(client, "set", pid, "--paused", "true", "--autonomy", "pr",
                   "--member-repos", "https://example.com/a.git,https://example.com/b.git")
@@ -116,7 +118,8 @@ def test_cli_cancel_and_dismiss(harness):
     from hive.models import Question, Task, Workstream
 
     client, store = harness
-    pid = cli(client, "create", "p", "https://example.com/s.git")["id"]
+    pid = cli(client, "create", "p")["id"]
+    cli(client, "set", pid, "--spec-repo", "https://example.com/s.git")
     ws = store.put(Workstream(project_id=pid, title="w"))
     task = store.put(Task(project_id=pid, workstream_id=ws.id, repo="r", instructions="i"))
     assert cli(client, "cancel", task.id)["status"] == "cancelled"

@@ -34,6 +34,24 @@ from hive.supervisor import Supervisor
 RUNNER_HEADERS = {"X-Hive-Token": "test-token"}
 
 
+def _configure_project(client, pid, spec_repo="https://example.com/spec.git", **patch):
+    client.patch(f"/api/projects/{pid}", json={"spec_repo": spec_repo, **patch})
+
+
+def _start_project(client, pid, mission="", iteration_goal=""):
+    client.post(f"/api/projects/{pid}/start", json={
+        "mission": mission,
+        "iteration_goal": iteration_goal,
+    })
+
+
+def _create_started(client, name, spec_repo="https://example.com/spec.git", mission="", iteration_goal=""):
+    project = client.post("/api/projects", json={"name": name}).json()
+    _configure_project(client, project["id"], spec_repo)
+    _start_project(client, project["id"], mission, iteration_goal)
+    return project
+
+
 class ScriptedOrchestrator:
     """Plays the orchestrator: plans one workstream/task, verifies after work,
     asks a question after verify, completes the goal after the answer."""
@@ -113,11 +131,8 @@ def harness(tmp_path):
 def test_full_loop(harness):
     client, store, orch = harness
 
-    # 1. create project → orchestrator plans a workstream + task
-    project = client.post(
-        "/api/projects",
-        json={"name": "demo", "spec_repo": "https://example.com/spec.git"},
-    ).json()
+    # 1. create + configure + start → orchestrator plans a workstream + task
+    project = _create_started(client, "demo")
     pid = project["id"]
     _pump(client, store)
     detail = client.get(f"/api/projects/{pid}").json()
@@ -166,18 +181,30 @@ def test_full_loop(harness):
     assert resources["resources"][0]["total_cost_usd"] == 0.5
 
 
+def test_create_draft_does_not_wake_orchestrator(harness):
+    client, store, orch = harness
+    project = client.post("/api/projects", json={"name": "draft"}).json()
+    _pump(client, store)
+    assert project["spec_repo"] == ""
+    assert len(orch.invocations) == 0
+
+
+def test_start_requires_spec_repo(harness):
+    client, store, orch = harness
+    project = client.post("/api/projects", json={"name": "draft"}).json()
+    assert client.post(f"/api/projects/{project['id']}/start", json={}).status_code == 400
+    assert len(orch.invocations) == 0
+
+
 def test_create_project_brief_wakes_orchestrator(harness):
     client, store, orch = harness
 
-    project = client.post(
-        "/api/projects",
-        json={
-            "name": "briefed",
-            "spec_repo": "https://example.com/spec.git",
-            "mission": "Make local Hive setup dependable.",
-            "iteration_goal": "Prove agents can register and run a probe.",
-        },
-    ).json()
+    project = _create_started(
+        client,
+        "briefed",
+        mission="Make local Hive setup dependable.",
+        iteration_goal="Prove agents can register and run a probe.",
+    )
     _pump(client, store)
 
     event = orch.invocations[0][0]
@@ -364,7 +391,7 @@ def test_human_task_tool_and_api(harness):
 
 def test_rate_limited_result_sets_cooldown(harness):
     client, store, orch = harness
-    client.post("/api/projects", json={"name": "p2", "spec_repo": "https://example.com/s.git"})
+    _create_started(client, "p2")
     _pump(client, store)
     rid = _register_usable_runner(client, name="r2")
     _pump(client, store)
@@ -424,7 +451,7 @@ def test_resource_probe_marks_usable_and_failed(harness):
 
 def test_cancel_pending_task(harness):
     client, store, _orch = harness
-    client.post("/api/projects", json={"name": "c", "spec_repo": "https://example.com/s.git"})
+    _create_started(client, "c")
     _pump(client, store)  # orchestrator queues a work task; no runner online → stays pending
     task = store.list(Task)[0]
     assert task.status == "pending"
@@ -433,9 +460,7 @@ def test_cancel_pending_task(harness):
 
 def test_dismiss_question_wakes(harness):
     client, store, _orch = harness
-    pid = client.post(
-        "/api/projects", json={"name": "d", "spec_repo": "https://example.com/s.git"}
-    ).json()["id"]
+    pid = client.post("/api/projects", json={"name": "d"}).json()["id"]
     sup = client.app.state.supervisor
     q = store.put(Question(project_id=pid, text="pick A or B?"))
     sup._events.clear()
@@ -445,9 +470,7 @@ def test_dismiss_question_wakes(harness):
 
 def test_trace_roundtrip(harness):
     client, store, _orch = harness
-    pid = client.post(
-        "/api/projects", json={"name": "t", "spec_repo": "https://example.com/s.git"}
-    ).json()["id"]
+    pid = client.post("/api/projects", json={"name": "t"}).json()["id"]
     ws = store.put(Workstream(project_id=pid, title="w"))
     task = store.put(Task(project_id=pid, workstream_id=ws.id, repo="r", instructions="i",
                           status=TaskStatus.running))
@@ -464,9 +487,7 @@ def test_trace_roundtrip(harness):
 
 def test_human_task_done_wakes_project(harness):
     client, store, _orch = harness
-    pid = client.post(
-        "/api/projects", json={"name": "h", "spec_repo": "https://example.com/s.git"}
-    ).json()["id"]
+    pid = client.post("/api/projects", json={"name": "h"}).json()["id"]
     task = client.post("/api/human-tasks", json={"title": "login", "project_id": pid}).json()
     sup = client.app.state.supervisor
     sup._events.clear()

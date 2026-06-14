@@ -22,15 +22,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("projects", help="list projects")
 
-    p = sub.add_parser("create", help="create a project")
+    p = sub.add_parser("create", help="create a project (name only; configure in project view)")
     p.add_argument("name")
-    p.add_argument("spec_repo")
-    p.add_argument("--member-repos", default="", help="comma-separated git URLs")
+
+    p = sub.add_parser("start", help="start planning for a configured project")
+    p.add_argument("project_id")
     p.add_argument("--mission", default="", help="initial mission to write into the spec repo")
     p.add_argument("--iteration-goal", default="", help="first iteration goal to write into the spec repo")
-    p.add_argument("--mode", default="build")
-    p.add_argument("--autonomy", default="direct_push")
-    p.add_argument("--guess-propensity", default="sometimes")
 
     p = sub.add_parser("show", help="project detail: workstreams, tasks, questions")
     p.add_argument("project_id")
@@ -44,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--paused", choices=["true", "false"])
     p.add_argument("--daily-budget", type=float, help="daily spend cap in USD (0 = no cap)")
     p.add_argument("--member-repos", help="comma-separated git URLs (replaces the list)")
+    p.add_argument("--spec-repo", help="spec home git URL")
 
     p = sub.add_parser("iterate", help="start the next iteration with a note")
     p.add_argument("project_id")
@@ -110,11 +109,11 @@ def run(args: argparse.Namespace, client) -> dict | list:
     if c == "projects":
         r = client.get("/api/projects")
     elif c == "create":
-        r = client.post("/api/projects", json={
-            "name": args.name, "spec_repo": args.spec_repo,
-            "member_repos": _csv(args.member_repos), "mission": args.mission,
-            "iteration_goal": args.iteration_goal, "mode": args.mode,
-            "autonomy": args.autonomy, "guess_propensity": args.guess_propensity,
+        r = client.post("/api/projects", json={"name": args.name})
+    elif c == "start":
+        r = client.post(f"/api/projects/{args.project_id}/start", json={
+            "mission": args.mission,
+            "iteration_goal": args.iteration_goal,
         })
     elif c == "show":
         r = client.get(f"/api/projects/{args.project_id}")
@@ -130,6 +129,8 @@ def run(args: argparse.Namespace, client) -> dict | list:
             body["daily_budget_usd"] = args.daily_budget
         if args.member_repos is not None:
             body["member_repos"] = _csv(args.member_repos)
+        if args.spec_repo is not None:
+            body["spec_repo"] = args.spec_repo
         r = client.patch(f"/api/projects/{args.project_id}", json=body)
     elif c == "iterate":
         r = client.patch(f"/api/projects/{args.project_id}",
