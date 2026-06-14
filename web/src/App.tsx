@@ -169,7 +169,7 @@ export default function App() {
           </NavLink>
           {auth.data?.storage && (
             <NavLink
-              to="/storage"
+              to="/settings"
               className="storage-chip"
               title={auth.data.storage.store_path ?? auth.data.storage.gcp_project ?? undefined}
             >
