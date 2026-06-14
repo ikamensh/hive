@@ -56,10 +56,10 @@ export default function App() {
               <path
                 d="M12 1.5 21 6.75v10.5L12 22.5 3 17.25V6.75z"
                 fill="none"
-                stroke="var(--honey)"
+                stroke="var(--accent)"
                 strokeWidth="1.8"
               />
-              <path d="M12 6.5 16.5 9.25v5.5L12 17.5 7.5 14.75v-5.5z" fill="var(--honey)" opacity="0.55" />
+              <path d="M12 6.5 16.5 9.25v5.5L12 17.5 7.5 14.75v-5.5z" fill="var(--accent-2)" opacity="0.7" />
             </svg>
             <span>hive</span>
           </div>
@@ -80,10 +80,10 @@ export default function App() {
             <path
               d="M12 1.5 21 6.75v10.5L12 22.5 3 17.25V6.75z"
               fill="none"
-              stroke="var(--honey)"
+              stroke="var(--accent)"
               strokeWidth="1.8"
             />
-            <path d="M12 6.5 16.5 9.25v5.5L12 17.5 7.5 14.75v-5.5z" fill="var(--honey)" opacity="0.55" />
+            <path d="M12 6.5 16.5 9.25v5.5L12 17.5 7.5 14.75v-5.5z" fill="var(--accent-2)" opacity="0.7" />
           </svg>
           <span>hive</span>
           <small>control plane</small>
