@@ -408,6 +408,79 @@ def test_rate_limited_result_sets_cooldown(harness):
     assert res["usability_status"] == "usable"
 
 
+# Real message from `codex exec` when the ChatGPT subscription window is exhausted.
+CODEX_QUOTA_ERROR = (
+    "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage "
+    "to purchase more credits or try again at 3:28 PM."
+)
+
+
+def test_codex_quota_exhaustion_blocks_project(harness):
+    """End-to-end view of a codex quota hit: task fails, resource cools down,
+    project blocks on resources, orchestrator is woken with the failure."""
+    client, store, orch = harness
+    project = _create_started(client, "codex-quota")
+    pid = project["id"]
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+
+    ws = store.put(Workstream(project_id=pid, title="build"))
+    task = store.put(
+        Task(
+            project_id=pid,
+            workstream_id=ws.id,
+            repo="https://example.com/app.git",
+            backend="codex",
+            instructions="implement feature",
+        )
+    )
+    _pump(client, store)
+    polled = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert polled["id"] == task.id
+
+    invocations_before = len(orch.invocations)
+    client.post(
+        f"/api/tasks/{task.id}/result",
+        json={
+            "text": CODEX_QUOTA_ERROR,
+            "is_error": True,
+            "resource_exhausted": True,
+        },
+        headers=RUNNER_HEADERS,
+    )
+
+    finished = store.get(Task, task.id)
+    assert finished.status == TaskStatus.failed
+    assert finished.is_error
+    assert "usage limit" in finished.result_text
+
+    codex_res = next(
+        r for r in client.get("/api/resources").json()["resources"] if r["backend"] == "codex"
+    )
+    assert codex_res["usability_status"] == "usable"  # quota ≠ broken login
+    assert not codex_res["available"]
+    assert codex_res["cooldown_until"] > time.time()
+
+    # Another codex task is stuck until the cooldown lifts.
+    store.put(
+        Task(
+            project_id=pid,
+            workstream_id=ws.id,
+            repo="https://example.com/other.git",
+            backend="codex",
+            instructions="follow-up work",
+        )
+    )
+    _pump(client, store)
+    detail = client.get(f"/api/projects/{pid}").json()
+    assert detail["project"]["state"] == "blocked_resources"
+    assert store.list(Task, project_id=pid, status=TaskStatus.pending)
+
+    assert len(orch.invocations) > invocations_before
+    wake_text = orch.invocations[-1][0]
+    assert "failed" in wake_text
+    assert "usage limit" in wake_text
+
+
 def test_runner_auth_required(harness):
     client, *_ = harness
     assert client.post("/api/runners/register", json={"name": "x", "backends": []}).status_code == 401
