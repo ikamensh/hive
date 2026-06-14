@@ -150,12 +150,13 @@ def run(args: argparse.Namespace, client) -> dict | list:
         r = client.post(f"/api/tasks/{args.task_id}/cancel")
     elif c == "agents":
         from hive.backends import BACKEND_NAMES
-        from hive.runner import detect_backends
+        from hive.runner import discovery_payload
 
-        detected = detect_backends()
+        detected, discoveries = discovery_payload()
         return {
             "supported": list(BACKEND_NAMES),
             "detected": detected,
+            "discoveries": discoveries,
             "message": (
                 "supported agents detected"
                 if detected

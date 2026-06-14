@@ -20,7 +20,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from hive.backends import probe_instructions
+from hive.backends import REGISTRY, probe_instructions
 from hive.config import Config
 from hive.escalation import escalate
 from hive.models import (
@@ -94,10 +94,21 @@ class FeedbackBody(BaseModel):
     comment: str = ""
 
 
+class BackendDiscoveryInput(BaseModel):
+    name: str
+    installed: bool = True
+    status: str = "unknown"
+    path: str = ""
+    version: str = ""
+    message: str = ""
+
+
 class RunnerRegister(BaseModel):
     name: str
     backends: list[str]
     boot: bool = False  # true on daemon startup (vs periodic heartbeat)
+    discoveries: list[BackendDiscoveryInput] = []
+    auto_probe: bool = False
 
 
 class TaskResult(BaseModel):
@@ -198,6 +209,40 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
     app.router.lifespan_context = lifespan
     app.state.supervisor = supervisor
     app.state.store = store
+
+    def active_probe_task(resource: Resource) -> Task | None:
+        if not resource.last_probe_task_id:
+            return None
+        task = store.get(Task, resource.last_probe_task_id)
+        if task and task.kind == TaskKind.probe and task.status == TaskStatus.running:
+            return task
+        return None
+
+    def queue_probe(resource: Resource, runner: Runner) -> tuple[Task, Resource]:
+        if resource.backend not in runner.backends:
+            raise HTTPException(409, "runner no longer advertises this backend")
+        if task := active_probe_task(resource):
+            return task, resource
+
+        repo = _ensure_probe_repo(Path(config.data_dir or "/tmp/hive-data"))
+        task = store.put(
+            Task(
+                project_id="",
+                workstream_id="",
+                repo=str(repo),
+                kind=TaskKind.probe,
+                instructions=probe_instructions(resource.backend),
+                backend=resource.backend,
+                status=TaskStatus.running,
+                runner_id=runner.id,
+            )
+        )
+        resource.usability_status = ResourceUsability.probing
+        resource.last_probe_at = time.time()
+        resource.last_probe_task_id = task.id
+        resource.last_probe_text = "Probe queued."
+        store.put(resource)
+        return task, resource
 
     # ---- web API -------------------------------------------------------------
 
@@ -363,12 +408,24 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
 
     @app.get("/api/resources")
     def resources():
+        runners = {r.id: r for r in store.list(Runner)}
+
+        def resource_payload(resource: Resource) -> dict:
+            runner = runners.get(resource.runner_id)
+            available = (
+                resource.available()
+                and runner is not None
+                and runner.online()
+                and resource.backend in runner.backends
+            )
+            return {**resource.model_dump(), "available": available}
+
         return {
             "runners": [
-                {**r.model_dump(), "online": r.online()} for r in store.list(Runner)
+                {**r.model_dump(), "online": r.online()} for r in runners.values()
             ],
             "resources": [
-                {**r.model_dump(), "available": r.available()} for r in store.list(Resource)
+                resource_payload(r) for r in store.list(Resource)
             ],
         }
 
@@ -380,27 +437,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         runner = store.get(Runner, resource.runner_id)
         if not runner or not runner.online():
             raise HTTPException(409, "runner is offline")
-        if resource.backend not in runner.backends:
-            raise HTTPException(409, "runner no longer advertises this backend")
-
-        repo = _ensure_probe_repo(Path(config.data_dir or "/tmp/hive-data"))
-        task = store.put(
-            Task(
-                project_id="",
-                workstream_id="",
-                repo=str(repo),
-                kind=TaskKind.probe,
-                instructions=probe_instructions(resource.backend),
-                backend=resource.backend,
-                status=TaskStatus.running,
-                runner_id=runner.id,
-            )
-        )
-        resource.usability_status = ResourceUsability.probing
-        resource.last_probe_at = time.time()
-        resource.last_probe_task_id = task.id
-        resource.last_probe_text = "Probe queued."
-        store.put(resource)
+        task, resource = queue_probe(resource, runner)
         return {"task": task.model_dump(), "resource": {**resource.model_dump(), "available": resource.available()}}
 
     @app.get("/api/subscriptions")
@@ -472,21 +509,68 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         runner.backends = body.backends
         runner.last_seen = time.time()
         store.put(runner)
-        present = {(r.runner_id, r.backend) for r in store.list(Resource)}
-        for backend in body.backends:
-            if (runner.id, backend) not in present:
-                store.put(Resource(runner_id=runner.id, backend=backend))
+
         if body.boot:
             # A booting daemon executes nothing: whatever was in flight on this
-            # runner died with the previous process — requeue it.
+            # runner died with the previous process — requeue it before queuing
+            # fresh startup probes below.
             def requeue(task: Task) -> None:
-                task.status = TaskStatus.pending
-                task.runner_id = ""
-                task.delivered = False
+                if task.kind == TaskKind.probe:
+                    task.status = TaskStatus.failed
+                    task.is_error = True
+                    task.result_text = "Probe interrupted because the runner rebooted."
+                    task.finished_at = time.time()
+                else:
+                    task.status = TaskStatus.pending
+                    task.runner_id = ""
+                    task.delivered = False
 
             for task in store.list(Task, status=TaskStatus.running, runner_id=runner.id):
-                store.update(Task, task.id, requeue)
-                log.info("requeued task %s after runner %s reboot", task.id, runner.name)
+                updated = store.update(Task, task.id, requeue)
+                if updated and updated.kind == TaskKind.probe:
+                    for resource in store.list(
+                        Resource,
+                        runner_id=runner.id,
+                        backend=updated.backend,
+                    ):
+                        if resource.last_probe_task_id == updated.id:
+                            resource.usability_status = ResourceUsability.unknown
+                            resource.last_probe_text = updated.result_text
+                            store.put(resource)
+                    log.info("failed probe %s after runner %s reboot", task.id, runner.name)
+                else:
+                    log.info("requeued task %s after runner %s reboot", task.id, runner.name)
+
+        discovery_by_name = {d.name: d for d in body.discoveries}
+        resources_by_pair = {(r.runner_id, r.backend): r for r in store.list(Resource)}
+
+        def apply_discovery(resource: Resource, discovery: BackendDiscoveryInput) -> None:
+            resource.discovery_status = discovery.status
+            resource.discovery_text = discovery.message
+            resource.discovered_at = time.time()
+            resource.cli_path = discovery.path
+            resource.cli_version = discovery.version
+
+        for backend in body.backends:
+            resource = resources_by_pair.get((runner.id, backend)) or Resource(
+                runner_id=runner.id,
+                backend=backend,
+            )
+            if discovery := discovery_by_name.get(backend):
+                apply_discovery(resource, discovery)
+            store.put(resource)
+            resources_by_pair[(runner.id, backend)] = resource
+            if body.auto_probe and resource.usability_status == ResourceUsability.unknown:
+                queue_probe(resource, runner)
+
+        for discovery in body.discoveries:
+            if discovery.installed:
+                continue
+            resource = resources_by_pair.get((runner.id, discovery.name))
+            if resource:
+                apply_discovery(resource, discovery)
+                store.put(resource)
+
         return {"runner_id": runner.id}
 
     @app.post("/api/runners/{runner_id}/poll", dependencies=[Depends(runner_auth)])
@@ -549,12 +633,14 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
             if body.is_error and HUMAN_FIX_PATTERNS.search(body.text):
                 runner = store.get(Runner, task.runner_id)
                 runner_name = runner.name if runner else task.runner_id
+                hint = REGISTRY.get(task.backend).login_hint if task.backend in REGISTRY else ""
                 escalate(
                     store,
                     f"Fix {task.backend} login on {runner_name}",
                     instructions=(
                         f"Refresh or repair the `{task.backend}` CLI login on runner "
-                        f"`{runner_name}`, then rerun the resource probe.\n\n"
+                        f"`{runner_name}`, then rerun the resource probe."
+                        f"{chr(10) + chr(10) + hint if hint else ''}\n\n"
                         f"Recent probe output:\n\n```\n{body.text[:1500]}\n```"
                     ),
                 )

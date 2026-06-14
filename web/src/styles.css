@@ -1154,6 +1154,21 @@ textarea:focus {
 .probe-unknown {
   color: var(--ink-faint);
 }
+.discovery-ok {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 45%, var(--line));
+}
+.discovery-warning {
+  color: var(--honey);
+  border-color: color-mix(in srgb, var(--honey) 50%, var(--line));
+}
+.discovery-error, .discovery-missing {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 55%, var(--line));
+}
+.discovery-unknown {
+  color: var(--ink-faint);
+}
 .probe-age {
   margin-left: 8px;
   font-family: var(--mono);

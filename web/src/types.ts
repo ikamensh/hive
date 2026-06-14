@@ -96,6 +96,11 @@ export interface ResourceInfo {
   id: string;
   runner_id: string;
   backend: string;
+  discovery_status: string;
+  discovery_text: string;
+  discovered_at: number;
+  cli_path: string;
+  cli_version: string;
   usability_status: "unknown" | "probing" | "usable" | "failed";
   last_probe_at: number;
   last_probe_task_id: string;

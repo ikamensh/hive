@@ -180,6 +180,11 @@ class Resource(BaseModel):
     id: str = Field(default_factory=new_id)
     runner_id: str
     backend: str
+    discovery_status: str = "unknown"  # runner-local CLI check: missing | ok | warning | error
+    discovery_text: str = ""
+    discovered_at: float = 0.0
+    cli_path: str = ""
+    cli_version: str = ""
     usability_status: ResourceUsability = ResourceUsability.unknown
     last_probe_at: float = 0.0
     last_probe_task_id: str = ""

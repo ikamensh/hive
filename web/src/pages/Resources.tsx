@@ -230,6 +230,7 @@ export default function Resources() {
               <tr>
                 <th>backend</th>
                 <th>runner</th>
+                <th>discovery</th>
                 <th>usability</th>
                 <th>availability</th>
                 <th className="num">tasks</th>
@@ -242,6 +243,12 @@ export default function Resources() {
                 <tr key={res.id}>
                   <td className="mono">{res.backend}</td>
                   <td>{runnerName(res.runner_id)}</td>
+                  <td>
+                    <span className={`probe-status discovery-${res.discovery_status}`} title={res.discovery_text || res.cli_path || "not checked yet"}>
+                      {res.discovery_status}
+                    </span>
+                    {res.cli_version && <span className="probe-age">{res.cli_version}</span>}
+                  </td>
                   <td>
                     <span className={`probe-status probe-${res.usability_status}`} title={res.last_probe_text || "not probed yet"}>
                       {res.usability_status === "unknown" ? "probe required" : res.usability_status}
@@ -272,7 +279,7 @@ export default function Resources() {
               ))}
               {data.resources.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="muted">
+                  <td colSpan={8} className="muted">
                     no resources
                   </td>
                 </tr>

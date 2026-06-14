@@ -303,9 +303,20 @@ class Tools:
             runner = runners_by_id.get(res.runner_id)
             runner_name = runner.name if runner else res.runner_id
             cooldown = f", cooldown_until={res.cooldown_until:.0f}" if res.cooldown_until else ""
+            available = (
+                res.available()
+                and runner is not None
+                and runner.online()
+                and res.backend in runner.backends
+            )
+            discovery = (
+                f", discovery={res.discovery_status}"
+                if res.discovery_status != "unknown"
+                else ""
+            )
             resource_lines.append(
                 f"- {runner_name}/{res.backend}: usability={res.usability_status}, "
-                f"available={res.available()}{cooldown}"
+                f"available={available}{cooldown}{discovery}"
             )
         todo_lines = [
             f"- {t.id} [{'org-wide' if not t.project_id else 'this project'}]: {t.title}"

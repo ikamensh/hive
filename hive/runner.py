@@ -14,11 +14,18 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 import httpx
 
-from hive.backends import BACKEND_NAMES, PROBE_MARKER, make_session
+from hive.backends import (
+    BACKEND_NAMES,
+    PROBE_MARKER,
+    detected_backend_names,
+    discover_backends,
+    make_session,
+)
 
 HIVE_URL = os.environ.get("HIVE_URL", "http://localhost:8000")
 HIVE_BASIC_AUTH = os.environ.get("HIVE_BASIC_AUTH", "")  # "user:pass" when behind Caddy
@@ -37,9 +44,12 @@ EXHAUSTED_PATTERNS = re.compile(
 
 
 def detect_backends() -> list[str]:
-    from kodo.factory import available_backends
+    return detected_backend_names()
 
-    return [name for name, ok in available_backends().items() if ok and name in BACKEND_NAMES]
+
+def discovery_payload() -> tuple[list[str], list[dict]]:
+    discoveries = discover_backends()
+    return detected_backend_names(discoveries), [asdict(d) for d in discoveries]
 
 
 def checkout(repo_url: str, branch: str = "") -> Path:
@@ -173,12 +183,13 @@ def main(argv: list[str] | None = None) -> None:
     if argv == ["--list-backends"]:
         import json
 
-        detected = detect_backends()
+        detected, discoveries = discovery_payload()
         print(
             json.dumps(
                 {
                     "supported": list(BACKEND_NAMES),
                     "detected": detected,
+                    "discoveries": discoveries,
                     "message": (
                         "supported agents detected"
                         if detected
@@ -195,14 +206,25 @@ def main(argv: list[str] | None = None) -> None:
     auth = tuple(HIVE_BASIC_AUTH.split(":", 1)) if HIVE_BASIC_AUTH else None
     client = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=40.0, auth=auth)
 
-    backends = detect_backends()
-    if not backends:
-        log.error("no supported agents found; not registering empty runner capacity")
-        return
-    runner_id = client.post(
-        "/api/runners/register", json={"name": RUNNER_NAME, "backends": backends, "boot": True}
-    ).raise_for_status().json()["runner_id"]
-    log.info("registered as %s (%s) with backends %s", RUNNER_NAME, runner_id, backends)
+    def register(client: httpx.Client, *, boot: bool = False) -> tuple[str, list[str]]:
+        backends, discoveries = discovery_payload()
+        runner_id = client.post(
+            "/api/runners/register",
+            json={
+                "name": RUNNER_NAME,
+                "backends": backends,
+                "boot": boot,
+                "discoveries": discoveries,
+                "auto_probe": True,
+            },
+        ).raise_for_status().json()["runner_id"]
+        return runner_id, backends
+
+    runner_id, backends = register(client, boot=True)
+    if backends:
+        log.info("registered as %s (%s) with backends %s", RUNNER_NAME, runner_id, backends)
+    else:
+        log.warning("registered as %s (%s) with no supported agents on PATH", RUNNER_NAME, runner_id)
 
     def heartbeat() -> None:
         # Keeps last_seen fresh while a long task blocks the main loop;
@@ -211,7 +233,7 @@ def main(argv: list[str] | None = None) -> None:
         while True:
             time.sleep(30)
             try:
-                hb.post("/api/runners/register", json={"name": RUNNER_NAME, "backends": backends})
+                register(hb)
             except httpx.HTTPError:
                 pass
 
@@ -221,9 +243,7 @@ def main(argv: list[str] | None = None) -> None:
         try:
             response = client.post(f"/api/runners/{runner_id}/poll")
             if response.status_code == 404:
-                runner_id = client.post(
-                    "/api/runners/register", json={"name": RUNNER_NAME, "backends": backends}
-                ).raise_for_status().json()["runner_id"]
+                runner_id, backends = register(client)
                 continue
             task = response.raise_for_status().json().get("task")
             if not task:

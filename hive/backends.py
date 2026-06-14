@@ -10,10 +10,23 @@ only the runner machine needs the agent CLIs installed.
 
 from __future__ import annotations
 
+import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from typing import Callable
 
 PROBE_MARKER = "HIVE_AGENT_PROBE_OK"
+PREFLIGHT_TIMEOUT_S = 15.0
+
+AUTH_WARNING_PATTERNS = re.compile(
+    r"auth|login|credential|api.?key|not authenticated|forbidden|permission|unauthori[sz]ed",
+    re.IGNORECASE,
+)
+SUBSCRIPTION_WARNING_PATTERNS = re.compile(
+    r"subscription|billing|quota|usage.?limit|plan.?limit|rate.?limit|too many requests|429\b",
+    re.IGNORECASE,
+)
 
 
 def _claude(model: str):
@@ -44,19 +57,70 @@ def _gemini_cli(model: str):
 @dataclass(frozen=True)
 class Backend:
     """One coding-agent backend. `make_session(model)` builds a kodo session
-    (empty model = the backend's own default)."""
+    (empty model = the backend's own default). `binary`/`preflight` describe
+    the runner-side discovery strategy; the actual usability proof is still a
+    Hive probe task that launches the agent against a throwaway repository."""
 
     name: str
     make_session: Callable[[str], object]
+    binary: str
+    preflight: tuple[str, ...]
+    login_hint: str
+
+
+@dataclass(frozen=True)
+class BackendDiscovery:
+    """Best-effort runner-local discovery for one backend.
+
+    `installed` means Hive found the CLI on PATH. `status`/`message` are
+    diagnostics only; a successful probe is what makes a resource dispatchable.
+    """
+
+    name: str
+    installed: bool
+    status: str
+    path: str = ""
+    version: str = ""
+    message: str = ""
 
 
 REGISTRY: dict[str, Backend] = {
     b.name: b
     for b in (
-        Backend("claude", _claude),
-        Backend("cursor", _cursor),
-        Backend("codex", _codex),
-        Backend("gemini-cli", _gemini_cli),
+        Backend(
+            "claude",
+            _claude,
+            binary="claude",
+            preflight=("claude", "--version"),
+            login_hint="Run `claude login` on the runner, then let Hive probe it again.",
+        ),
+        Backend(
+            "cursor",
+            _cursor,
+            binary="cursor-agent",
+            preflight=("cursor-agent", "--version"),
+            login_hint=(
+                "Refresh the Cursor Agent login on the runner "
+                "(`cursor-agent login` if available), then let Hive probe it again."
+            ),
+        ),
+        Backend(
+            "codex",
+            _codex,
+            binary="codex",
+            preflight=("codex", "--version"),
+            login_hint="Run `codex login` on the runner, then let Hive probe it again.",
+        ),
+        Backend(
+            "gemini-cli",
+            _gemini_cli,
+            binary="gemini",
+            preflight=("gemini", "--version"),
+            login_hint=(
+                "Run `gemini auth login` or set `GEMINI_API_KEY` for the runner, "
+                "then let Hive probe it again."
+            ),
+        ),
     )
 }
 
@@ -69,6 +133,105 @@ def make_session(backend: str, model: str = ""):
     if backend not in REGISTRY:
         raise ValueError(f"unknown backend {backend!r}; known: {BACKEND_NAMES}")
     return REGISTRY[backend].make_session(model)
+
+
+def _snippet(text: str, limit: int = 500) -> str:
+    return " ".join(text.split())[:limit]
+
+
+def _first_line(text: str) -> str:
+    return next((line.strip() for line in text.splitlines() if line.strip()), "")
+
+
+def _warning_from_output(text: str) -> str:
+    if AUTH_WARNING_PATTERNS.search(text):
+        return "authentication issue detected by preflight"
+    if SUBSCRIPTION_WARNING_PATTERNS.search(text):
+        return "subscription, billing, or quota issue detected by preflight"
+    return ""
+
+
+def discover_backend(backend: Backend) -> BackendDiscovery:
+    """Detect one backend without spending model quota.
+
+    This intentionally stops at "CLI appears runnable enough to try". Some
+    CLIs reveal auth/subscription problems in preflight output, but many do
+    not, so `probe_instructions()` remains the authoritative availability
+    check.
+    """
+    path = shutil.which(backend.binary)
+    if not path:
+        return BackendDiscovery(
+            name=backend.name,
+            installed=False,
+            status="missing",
+            message=f"`{backend.binary}` was not found on PATH",
+        )
+
+    try:
+        proc = subprocess.run(
+            list(backend.preflight),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=PREFLIGHT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return BackendDiscovery(
+            name=backend.name,
+            installed=True,
+            status="warning",
+            path=path,
+            version="timeout",
+            message=f"preflight timed out after {PREFLIGHT_TIMEOUT_S:.0f}s",
+        )
+    except OSError as exc:
+        return BackendDiscovery(
+            name=backend.name,
+            installed=True,
+            status="error",
+            path=path,
+            message=str(exc),
+        )
+
+    combined = f"{proc.stderr}\n{proc.stdout}"
+    warning = _warning_from_output(combined)
+    version = _first_line(proc.stdout) or _first_line(proc.stderr)
+    if proc.returncode == 0:
+        return BackendDiscovery(
+            name=backend.name,
+            installed=True,
+            status="warning" if warning else "ok",
+            path=path,
+            version=version or "ok",
+            message=warning,
+        )
+
+    return BackendDiscovery(
+        name=backend.name,
+        installed=True,
+        status="warning" if warning else "error",
+        path=path,
+        version=version or f"exit {proc.returncode}",
+        message=warning or _snippet(combined) or f"preflight exited {proc.returncode}",
+    )
+
+
+def discover_backends() -> list[BackendDiscovery]:
+    """Discover every backend Hive knows about, in registry order."""
+    return [discover_backend(backend) for backend in REGISTRY.values()]
+
+
+def detected_backend_names(discoveries: list[BackendDiscovery] | None = None) -> list[str]:
+    """Names that should be advertised by a runner.
+
+    A backend is advertised when its CLI is installed. Dispatch still requires
+    a successful Hive probe, so an installed-but-unauthenticated CLI is visible
+    to the operator without being used for project work.
+    """
+    discoveries = discoveries if discoveries is not None else discover_backends()
+    return [d.name for d in discoveries if d.installed and d.name in REGISTRY]
 
 
 def probe_instructions(backend: str) -> str:
