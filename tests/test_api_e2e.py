@@ -471,6 +471,7 @@ def test_local_runner_start_endpoint(tmp_path):
         def __init__(self):
             self.starts = 0
             self.stops = 0
+            self.autostart = False
 
         def status(self, *, message=""):
             return {
@@ -479,10 +480,14 @@ def test_local_runner_start_endpoint(tmp_path):
                 "registered": False,
                 "runner_name": self.runner_name,
                 "pid": 123 if self.starts > 0 else 0,
-                "autostart": False,
+                "autostart": self.autostart,
                 "log_path": str(tmp_path / "local-runner.log"),
                 "message": message,
             }
+
+        def set_autostart(self, enabled):
+            self.autostart = enabled
+            return self.status(message="local runner autostart updated")
 
         def start(self):
             self.starts += 1
@@ -517,6 +522,80 @@ def test_local_runner_start_endpoint(tmp_path):
     again = client.post("/api/local-runner/start").json()
     assert again["message"] == "local runner already registered"
     assert local_runner.starts == 1
+
+
+def test_local_runner_autostart_endpoint_starts_runner(tmp_path):
+    from hive.api import create_app
+
+    class FakeLocalRunner:
+        runner_name = "local-host"
+
+        def __init__(self):
+            self.starts = 0
+            self.autostart = False
+
+        def status(self, *, message=""):
+            return {
+                "supported": True,
+                "running": self.starts > 0,
+                "registered": False,
+                "runner_name": self.runner_name,
+                "pid": 123 if self.starts > 0 else 0,
+                "autostart": self.autostart,
+                "log_path": str(tmp_path / "local-runner.log"),
+                "message": message,
+            }
+
+        def set_autostart(self, enabled):
+            self.autostart = enabled
+            return self.status(message="local runner autostart updated")
+
+        def start(self):
+            self.starts += 1
+            return self.status(message="local runner starting")
+
+        def stop(self):
+            pass
+
+    store = MemoryStore()
+    supervisor = Supervisor(store, ScriptedOrchestrator(store).invoke)
+    config = Config(
+        gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
+        orch_model="", runner_token="test-token", data_dir=tmp_path,
+    )
+    local_runner = FakeLocalRunner()
+    client = TestClient(create_app(store, supervisor, config, local_runner=local_runner))
+
+    updated = client.patch("/api/local-runner", json={"autostart": True}).json()
+    assert updated["autostart"] is True
+    assert updated["running"] is True
+    assert updated["registered"] is False
+    assert local_runner.starts == 1
+
+    updated = client.patch("/api/local-runner", json={"autostart": False}).json()
+    assert updated["autostart"] is False
+    assert updated["running"] is True
+    assert local_runner.starts == 1
+
+
+def test_local_runner_autostart_writes_machine_config(tmp_path, monkeypatch):
+    from hive.config_file import load_stored_config
+    from hive.local_runner import LocalRunnerManager
+
+    config_file = tmp_path / "config.env"
+    monkeypatch.setenv("HIVE_CONFIG_FILE", str(config_file))
+    config = Config(
+        gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
+        orch_model="", runner_token="test-token", data_dir=tmp_path,
+    )
+    manager = LocalRunnerManager(config)
+
+    status = manager.set_autostart(True)
+
+    assert status["autostart"] is True
+    assert config.autostart_runner is True
+    assert load_stored_config(config_file)["HIVE_AUTOSTART_RUNNER"] == "true"
+    assert config_file.stat().st_mode & 0o777 == 0o600
 
 
 def test_cancel_pending_task(harness):

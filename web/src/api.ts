@@ -61,6 +61,8 @@ const realApi = {
   resources: () => http<ResourcesPayload>("/api/resources"),
   startLocalRunner: () =>
     http<NonNullable<ResourcesPayload["local_runner"]>>("/api/local-runner/start", { method: "POST" }),
+  updateLocalRunner: (patch: { autostart: boolean }) =>
+    http<NonNullable<ResourcesPayload["local_runner"]>>("/api/local-runner", { method: "PATCH", body: JSON.stringify(patch) }),
   probeResource: (id: string) =>
     http(`/api/resources/${id}/probe`, { method: "POST" }),
   updateResource: (id: string, patch: { enabled?: boolean; disabled_reason?: string }) =>

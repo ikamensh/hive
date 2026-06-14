@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from hive.config import Config
+from hive.config_file import set_stored_config_value
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -60,6 +61,11 @@ class LocalRunnerManager:
             "log_path": str(self.log_path()),
             "message": message,
         }
+
+    def set_autostart(self, enabled: bool) -> dict:
+        self.config.autostart_runner = enabled
+        set_stored_config_value("HIVE_AUTOSTART_RUNNER", "true" if enabled else "false")
+        return self.status(message="local runner autostart updated")
 
     def log_path(self) -> Path:
         return self.config.data_dir / "local-runner.log"

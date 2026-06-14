@@ -410,6 +410,15 @@ export const api = {
     }
     return structuredClone(local);
   },
+  updateLocalRunner: async (patch: { autostart: boolean }) => {
+    const local = resourcesPayload.local_runner!;
+    local.autostart = patch.autostart;
+    local.message = "local runner autostart updated";
+    if (patch.autostart && !local.running) {
+      return api.startLocalRunner();
+    }
+    return structuredClone(local);
+  },
   probeResource: async (id: string) => {
     const res = resourcesPayload.resources.find((r) => r.id === id);
     if (!res) throw new Error("not found");

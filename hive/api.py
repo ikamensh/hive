@@ -140,6 +140,10 @@ class ResourcePatch(BaseModel):
     disabled_reason: str = ""
 
 
+class LocalRunnerPatch(BaseModel):
+    autostart: bool
+
+
 def _ensure_probe_repo(data_dir: Path) -> Path:
     repo = data_dir / PROBE_REPO_DIR
     repo.mkdir(parents=True, exist_ok=True)
@@ -319,6 +323,25 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 task.status = HumanTaskStatus.done
                 task.done_at = time.time()
                 store.put(task)
+
+    def local_runner_payload(workspace_id: str, status: dict | None = None) -> dict:
+        if local_runner is None:
+            return {
+                "supported": False,
+                "running": False,
+                "registered": False,
+                "runner_name": "",
+                "pid": 0,
+                "autostart": False,
+                "log_path": "",
+                "message": "local runner management is unavailable",
+            }
+        status = status or local_runner.status()
+        status["registered"] = any(
+            r.name == status["runner_name"] and r.online()
+            for r in store.list(Runner, workspace_id=workspace_id)
+        )
+        return status
 
     # ---- auth ---------------------------------------------------------------
 
@@ -557,25 +580,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             )
             return {**resource.model_dump(), "available": available}
 
-        def local_runner_payload() -> dict:
-            if local_runner is None:
-                return {
-                    "supported": False,
-                    "running": False,
-                    "registered": False,
-                    "runner_name": "",
-                    "pid": 0,
-                    "autostart": False,
-                    "log_path": "",
-                    "message": "local runner management is unavailable",
-                }
-            status = local_runner.status()
-            status["registered"] = any(
-                r.name == status["runner_name"] and r.online()
-                for r in runners.values()
-            )
-            return status
-
         return {
             "machines": [
                 m.model_dump() for m in store.list(Machine, workspace_id=ctx.workspace_id)
@@ -587,8 +591,17 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 resource_payload(r)
                 for r in store.list(Resource, workspace_id=ctx.workspace_id)
             ],
-            "local_runner": local_runner_payload(),
+            "local_runner": local_runner_payload(ctx.workspace_id),
         }
+
+    @app.patch("/api/local-runner")
+    def update_local_runner(body: LocalRunnerPatch, ctx: AuthContext = Depends(current)):
+        if local_runner is None:
+            raise HTTPException(404, "local runner management is unavailable")
+        status = local_runner.set_autostart(body.autostart)
+        if body.autostart and not status["running"]:
+            status = local_runner.start()
+        return local_runner_payload(ctx.workspace_id, status)
 
     @app.post("/api/local-runner/start")
     def start_local_runner(ctx: AuthContext = Depends(current)):
@@ -597,11 +610,9 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         for runner in store.list(Runner, workspace_id=ctx.workspace_id):
             if runner.name == local_runner.runner_name and runner.online():
                 status = local_runner.status(message="local runner already registered")
-                status["registered"] = True
-                return status
+                return local_runner_payload(ctx.workspace_id, status)
         status = local_runner.start()
-        status["registered"] = False
-        return status
+        return local_runner_payload(ctx.workspace_id, status)
 
     @app.post("/api/resources/{resource_id}/probe")
     def probe_resource(resource_id: str, ctx: AuthContext = Depends(current)):

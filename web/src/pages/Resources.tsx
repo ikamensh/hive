@@ -179,6 +179,7 @@ export default function Resources() {
   const [probing, setProbing] = useState<string | null>(null);
   const [updatingResource, setUpdatingResource] = useState<string | null>(null);
   const [startingRunner, setStartingRunner] = useState(false);
+  const [updatingAutostart, setUpdatingAutostart] = useState(false);
   const [runnerError, setRunnerError] = useState("");
   // 1s ticker so cooldown countdowns feel live between polls.
   const [, setTick] = useState(0);
@@ -225,6 +226,19 @@ export default function Resources() {
     }
   };
 
+  const updateLocalRunnerAutostart = async (autostart: boolean) => {
+    setUpdatingAutostart(true);
+    setRunnerError("");
+    try {
+      await api.updateLocalRunner({ autostart });
+      await refresh();
+    } catch {
+      setRunnerError("could not update local runner autostart");
+    } finally {
+      setUpdatingAutostart(false);
+    }
+  };
+
   const localRunner = data?.local_runner;
   const machineCards = data ? buildMachineCards(data) : [];
 
@@ -235,8 +249,9 @@ export default function Resources() {
         {localRunner?.supported && (
           <LocalRunnerAction
             localRunner={localRunner}
-            busy={startingRunner}
+            busy={startingRunner || updatingAutostart}
             onStart={startLocalRunner}
+            onAutostart={updateLocalRunnerAutostart}
           />
         )}
       </div>
@@ -538,21 +553,33 @@ function LocalRunnerAction({
   localRunner,
   busy,
   onStart,
+  onAutostart,
 }: {
   localRunner: LocalRunnerInfo;
   busy: boolean;
   onStart: () => void;
+  onAutostart: (autostart: boolean) => void;
 }) {
-  if (localRunner.registered) {
-    return (
-      <span className="local-runner-chip" title={localRunner.message || localRunner.log_path}>
-        this host enrolled
-      </span>
-    );
-  }
   return (
-    <button className="ghost" onClick={onStart} disabled={busy}>
-      {busy ? "starting" : "enroll this host"}
-    </button>
+    <div className="local-runner-controls">
+      <label className="runner-autostart" title="start this host's runner automatically with hive run">
+        <input
+          type="checkbox"
+          checked={localRunner.autostart}
+          disabled={busy}
+          onChange={(event) => onAutostart(event.currentTarget.checked)}
+        />
+        <span>auto-start runner</span>
+      </label>
+      {localRunner.registered ? (
+        <span className="local-runner-chip" title={localRunner.message || localRunner.log_path}>
+          this host enrolled
+        </span>
+      ) : (
+        <button className="ghost" onClick={onStart} disabled={busy}>
+          {busy ? "starting" : "enroll this host"}
+        </button>
+      )}
+    </div>
   );
 }
