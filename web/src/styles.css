@@ -231,7 +231,7 @@ textarea:focus {
 .brand svg {
   align-self: center;
 }
-.brand span {
+.brand .brand-word {
   font-family: var(--display);
   font-weight: 700;
   font-size: 22px;
