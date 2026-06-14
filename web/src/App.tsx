@@ -1,7 +1,8 @@
+import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useOutletContext } from "react-router-dom";
 import { api, usePoll } from "./api";
 import { useTheme } from "./theme";
-import type { ProjectDetail, ResourcesPayload } from "./types";
+import type { AuthInfo, ProjectDetail, ResourcesPayload, StorageInfo } from "./types";
 
 export interface Overview {
   details: ProjectDetail[];
@@ -36,7 +37,74 @@ const emptyOverview: Overview = {
   resources: { machines: [], runners: [], resources: [] },
 };
 
+function storageLabel(storage: StorageInfo): string {
+  if (storage.backend === "firestore") return "cloud store";
+  if (storage.backend === "file") return "local files";
+  return "in-memory";
+}
+
+function AccountMenu({
+  auth,
+  loggingOut,
+  onSignOut,
+}: {
+  auth: AuthInfo;
+  loggingOut: boolean;
+  onSignOut: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const isDev = auth.auth_mode === "dev";
+
+  useEffect(() => {
+    const onDoc = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  return (
+    <div className="account-menu" ref={rootRef}>
+      <button
+        type="button"
+        className="account-chip"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        title={`Signed in as ${auth.user.github_login}`}
+      >
+        <span className="account-user">@{auth.user.github_login}</span>
+        {isDev && <span className="account-mode">dev</span>}
+        <svg className="account-chevron" viewBox="0 0 24 24" width="14" height="14" aria-hidden>
+          <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      </button>
+      {open && (
+        <div className="account-dropdown" role="menu">
+          {isDev && (
+            <p className="account-dropdown-hint">Dev auth auto-signs in — sign out needs GitHub auth mode.</p>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            className="account-dropdown-item"
+            disabled={loggingOut || isDev}
+            onClick={() => {
+              setOpen(false);
+              onSignOut();
+            }}
+          >
+            Sign out
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
+  const [loggingOut, setLoggingOut] = useState(false);
   const auth = usePoll(() => api.me(), [], 30000);
   const poll = usePoll(
     () => (auth.data ? fetchOverview() : Promise.resolve(emptyOverview)),
@@ -46,6 +114,16 @@ export default function App() {
   const open = poll.data?.openQuestions ?? 0;
   const todos = poll.data?.openTodos ?? 0;
   const attention = open + todos;
+
+  const signOut = async () => {
+    setLoggingOut(true);
+    try {
+      await api.logout();
+      window.location.href = "/";
+    } catch {
+      setLoggingOut(false);
+    }
+  };
 
   if (!auth.data && auth.failed) {
     return (
@@ -87,6 +165,11 @@ export default function App() {
           </svg>
           <span>hive</span>
           <small>control plane</small>
+          {auth.data?.storage && (
+            <span className="storage-chip" title={auth.data.storage.store_path ?? auth.data.storage.gcp_project ?? undefined}>
+              {storageLabel(auth.data.storage)}
+            </span>
+          )}
         </NavLink>
         <nav>
           <NavLink to="/" end>
@@ -94,16 +177,7 @@ export default function App() {
           </NavLink>
           <NavLink to="/resources">resources</NavLink>
         </nav>
-        {auth.data && (
-          <div
-            className="account-chip"
-            title={`Signed in as ${auth.data.user.github_login} in workspace ${auth.data.workspace.name}`}
-          >
-            <span className="account-user">@{auth.data.user.github_login}</span>
-            <span className="account-workspace">{auth.data.workspace.name}</span>
-            {auth.data.auth_mode === "dev" && <span className="account-mode">dev</span>}
-          </div>
-        )}
+        {auth.data && <AccountMenu auth={auth.data} loggingOut={loggingOut} onSignOut={signOut} />}
         <button
           type="button"
           className="theme-toggle ghost"

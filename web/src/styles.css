@@ -273,8 +273,12 @@ textarea:focus {
   background: var(--bg-raise);
 }
 
-.account-chip {
+.account-menu {
+  position: relative;
   margin-left: auto;
+}
+
+.account-chip {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -285,22 +289,68 @@ textarea:focus {
   background: var(--bg-raise);
   font-family: var(--mono);
   white-space: nowrap;
+  cursor: pointer;
+  color: inherit;
+}
+.account-chip:hover {
+  border-color: var(--ink-faint);
 }
 .account-user {
   color: var(--ink);
   font-size: 12.5px;
 }
-.account-workspace,
 .account-mode {
   color: var(--ink-faint);
   font-size: 11px;
-}
-.account-mode {
   padding: 1px 6px;
   border: 1px solid var(--line-soft);
   border-radius: 999px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+.account-chevron {
+  color: var(--ink-faint);
+  flex-shrink: 0;
+}
+.account-dropdown {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 240px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-card);
+  padding: 6px;
+}
+.account-dropdown-hint {
+  margin: 0;
+  padding: 0 10px 8px;
+  font-size: 11px;
+  color: var(--ink-faint);
+  line-height: 1.4;
+}
+.account-dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-dim);
+  font-family: var(--body);
+  font-size: 13px;
+  cursor: pointer;
+}
+.account-dropdown-item:hover:not(:disabled) {
+  background: var(--bg-raise);
+  color: var(--ink);
+}
+.account-dropdown-item:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .q-counter {
