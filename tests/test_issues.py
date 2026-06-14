@@ -13,13 +13,18 @@ from hive.issues import (
     activate_next,
     advance_issues,
     issue_branch,
+    LANDING_FAILED_PREFIX,
     reconcile,
+    resolve_issue_on_github,
 )
 from hive.models import (
     Project,
     ProjectState,
+    HumanTask,
+    HumanTaskStatus,
     Task,
     TaskKind,
+    TaskStatus,
     Verdict,
     WorkSource,
     Workstream,
@@ -88,6 +93,21 @@ def test_reconcile_regates_stuck_issue_on_rescan(stuck):
     assert store.get(Workstream, ws.id).status == WorkstreamStatus.queued
 
 
+def test_reconcile_closed_landing_failure_is_done():
+    store = MemoryStore()
+    project = issues_project(store)
+    reconcile(store, project, [issue(4)])
+    ws = store.list(Workstream, project_id=project.id)[0]
+    ws.status = WorkstreamStatus.rejected
+    ws.parked_reason = f"{LANDING_FAILED_PREFIX}: close issue #4 failed"
+    store.put(ws)
+
+    notes = reconcile(store, project, [])  # issue closed on GitHub
+
+    assert store.get(Workstream, ws.id).status == WorkstreamStatus.done
+    assert notes == ["marked #4 done: issue closed on GitHub after landing retry"]
+
+
 # -- resolve task setup ------------------------------------------------------
 
 
@@ -111,9 +131,11 @@ def test_resolve_task_carries_issue_context():
     store = MemoryStore()
     project = issues_project(store)
     reconcile(store, project, [issue(42, "login broken", "stack trace here", ["http://x/s.png"])])
-    advance_issues(store, project)
+    advance_issues(store, project, model="operator-model")
     task = store.list(Task, project_id=project.id)[0]
     assert task.branch == issue_branch(42) == "hive/issue-42"
+    assert task.fresh_branch is True
+    assert task.model == "operator-model"
     assert task.issue_number == 42
     assert "stack trace here" in task.issue_doc
     assert task.issue_attachments == ["http://x/s.png"]
@@ -126,6 +148,37 @@ def test_parse_resolve_and_review():
     assert parse_resolve("nothing") == Verdict.none
     assert parse_review("ok\nREVIEW: ACCEPT") == Verdict.accept
     assert parse_review("bad\nREVIEW: REJECT") == Verdict.reject
+
+
+def test_resolve_issue_close_is_idempotent_when_already_closed(monkeypatch):
+    class Resp:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = str(payload)
+
+        @property
+        def is_success(self):
+            return 200 <= self.status_code < 300
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if not self.is_success:
+                raise AssertionError("unexpected raise_for_status")
+
+    calls = []
+    monkeypatch.setattr("hive.issues.httpx.post", lambda *a, **k: Resp(201, {}))
+    monkeypatch.setattr(
+        "hive.issues.httpx.patch",
+        lambda *a, **k: calls.append("patch") or Resp(422, {"message": "Validation Failed"}),
+    )
+    monkeypatch.setattr("hive.issues.httpx.get", lambda *a, **k: Resp(200, {"state": "closed"}))
+
+    resolve_issue_on_github("https://github.com/o/r", 4, "done", "token")
+
+    assert calls == ["patch"]
 
 
 # -- supervisor state --------------------------------------------------------
@@ -308,6 +361,69 @@ def test_strict_sequencing_starts_next_issue_only_after_landing(app, monkeypatch
     assert r2["kind"] == "resolve" and r2["issue_number"] == 2
 
 
+def test_landing_failure_does_not_advance_to_next_issue(app, monkeypatch):
+    client, store = app
+    pid = _issues_project_via_api(client)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    _pass_preflight(monkeypatch)
+    monkeypatch.setattr(
+        "hive.api.fetch_open_issues_full",
+        lambda repo, token: [issue(1, "bug a"), issue(2, "bug b")],
+    )
+    def fail_merge(repo, head, token, message=""):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("hive.api.merge_branch", fail_merge)
+
+    client.post(f"/api/projects/{pid}/scan-issues")
+    _pump(client, store)
+    resolve = _poll(client, rid)
+    _report(client, resolve["id"], "fixed\nOUTCOME: FIXED")
+    _pump(client, store)
+    review = _poll(client, rid)
+    _report(client, review["id"], "good\nREVIEW: ACCEPT")
+
+    tasks = store.list(Task, project_id=pid)
+    assert sorted(t.issue_number for t in tasks if t.kind == TaskKind.resolve) == [1]
+    ws = store.get(Workstream, review["workstream_id"])
+    assert ws.status == WorkstreamStatus.rejected
+    assert ws.parked_reason.startswith(LANDING_FAILED_PREFIX)
+    assert [t.title for t in store.list(HumanTask, project_id=pid)] == ["Land issue #1 failed"]
+
+
+def test_mark_landing_failure_todo_done_marks_closed_issue_done(app, monkeypatch):
+    client, store = app
+    pid = _issues_project_via_api(client)
+    _pass_preflight(monkeypatch)
+    monkeypatch.setattr("hive.api.issue_is_closed", lambda repo, number, token: True)
+    project = store.get(Project, pid)
+    ws = store.put(
+        Workstream(
+            workspace_id=project.workspace_id,
+            project_id=pid,
+            title="#4 settings",
+            status=WorkstreamStatus.rejected,
+            source=WorkstreamSource.issue,
+            issue_number=4,
+            parked_reason=f"{LANDING_FAILED_PREFIX}: close failed",
+        )
+    )
+    human = store.put(
+        HumanTask(
+            workspace_id=project.workspace_id,
+            project_id=pid,
+            title="Land issue #4 failed",
+            instructions="land it",
+        )
+    )
+
+    resp = client.post(f"/api/human-tasks/{human.id}/done")
+
+    assert resp.status_code == 200
+    assert store.get(HumanTask, human.id).status == HumanTaskStatus.done
+    assert store.get(Workstream, ws.id).status == WorkstreamStatus.done
+
+
 def test_resolve_blocked_holds_issue(app, monkeypatch):
     client, store = app
     pid = _issues_project_via_api(client)
@@ -323,6 +439,22 @@ def test_resolve_blocked_holds_issue(app, monkeypatch):
     assert ws.status == WorkstreamStatus.blocked_clarity
     # no review task was queued
     assert not [t for t in store.list(Task, project_id=pid) if t.kind == TaskKind.review]
+
+
+def test_cancel_pending_issue_task_requeues_issue(app, monkeypatch):
+    client, store = app
+    pid = _issues_project_via_api(client)
+    _pass_preflight(monkeypatch)
+    monkeypatch.setattr("hive.api.fetch_open_issues_full", lambda repo, token: [issue(6, "bug")])
+    client.post(f"/api/projects/{pid}/scan-issues")
+
+    task = store.list(Task, project_id=pid)[0]
+    resp = client.post(f"/api/tasks/{task.id}/cancel")
+    assert resp.status_code == 200
+    assert store.get(Task, task.id).status == TaskStatus.cancelled
+    ws = store.get(Workstream, task.workstream_id)
+    assert ws.status == WorkstreamStatus.queued
+    assert "scan to retry" in ws.parked_reason
 
 
 def test_review_reject_marks_rejected(app, monkeypatch):
@@ -358,9 +490,11 @@ def test_scan_downloads_attachments_and_serves_to_runner(app, monkeypatch):
             pass
 
     monkeypatch.setattr("hive.issues.httpx.get", lambda *a, **k: FakeResp())
-    client.post(f"/api/projects/{pid}/scan-issues")
+    resp = client.post(f"/api/projects/{pid}/scan-issues").json()
 
     task = store.list(Task, project_id=pid)[0]
+    assert resp["attachments_downloaded"] == 1
+    assert resp["attachments_failed"] == 0
     assert task.issue_attachments == ["a.png"]  # URL replaced by stored filename
     got = client.get(f"/api/tasks/{task.id}/attachments/a.png", headers=RUNNER_HEADERS)
     assert got.status_code == 200 and got.content == b"PNGBYTES"

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useParams } from "react-router-dom";
-import { ago, api, duration, money, repoShort, usePoll } from "../api";
+import { ApiError, ago, api, duration, money, repoShort, usePoll } from "../api";
 import { RepoListEditor, RepoUrlInput } from "../components/RepoPicker";
 import {
   AUTONOMY_OPTIONS,
@@ -11,7 +11,7 @@ import {
   StateBadge,
   WORK_SOURCE_OPTIONS,
 } from "../components/shared";
-import type { AgentConversation, Autonomy, GuessPropensity, HumanTask, Mode, Project, ProjectPatch, Question, ResourceInfo, ScanResult, Task, Workstream, WorkstreamStatus } from "../types";
+import type { AgentConversation, Autonomy, GuessPropensity, HumanTask, Mode, PreflightCheck, PreflightResult, Project, ProjectPatch, Question, ResourceInfo, ScanResult, Task, WorkSource, Workstream, WorkstreamStatus } from "../types";
 
 /** Derive the issue's per-issue branch tree URL from its issue URL (`.../issues/42` → `.../tree/hive/issue-42`). */
 function issueBranchUrl(ws: Workstream): string | null {
@@ -24,6 +24,7 @@ function buildSetupPatch(fields: {
   memberRepos: string[];
   mode: Mode;
   autonomy: Autonomy;
+  workSource: WorkSource;
   guess: GuessPropensity;
   dailyBudget: string;
 }): ProjectPatch {
@@ -33,6 +34,7 @@ function buildSetupPatch(fields: {
     member_repos: fields.memberRepos.map((s) => s.trim()).filter(Boolean),
     mode: fields.mode,
     autonomy: fields.autonomy,
+    work_source: fields.workSource,
     guess_propensity: fields.guess,
     daily_budget_usd: Number.isFinite(budget) && budget >= 0 ? budget : 0,
   };
@@ -95,6 +97,7 @@ function ProjectSetup({
   const [intakeMessage, setIntakeMessage] = useState("");
   const [mode, setMode] = useState<Mode>(project.mode);
   const [autonomy, setAutonomy] = useState<Autonomy>(project.autonomy);
+  const [workSource, setWorkSource] = useState<WorkSource>(project.work_source);
   const [guess, setGuess] = useState<GuessPropensity>(project.guess_propensity);
   const [dailyBudget, setDailyBudget] = useState(
     project.daily_budget_usd > 0 ? String(project.daily_budget_usd) : "",
@@ -102,8 +105,9 @@ function ProjectSetup({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const fields = { specRepo, memberRepos, mode, autonomy, guess, dailyBudget };
+  const fields = { specRepo, memberRepos, mode, autonomy, workSource, guess, dailyBudget };
   const draft = !project.spec_repo.trim();
+  const issuesSetup = workSource === "issues";
   const intakeRunning = conversation?.status === "running" || conversation?.status === "finalizing";
   const intakeDone = conversation?.status === "done";
   const intakeReady = intakeBriefReady(conversation?.latest_brief ?? "");
@@ -128,9 +132,13 @@ function ProjectSetup({
     setBusy(true);
     setError("");
     try {
-      await onStartIntake(buildSetupPatch(fields));
+      if (issuesSetup) {
+        await onSave(buildSetupPatch(fields));
+      } else {
+        await onStartIntake(buildSetupPatch(fields));
+      }
     } catch (e) {
-      setError((e as Error).message || "intake failed to start");
+      setError((e as Error).message || (issuesSetup ? "save failed" : "intake failed to start"));
     }
     setBusy(false);
   };
@@ -162,9 +170,11 @@ function ProjectSetup({
   return (
     <section className="setup-panel reveal">
       <header className="setup-head">
-        <h2>{intakeDone ? "Intake complete" : draft ? "Configure intake" : "Project intake"}</h2>
+        <h2>{issuesSetup ? "Configure issues mode" : intakeDone ? "Intake complete" : draft ? "Configure intake" : "Project intake"}</h2>
         <p className="muted">
-          {draft
+          {issuesSetup
+            ? "Choose the GitHub repo whose issues Hive should resolve, then save and scan."
+            : draft
             ? "Choose a repo, or create one for this project, then start the scout."
             : "The scout aligns mission, next iteration, and assumptions before planning starts."}
         </p>
@@ -195,6 +205,10 @@ function ProjectSetup({
         )}
         <div className="dial-grid">
           <label>
+            work source
+            <SegPicker value={workSource} options={WORK_SOURCE_OPTIONS} onChange={setWorkSource} />
+          </label>
+          <label>
             mode
             <SegPicker value={mode} options={MODE_OPTIONS} onChange={setMode} />
           </label>
@@ -203,10 +217,12 @@ function ProjectSetup({
             <SegPicker value={autonomy} options={AUTONOMY_OPTIONS} onChange={setAutonomy} />
           </label>
         </div>
-        <label>
-          guess propensity
-          <GuessSlider value={guess} onChange={setGuess} />
-        </label>
+        {!issuesSetup && (
+          <label>
+            guess propensity
+            <GuessSlider value={guess} onChange={setGuess} />
+          </label>
+        )}
         <label>
           daily budget (USD, 0 = no cap)
           <input
@@ -218,21 +234,23 @@ function ProjectSetup({
             placeholder="0"
           />
         </label>
-        <div className="trusted-scouts">
-          <span className="field-label">trusted scouts</span>
-          <div>
-            {trustedScouts.length === 0 && <span className="chip chip-failed">unavailable</span>}
-            {trustedScouts.map((resource) => (
-              <span
-                className={`chip ${resource.available ? "chip-open" : "chip-failed"}`}
-                key={resource.id}
-                title={resource.disabled_reason || resource.last_exhaustion_text || resource.last_probe_text}
-              >
-                {resource.backend === "codex" ? "codex gpt-5.5" : "claude opus"} · {scoutStateLabel(resource)}
-              </span>
-            ))}
+        {!issuesSetup && (
+          <div className="trusted-scouts">
+            <span className="field-label">trusted scouts</span>
+            <div>
+              {trustedScouts.length === 0 && <span className="chip chip-failed">unavailable</span>}
+              {trustedScouts.map((resource) => (
+                <span
+                  className={`chip ${resource.available ? "chip-open" : "chip-failed"}`}
+                  key={resource.id}
+                  title={resource.disabled_reason || resource.last_exhaustion_text || resource.last_probe_text}
+                >
+                  {resource.backend === "codex" ? "codex" : "claude"} · {scoutStateLabel(resource)}
+                </span>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
         {error && <p className="form-error">{error}</p>}
         {conversation && (
           <div className={`intake-brief intake-${conversation.status}`}>
@@ -269,8 +287,11 @@ function ProjectSetup({
           <button type="button" className="ghost" onClick={save} disabled={busy}>
             {busy ? "saving…" : "save"}
           </button>
-          <button type="submit" disabled={busy || !specRepo.trim() || intakeRunning || intakeDone || Boolean(conversation)}>
-            {busy ? "starting…" : conversation ? "intake started" : "start intake"}
+          <button
+            type="submit"
+            disabled={busy || !specRepo.trim() || (!issuesSetup && (intakeRunning || intakeDone || Boolean(conversation)))}
+          >
+            {busy ? (issuesSetup ? "saving…" : "starting…") : issuesSetup ? "save issues project" : conversation ? "intake started" : "start intake"}
           </button>
         </div>
       </form>
@@ -426,22 +447,78 @@ function WorkstreamCard({ ws }: { ws: Workstream }) {
   );
 }
 
+function checksFromError(error: unknown): PreflightCheck[] {
+  const detail = error instanceof ApiError ? error.detail : undefined;
+  if (!detail || typeof detail !== "object") return [];
+  const checks = (detail as { checks?: unknown }).checks;
+  if (!Array.isArray(checks)) return [];
+  return checks.filter((check): check is PreflightCheck => {
+    if (!check || typeof check !== "object") return false;
+    const c = check as Partial<PreflightCheck>;
+    return typeof c.name === "string" && typeof c.ok === "boolean" && typeof c.detail === "string";
+  });
+}
+
+function CheckList({ checks }: { checks: PreflightCheck[] }) {
+  if (checks.length === 0) return null;
+  return (
+    <ul className="scan-checks">
+      {checks.map((check) => (
+        <li key={check.name} className={check.ok ? "ok" : check.hard ? "fail" : "warn"}>
+          <span>{check.ok ? "pass" : check.hard ? "fail" : "warn"}</span>
+          <b>{check.name.replace(/_/g, " ")}</b>
+          <small>{check.detail}</small>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function PreflightSummary({ result }: { result: PreflightResult }) {
+  return (
+    <div className={`preflight-summary ${result.ok ? "ok" : "blocked"}`}>
+      <span>{result.ok ? "preflight passed" : "preflight blocked"}</span>
+      {result.runner_check_task && <small>runner check queued in activity</small>}
+      <CheckList checks={result.checks} />
+    </div>
+  );
+}
+
 function ScanBar({ project, onScanned }: { project: Project; onScanned: () => void }) {
-  const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState<"preflight" | "scan" | "">("");
   const [result, setResult] = useState<ScanResult | null>(null);
+  const [preflight, setPreflight] = useState<PreflightResult | null>(null);
   const [error, setError] = useState("");
+  const [errorChecks, setErrorChecks] = useState<PreflightCheck[]>([]);
   const noRepo = !project.spec_repo.trim();
+  const busy = busyAction !== "";
+
+  const runPreflight = async () => {
+    setBusyAction("preflight");
+    setError("");
+    setErrorChecks([]);
+    try {
+      setPreflight(await api.issuesPreflight(project.id));
+      onScanned();
+    } catch (e) {
+      setError((e as Error).message || "preflight failed");
+      setErrorChecks(checksFromError(e));
+    }
+    setBusyAction("");
+  };
 
   const scan = async () => {
-    setBusy(true);
+    setBusyAction("scan");
     setError("");
+    setErrorChecks([]);
     try {
       setResult(await api.scanIssues(project.id));
       onScanned();
     } catch (e) {
       setError((e as Error).message || "scan failed");
+      setErrorChecks(checksFromError(e));
     }
-    setBusy(false);
+    setBusyAction("");
   };
 
   return (
@@ -453,13 +530,27 @@ function ScanBar({ project, onScanned }: { project: Project; onScanned: () => vo
         </p>
       </div>
       <div className="scan-actions">
-        <button onClick={scan} disabled={busy || noRepo} title={noRepo ? "set a spec repo first" : undefined}>
-          {busy ? "scanning…" : "scan issues"}
-        </button>
-        {error && <span className="form-error">{error}</span>}
+        <div className="scan-buttons">
+          <button className="ghost" onClick={runPreflight} disabled={busy || noRepo} title={noRepo ? "set a spec repo first" : undefined}>
+            {busyAction === "preflight" ? "checking…" : "preflight"}
+          </button>
+          <button onClick={scan} disabled={busy || noRepo} title={noRepo ? "set a spec repo first" : undefined}>
+            {busyAction === "scan" ? "scanning…" : "scan issues"}
+          </button>
+        </div>
+        {error && (
+          <div className="scan-error">
+            <span className="form-error">{error}</span>
+            <CheckList checks={errorChecks} />
+          </div>
+        )}
+        {preflight && !error && <PreflightSummary result={preflight} />}
         {result && !error && (
           <span className="scan-summary">
-            {result.open_issues} open · {result.resolve_queued} queued
+            last scan: {result.open_issues} open · {result.resolve_queued} queued
+            {(result.attachments_downloaded > 0 || result.attachments_failed > 0) && (
+              <> · attachments {result.attachments_downloaded} ok / {result.attachments_failed} failed</>
+            )}
             {result.changes.length > 0 && (
               <ul>
                 {result.changes.map((c, i) => (
@@ -509,8 +600,8 @@ function IssueCard({ ws }: { ws: Workstream }) {
 }
 
 const ISSUE_GROUPS: { label: string; statuses: WorkstreamStatus[] }[] = [
+  { label: "queued", statuses: ["queued"] },
   { label: "in progress", statuses: ["resolving", "reviewing"] },
-  { label: "queue", statuses: ["queued"] },
   { label: "needs you", statuses: ["blocked_clarity", "rejected"] },
   { label: "done", statuses: ["done", "cancelled"] },
 ];
@@ -766,9 +857,10 @@ function TracePanel({ taskId }: { taskId: string }) {
   );
 }
 
-function TaskCard({ task, projectId }: { task: Task; projectId: string }) {
+function TaskCard({ task, projectId, onChanged }: { task: Task; projectId: string; onChanged: () => void }) {
   const [open, setOpen] = useState(false);
   const [full, setFull] = useState<Task | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
   const toggle = async () => {
     const next = !open;
@@ -784,6 +876,17 @@ function TaskCard({ task, projectId }: { task: Task; projectId: string }) {
 
   const result = (full ?? task).result_text;
   const hasTrace = Boolean((full ?? task).trace_blob);
+  const cancellable = task.status === "pending" || task.status === "running";
+
+  const cancel = async () => {
+    setCancelling(true);
+    try {
+      await api.cancelTask(task.id);
+      onChanged();
+    } finally {
+      setCancelling(false);
+    }
+  };
 
   return (
     <article className={`task-card task-${task.status}`}>
@@ -807,6 +910,13 @@ function TaskCard({ task, projectId }: { task: Task; projectId: string }) {
             <p className="muted">no result yet</p>
           )}
           {hasTrace && <TracePanel taskId={task.id} />}
+          {cancellable && (
+            <div className="task-actions">
+              <button className="ghost quiet" onClick={cancel} disabled={cancelling || task.cancel_requested}>
+                {task.cancel_requested ? "cancel requested" : cancelling ? "cancelling" : "cancel"}
+              </button>
+            </div>
+          )}
           <FeedbackButtons projectId={projectId} targetId={task.id} />
         </div>
       )}
@@ -906,7 +1016,7 @@ export default function ProjectPage() {
       </h2>
       {sortedTasks.length === 0 && <p className="muted">no tasks yet</p>}
       {sortedTasks.map((t) => (
-        <TaskCard key={t.id} task={t} projectId={id} />
+        <TaskCard key={t.id} task={t} projectId={id} onChanged={refresh} />
       ))}
     </section>
   );

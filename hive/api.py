@@ -41,8 +41,11 @@ from hive.issues import (
     download_issue_attachments,
     fetch_open_issues_full,
     issue_branch,
+    issue_is_closed,
+    LANDING_FAILED_PREFIX,
     merge_branch,
     reconcile,
+    RESOLVE_BACKEND,
     resolve_issue_on_github,
 )
 from hive.preflight import (
@@ -75,6 +78,7 @@ from hive.models import (
     Verdict,
     WorkSource,
     Workstream,
+    WorkstreamSource,
     WorkstreamStatus,
     parse_resolve,
     parse_review,
@@ -248,7 +252,7 @@ def _land_resolve(store, task: Task, body: "TaskResult", config: Config) -> None
     if ws.status == WorkstreamStatus.reviewing:
         project = store.get(Project, task.project_id)
         if project:
-            review = create_review_task(store, project, ws, backend=task.backend)
+            review = create_review_task(store, project, ws, backend=task.backend, model=task.model)
             log.info("queued review task %s for issue #%s on %s", review.id, ws.issue_number, review.branch)
 
 
@@ -346,10 +350,58 @@ def _land_review(store, task: Task, body: "TaskResult", config: Config) -> None:
             project_id=task.project_id,
             workspace_id=task.workspace_id,
         )
-        _set_ws_status(store, ws.id, WorkstreamStatus.rejected, f"accepted but landing failed: {exc}")
+        _set_ws_status(store, ws.id, WorkstreamStatus.rejected, f"{LANDING_FAILED_PREFIX}: {exc}")
         return
     log.info("issue #%s landed: merged + closed; workstream done", ws.issue_number)
     _set_ws_status(store, ws.id, WorkstreamStatus.done, "")
+
+
+def _should_advance_after_issue_result(store, task: Task) -> bool:
+    if task.kind not in (TaskKind.resolve, TaskKind.review):
+        return False
+    ws = store.get(Workstream, task.workstream_id)
+    if ws is None:
+        return True
+    if ws.status == WorkstreamStatus.rejected and ws.parked_reason.startswith(LANDING_FAILED_PREFIX):
+        return False
+    return True
+
+
+def _sync_landing_failure_human_task(store, task: HumanTask, config: Config) -> None:
+    match = re.fullmatch(r"Land issue #(\d+) failed", task.title)
+    if not match or not task.project_id:
+        return
+    project = store.get(Project, task.project_id)
+    if not project or project.work_source != WorkSource.issues or not project.spec_repo:
+        return
+    issue_number = int(match.group(1))
+    try:
+        closed = issue_is_closed(project.spec_repo, issue_number, config.gh_token)
+    except Exception as exc:
+        log.warning("could not verify issue #%s while completing human task %s: %s", issue_number, task.id, exc)
+        return
+    if not closed:
+        return
+    for ws in store.list(Workstream, project_id=project.id):
+        if (
+            ws.source == WorkstreamSource.issue
+            and ws.issue_number == issue_number
+            and ws.status == WorkstreamStatus.rejected
+            and ws.parked_reason.startswith(LANDING_FAILED_PREFIX)
+        ):
+            _set_ws_status(store, ws.id, WorkstreamStatus.done, "")
+            log.info("human task %s confirmed issue #%s is closed; marked workstream done", task.id, issue_number)
+            return
+
+
+def _cancel_issue_work(store, task: Task) -> None:
+    if task.kind in (TaskKind.resolve, TaskKind.review) and task.workstream_id:
+        _set_ws_status(
+            store,
+            task.workstream_id,
+            WorkstreamStatus.queued,
+            "cancelled by operator — scan to retry",
+        )
 
 
 def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_runner=None) -> FastAPI:
@@ -956,7 +1008,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         downloaded = failed = 0
         if blobs is not None:
             downloaded, failed = download_issue_attachments(store, blobs, project, config.gh_token)
-        queued = advance_issues(store, project)
+        queued = advance_issues(store, project, backend=config.issue_backend, model=config.issue_model)
         log.info(
             "scan %s: %d open issue(s), %d resolve task(s) started, attachments %d ok / %d failed; changes: %s",
             project_id, len(issues), queued, downloaded, failed, "; ".join(notes) or "none",
@@ -983,8 +1035,14 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         checks = preflight_checks(store, config, project)
         hard_ok = all(c.ok for c in checks if c.hard)
         runner_task = None
-        if hard_ok and codex_runner_usable(store, project.workspace_id):
-            runner_task = create_preflight_task(store, project).id
+        issue_backend = config.issue_backend or RESOLVE_BACKEND
+        if hard_ok and codex_runner_usable(store, project.workspace_id, backend=issue_backend):
+            runner_task = create_preflight_task(
+                store,
+                project,
+                backend=issue_backend,
+                model=config.issue_model,
+            ).id
             supervisor.wake(project_id, "Issues preflight: runner self-check queued.")
         return {"ok": hard_ok, "checks": checks_payload(checks), "runner_check_task": runner_task}
 
@@ -1120,6 +1178,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             task.result_text = "Cancelled by operator before dispatch."
             task.finished_at = time.time()
             store.put(task)
+            _cancel_issue_work(store, task)
             supervisor.wake(task.project_id, f"Task {task.id} was cancelled before it ran.")
         elif task.status == TaskStatus.running:
             # Cooperative: the runner polls this flag and stops the agent.
@@ -1303,6 +1362,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         task.status = HumanTaskStatus.done
         task.done_at = time.time()
         store.put(task)
+        _sync_landing_failure_human_task(store, task, config)
         # The action may have unblocked work (a runner login, a granted access).
         # Wake the owning project, or every project for an org-wide todo.
         note = f"Human task '{task.title}' was completed. Re-evaluate work that waited on it."
@@ -1623,11 +1683,17 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             _land_resolve(store, task, body, config)
         elif task.kind == TaskKind.review and not body.cancelled:
             _land_review(store, task, body, config)
-        if task.kind in (TaskKind.resolve, TaskKind.review) and not body.cancelled:
+        elif task.kind in (TaskKind.resolve, TaskKind.review) and body.cancelled:
+            _cancel_issue_work(store, task)
+        if (
+            task.kind in (TaskKind.resolve, TaskKind.review)
+            and not body.cancelled
+            and _should_advance_after_issue_result(store, task)
+        ):
             # Strict per-issue: when this issue parked or landed, start the next.
             project = store.get(Project, task.project_id)
             if project:
-                advance_issues(store, project)
+                advance_issues(store, project, backend=config.issue_backend, model=config.issue_model)
 
         outcome = "cancelled" if body.cancelled else ("failed" if body.is_error else "finished")
         verdict_note = (

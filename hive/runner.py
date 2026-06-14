@@ -221,13 +221,15 @@ def _run_checkout_git(
         ) from exc
 
 
-def checkout(repo_url: str, branch: str = "") -> Path:
+def checkout(repo_url: str, branch: str = "", fresh_branch: bool = False) -> Path:
     """Fresh-ish checkout: clone once, fetch, then hard-reset to the target.
 
     With no branch, resets to the origin default (work that lands on main).
     With a branch, checks out that branch — existing on origin (verify/fix of
     PR-mode work) or freshly created off the default (the first PR-mode work
-    task, which then pushes it)."""
+    task, which then pushes it). For issues-mode resolve retries, `fresh_branch`
+    means an existing issue branch is first backed up and reset to the current
+    default branch so the new attempt does not build on stale rejected work."""
     checkout_url, auth_overlay = _checkout_plan(repo_url)
     env = _with_env(auth_overlay)
     slug = checkout_url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
@@ -258,12 +260,27 @@ def checkout(repo_url: str, branch: str = "") -> Path:
         ["git", "symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
         cwd=path, capture_output=True, text=True, env=env,
     ).stdout.strip() or "origin/main"
+    _run_checkout_git(
+        ["reset", "--hard"],
+        cwd=path,
+        timeout=60,
+        env=env,
+        repo_url=checkout_url,
+        branch=branch,
+    )
+    _run_checkout_git(
+        ["clean", "-fd"],
+        cwd=path,
+        timeout=60,
+        env=env,
+        repo_url=checkout_url,
+        branch=branch,
+    )
     if branch:
         on_origin = subprocess.run(
             ["git", "ls-remote", "--heads", "origin", branch],
             cwd=path, capture_output=True, text=True, timeout=60, env=env,
         ).stdout.strip()
-        base = f"origin/{branch}" if on_origin else default_head
         if on_origin:
             _run_checkout_git(
                 ["fetch", "origin", branch],
@@ -273,14 +290,42 @@ def checkout(repo_url: str, branch: str = "") -> Path:
                 repo_url=checkout_url,
                 branch=branch,
             )
-        _run_checkout_git(
-            ["checkout", "-B", branch, base],
-            cwd=path,
-            timeout=60,
-            env=env,
-            repo_url=checkout_url,
-            branch=branch,
-        )
+        if fresh_branch and on_origin:
+            backup = f"{branch}-previous-{int(time.time())}"
+            _run_checkout_git(
+                ["push", "origin", f"origin/{branch}:refs/heads/{backup}"],
+                cwd=path,
+                timeout=120,
+                env=env,
+                repo_url=checkout_url,
+                branch=branch,
+            )
+            _run_checkout_git(
+                ["checkout", "-B", branch, default_head],
+                cwd=path,
+                timeout=60,
+                env=env,
+                repo_url=checkout_url,
+                branch=branch,
+            )
+            _run_checkout_git(
+                ["push", "--force-with-lease", "origin", f"{branch}:{branch}"],
+                cwd=path,
+                timeout=120,
+                env=env,
+                repo_url=checkout_url,
+                branch=branch,
+            )
+        else:
+            base = f"origin/{branch}" if on_origin else default_head
+            _run_checkout_git(
+                ["checkout", "-B", branch, base],
+                cwd=path,
+                timeout=60,
+                env=env,
+                repo_url=checkout_url,
+                branch=branch,
+            )
     else:
         _run_checkout_git(
             ["reset", "--hard", default_head],
@@ -387,7 +432,11 @@ def execute(task: dict, headers: dict, auth) -> dict:
     from kodo.agent import Agent
 
     try:
-        project_dir = checkout(task["repo"], task.get("branch", ""))
+        project_dir = checkout(
+            task["repo"],
+            task.get("branch", ""),
+            fresh_branch=bool(task.get("fresh_branch")),
+        )
     except CheckoutError as exc:
         return {"text": str(exc), "is_error": True}
     except subprocess.SubprocessError as exc:

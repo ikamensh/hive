@@ -53,10 +53,10 @@ def repo_permissions(repo_ref: str, token: str) -> dict:
     }
 
 
-def codex_runner_usable(store, workspace_id: str) -> bool:
+def codex_runner_usable(store, workspace_id: str, backend: str = RESOLVE_BACKEND) -> bool:
     online = {r.id for r in store.list(Runner, workspace_id=workspace_id) if r.online()}
     return any(
-        res.backend == RESOLVE_BACKEND and res.available() and res.runner_id in online
+        res.backend == backend and res.available() and res.runner_id in online
         for res in store.list(Resource, workspace_id=workspace_id)
     )
 
@@ -105,21 +105,22 @@ def preflight_checks(store, config, project) -> list[Check]:
                 )
             )
 
-    runner_ok = codex_runner_usable(store, project.workspace_id)
+    issue_backend = config.issue_backend or RESOLVE_BACKEND
+    runner_ok = codex_runner_usable(store, project.workspace_id, backend=issue_backend)
     checks.append(
         Check(
             "codex_runner_usable",
             runner_ok,
-            f"an online runner offers a usable '{RESOLVE_BACKEND}' resource"
+            f"an online runner offers a usable '{issue_backend}' resource"
             if runner_ok
-            else f"no online runner with a probed-usable '{RESOLVE_BACKEND}' resource — tasks will wait",
+            else f"no online runner with a probed-usable '{issue_backend}' resource — tasks will wait",
             hard=False,  # a runner can come online after scanning; don't block, warn
         )
     )
     return checks
 
 
-def create_preflight_task(store, project, backend: str = RESOLVE_BACKEND) -> Task:
+def create_preflight_task(store, project, backend: str = RESOLVE_BACKEND, model: str = "") -> Task:
     """Queue the runner self-check (push + gh auth) against the spec repo."""
     return store.put(
         Task(
@@ -129,6 +130,7 @@ def create_preflight_task(store, project, backend: str = RESOLVE_BACKEND) -> Tas
             repo=project.spec_repo,
             kind=TaskKind.preflight,
             backend=backend,
+            model=model,
             instructions="Hive runner self-check: verify git push and gh auth against the spec repo.",
         )
     )

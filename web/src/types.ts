@@ -60,6 +60,7 @@ export interface Workstream {
   issue_number?: number;
   issue_url?: string;
   order?: number;
+  issue_attachments?: string[];
   created_at: number;
 }
 
@@ -70,6 +71,7 @@ export interface Task {
   workstream_id: string;
   repo: string;
   branch: string;
+  fresh_branch: boolean;
   kind: "work" | "verify" | "probe" | "intake" | "resolve" | "review" | "preflight";
   instructions: string;
   conversation_id: string;
@@ -300,8 +302,23 @@ export interface ProjectPatch {
   new_iteration_note?: string;
 }
 
+export interface PreflightCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+  hard: boolean;
+}
+
+export interface PreflightResult {
+  ok: boolean;
+  checks: PreflightCheck[];
+  runner_check_task?: string | null;
+}
+
 export interface ScanResult {
   open_issues: number;
   resolve_queued: number;
+  attachments_downloaded: number;
+  attachments_failed: number;
   changes: string[];
 }

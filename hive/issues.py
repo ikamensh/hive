@@ -43,7 +43,8 @@ IN_FLIGHT = (WorkstreamStatus.active, WorkstreamStatus.parked)
 
 ISSUE_DIR = ".hive/issue-{n}"
 RESOLVE_BACKEND = "codex"
-RESOLVE_MODEL = "gpt-5.5"
+DEFAULT_ISSUE_MODEL = ""
+LANDING_FAILED_PREFIX = "accepted but landing failed"
 
 _IMG_MD = re.compile(r"!\[[^\]]*\]\(([^)\s]+)\)")
 _IMG_HTML = re.compile(r"""<img[^>]+src=["']([^"']+)["']""", re.IGNORECASE)
@@ -166,6 +167,21 @@ def merge_branch(repo_ref: str, head: str, token: str, message: str = "") -> Non
     response.raise_for_status()  # 201 merged, 204 nothing to merge
 
 
+def _github_error(response: httpx.Response, action: str) -> RuntimeError:
+    detail = response.text.strip()
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        bits = [str(payload.get("message") or "").strip()]
+        errors = payload.get("errors")
+        if errors:
+            bits.append(str(errors))
+        detail = "; ".join(bit for bit in bits if bit) or detail
+    return RuntimeError(f"{action} failed: HTTP {response.status_code} {detail}".strip())
+
+
 def attachment_key(workspace_id: str, project_id: str, issue_number: int, name: str) -> str:
     return f"workspaces/{workspace_id}/issue-attachments/{project_id}/{issue_number}/{name}"
 
@@ -223,12 +239,30 @@ def resolve_issue_on_github(repo_ref: str, number: int, comment: str, token: str
             headers=headers,
             timeout=30.0,
         ).raise_for_status()
-    httpx.patch(
+    response = httpx.patch(
         f"https://api.github.com/repos/{owner_repo}/issues/{number}",
         json={"state": "closed"},
         headers=headers,
         timeout=30.0,
-    ).raise_for_status()
+    )
+    if response.is_success:
+        return
+    if issue_is_closed(repo_ref, number, token):
+        log.info("issue #%s close returned HTTP %s, but GitHub already reports it closed", number, response.status_code)
+        return
+    raise _github_error(response, f"close issue #{number}")
+
+
+def issue_is_closed(repo_ref: str, number: int, token: str) -> bool:
+    owner_repo = parse_repo_ref(repo_ref)
+    response = httpx.get(
+        f"https://api.github.com/repos/{owner_repo}/issues/{number}",
+        headers=_headers(token),
+        timeout=15.0,
+    )
+    if not response.is_success:
+        raise _github_error(response, f"read issue #{number}")
+    return str(response.json().get("state") or "").lower() == "closed"
 
 
 # -- store reconciliation + task creation ------------------------------------
@@ -293,6 +327,12 @@ def reconcile(store, project: Project, issues: list[dict]) -> list[str]:
             WorkstreamStatus.cancelled,
         ):
             continue
+        if ws.status == WorkstreamStatus.rejected and ws.parked_reason.startswith(LANDING_FAILED_PREFIX):
+            ws.status = WorkstreamStatus.done
+            ws.parked_reason = ""
+            store.put(ws)
+            notes.append(f"marked #{number} done: issue closed on GitHub after landing retry")
+            continue
         ws.status = WorkstreamStatus.cancelled
         ws.parked_reason = "issue closed on GitHub"
         store.put(ws)
@@ -321,7 +361,14 @@ def _instructions(ws: Workstream, prompt_name: str) -> tuple[str, dict]:
     return f"{header}\n{prompt}", {prompt_name: version}
 
 
-def _make_issue_task(store, project: Project, ws: Workstream, kind: TaskKind, backend: str) -> Task:
+def _make_issue_task(
+    store,
+    project: Project,
+    ws: Workstream,
+    kind: TaskKind,
+    backend: str,
+    model: str = DEFAULT_ISSUE_MODEL,
+) -> Task:
     prompt_name = "resolve" if kind == TaskKind.resolve else "review"
     instructions, versions = _instructions(ws, prompt_name)
     return store.put(
@@ -331,10 +378,11 @@ def _make_issue_task(store, project: Project, ws: Workstream, kind: TaskKind, ba
             workstream_id=ws.id,
             repo=project.spec_repo,
             branch=issue_branch(ws.issue_number),
+            fresh_branch=kind == TaskKind.resolve,
             kind=kind,
             instructions=instructions,
             backend=backend,
-            model=RESOLVE_MODEL,
+            model=model,
             issue_number=ws.issue_number,
             issue_doc=ws.description,
             issue_attachments=ws.issue_attachments,
@@ -343,7 +391,12 @@ def _make_issue_task(store, project: Project, ws: Workstream, kind: TaskKind, ba
     )
 
 
-def advance_issues(store, project: Project, backend: str = RESOLVE_BACKEND) -> int:
+def advance_issues(
+    store,
+    project: Project,
+    backend: str = RESOLVE_BACKEND,
+    model: str = DEFAULT_ISSUE_MODEL,
+) -> int:
     """Strict per-issue sequencing: keep at most one issue in the resolve→review
     pipeline at a time. If an issue is already in flight (`resolving`/`reviewing`)
     do nothing; otherwise promote the lowest-`order` `queued` issue to `resolving`
@@ -368,7 +421,7 @@ def advance_issues(store, project: Project, backend: str = RESOLVE_BACKEND) -> i
         w.parked_reason = ""
 
     ws = store.update(Workstream, nxt.id, promote)
-    _make_issue_task(store, project, ws, TaskKind.resolve, backend)
+    _make_issue_task(store, project, ws, TaskKind.resolve, backend, model=model)
     log.info(
         "advance: issue #%s → resolving (%d issue(s) still queued)",
         ws.issue_number, len(queued) - 1,
@@ -376,9 +429,15 @@ def advance_issues(store, project: Project, backend: str = RESOLVE_BACKEND) -> i
     return 1
 
 
-def create_review_task(store, project: Project, ws: Workstream, backend: str = RESOLVE_BACKEND) -> Task:
+def create_review_task(
+    store,
+    project: Project,
+    ws: Workstream,
+    backend: str = RESOLVE_BACKEND,
+    model: str = DEFAULT_ISSUE_MODEL,
+) -> Task:
     """Queue the independent review task for a fixed issue."""
-    return _make_issue_task(store, project, ws, TaskKind.review, backend)
+    return _make_issue_task(store, project, ws, TaskKind.review, backend, model=model)
 
 
 def activate_next(store, project: Project) -> Workstream | None:

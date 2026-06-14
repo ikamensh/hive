@@ -13,6 +13,7 @@ import type {
   ProjectPatch,
   ProjectRepoCreate,
   ProjectStart,
+  PreflightResult,
   Question,
   ResourcesPayload,
   ScanResult,
@@ -276,6 +277,19 @@ const workstreams: Workstream[] = [
     created_at: now - 86400 * 2,
   },
   {
+    id: "ws-issue-64",
+    project_id: "p-beacon",
+    source: "issue",
+    issue_number: 64,
+    issue_url: "https://github.com/acme/beacon/issues/64",
+    title: "#64 Audit-log filters reset after refresh",
+    description:
+      "## #64 Audit-log filters reset after refresh\n\nFilters are kept only in component state. Preserve them in the URL so a refresh or shared link keeps the same view.",
+    status: "queued",
+    parked_reason: "",
+    created_at: now - 3600 * 3,
+  },
+  {
     id: "ws-issue-18",
     project_id: "p-beacon",
     source: "issue",
@@ -343,6 +357,7 @@ const tasks: Task[] = [
     workstream_id: "",
     repo: "git@github.com:acme/atlas-spec.git",
     branch: "",
+    fresh_branch: false,
     kind: "intake",
     instructions: "Inspect the repo and state mission, next iteration, next steps, and material questions.",
     conversation_id: "conv-atlas",
@@ -373,6 +388,7 @@ const tasks: Task[] = [
     workstream_id: "ws-auth",
     repo: "git@github.com:acme/atlas-api.git",
     branch: "",
+    fresh_branch: false,
     kind: "work",
     instructions: "Implement refresh token rotation per spec §4.2",
     conversation_id: "",
@@ -403,6 +419,7 @@ const tasks: Task[] = [
     workstream_id: "ws-auth",
     repo: "git@github.com:acme/atlas-api.git",
     branch: "",
+    fresh_branch: false,
     kind: "verify",
     instructions: "Verify refresh rotation against spec §4.2",
     conversation_id: "",
@@ -432,6 +449,7 @@ const tasks: Task[] = [
     workstream_id: "ws-onboard",
     repo: "git@github.com:acme/atlas-web.git",
     branch: "",
+    fresh_branch: false,
     kind: "work",
     instructions: "Fix wizard step 3 validation",
     conversation_id: "",
@@ -461,6 +479,7 @@ const tasks: Task[] = [
     workstream_id: "ws-issue-42",
     repo: "git@github.com:acme/beacon.git",
     branch: "hive/issue-42",
+    fresh_branch: true,
     kind: "resolve",
     instructions: "Clarify then fix issue #42 (login redirect drops `next`). See .hive/issue-42/ISSUE.md.",
     conversation_id: "",
@@ -490,6 +509,7 @@ const tasks: Task[] = [
     workstream_id: "ws-issue-18",
     repo: "git@github.com:acme/beacon.git",
     branch: "hive/issue-18",
+    fresh_branch: false,
     kind: "review",
     instructions: "Review the fix for issue #18 on branch hive/issue-18.",
     conversation_id: "",
@@ -531,6 +551,7 @@ function makeIntakeTask(
     workstream_id: "",
     repo: conversation.repo,
     branch: "",
+    fresh_branch: false,
     kind: "intake",
     instructions: message || `Intake ${turn} turn`,
     conversation_id: conversation.id,
@@ -770,6 +791,18 @@ export const api = {
     return structuredClone(project);
   },
 
+  issuesPreflight: async (): Promise<PreflightResult> => ({
+    ok: true,
+    checks: [
+      { name: "issues_mode", ok: true, detail: "work_source=issues", hard: true },
+      { name: "spec_repo_set", ok: true, detail: "git@github.com:acme/beacon.git", hard: true },
+      { name: "gh_token_present", ok: true, detail: "control-plane GitHub token present", hard: true },
+      { name: "repo_write_access", ok: true, detail: "token can push/merge to acme/beacon", hard: true },
+      { name: "codex_runner_usable", ok: true, detail: "an online runner offers a usable 'codex' resource", hard: false },
+    ],
+    runner_check_task: "task-preflight-mock",
+  }),
+
   scanIssues: async (id: string): Promise<ScanResult> => {
     const project = projects.find((p) => p.id === id);
     if (!project) throw new Error("not found");
@@ -781,6 +814,8 @@ export const api = {
     return {
       open_issues: open.length,
       resolve_queued: open.filter((w) => w.status === "resolving").length,
+      attachments_downloaded: 1,
+      attachments_failed: 0,
       changes: [
         "re-gated #51 (blocked_clarity) → resolving",
         "re-gated #29 (rejected) → resolving",
@@ -800,6 +835,18 @@ export const api = {
   feedback: async (): Promise<void> => {},
 
   task: async (id: string): Promise<Task> => structuredClone(tasks.find((t) => t.id === id)!),
+
+  cancelTask: async (id: string): Promise<Task> => {
+    const task = tasks.find((t) => t.id === id)!;
+    if (task.status === "pending") {
+      task.status = "cancelled";
+      task.result_text = "Cancelled by operator before dispatch.";
+      task.finished_at = Date.now() / 1000;
+    } else if (task.status === "running") {
+      task.cancel_requested = true;
+    }
+    return structuredClone(task);
+  },
 
   trace: async (id: string): Promise<string> => {
     const task = tasks.find((t) => t.id === id);

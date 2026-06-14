@@ -265,6 +265,7 @@ class Task(BaseModel):
     workstream_id: str
     repo: str  # git URL the runner checks out
     branch: str = ""  # non-default branch to check out (PR-mode work and its verify/fix)
+    fresh_branch: bool = False  # reset an existing task branch to default before running
     kind: TaskKind = TaskKind.work
     instructions: str
     conversation_id: str = ""

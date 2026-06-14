@@ -11,6 +11,7 @@ import type {
   ProjectPatch,
   ProjectRepoCreate,
   ProjectStart,
+  PreflightResult,
   Question,
   ResourcesPayload,
   ScanResult,
@@ -21,22 +22,54 @@ import type {
 } from "./types";
 import { api as mockApi } from "./mocks";
 
+export class ApiError extends Error {
+  status?: number;
+  detail?: unknown;
+
+  constructor(message: string, status?: number, detail?: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+function detailMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === "string") return detail;
+  if (detail && typeof detail === "object") {
+    const data = detail as { error?: unknown; checks?: unknown };
+    const parts = [];
+    if (typeof data.error === "string") parts.push(data.error);
+    if (Array.isArray(data.checks)) {
+      const failed = data.checks
+        .filter((check) => check && typeof check === "object" && (check as { ok?: unknown }).ok === false)
+        .map((check) => String((check as { name?: unknown }).name ?? "check"));
+      if (failed.length > 0) parts.push(`failed: ${failed.join(", ")}`);
+    }
+    if (parts.length > 0) return parts.join(" · ");
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(new URL(path, window.location.origin), {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
   if (!res.ok) {
-    let detail = "";
+    let detail: unknown = "";
     try {
-      const body = (await res.json()) as { detail?: string };
+      const body = (await res.json()) as { detail?: unknown };
       detail = body.detail ?? "";
     } catch {
       /* non-JSON error body */
     }
-    const err = new Error(detail || `${res.status} on ${path}`);
-    (err as Error & { status?: number }).status = res.status;
-    throw err;
+    throw new ApiError(detailMessage(detail, `${res.status} on ${path}`), res.status, detail);
   }
   return res.json();
 }
@@ -72,6 +105,8 @@ const realApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  issuesPreflight: (id: string) =>
+    http<PreflightResult>(`/api/projects/${id}/issues-preflight`, { method: "POST" }),
   scanIssues: (id: string) =>
     http<ScanResult>(`/api/projects/${id}/scan-issues`, { method: "POST" }),
   answerQuestion: (id: string, answer: string) =>
@@ -83,6 +118,7 @@ const realApi = {
     });
   },
   task: (id: string) => http<Task>(`/api/tasks/${id}`),
+  cancelTask: (id: string) => http<Task>(`/api/tasks/${id}/cancel`, { method: "POST" }),
   trace: (id: string) => httpText(`/api/tasks/${id}/trace`),
   resources: () => http<ResourcesPayload>("/api/resources"),
   startLocalRunner: () =>

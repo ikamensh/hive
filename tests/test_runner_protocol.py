@@ -1,6 +1,8 @@
 """Runner reboot semantics: in-flight tasks are requeued on boot registration,
 left alone on heartbeat registration."""
 
+import subprocess
+
 from fastapi.testclient import TestClient
 
 from hive.backends import PROBE_MARKER
@@ -17,7 +19,7 @@ from hive.models import (
 )
 from hive.store import MemoryStore
 from hive.supervisor import Supervisor
-from hive.runner import validate_probe_result
+from hive.runner import checkout, validate_probe_result
 
 H = {"X-Hive-Token": "t"}
 
@@ -145,6 +147,53 @@ def test_codex_probe_explains_deprecated_wrapper(tmp_path):
 
     assert is_error
     assert "kodo Codex wrapper" in text
+
+
+def _git(args, cwd):
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+def test_fresh_issue_checkout_resets_existing_branch_and_preserves_backup(tmp_path, monkeypatch):
+    remote = tmp_path / "remote.git"
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "init", "-b", "main", str(seed)], check=True, capture_output=True, text=True)
+    _git(["config", "user.email", "test@example.invalid"], seed)
+    _git(["config", "user.name", "Test"], seed)
+    (seed / "file.txt").write_text("main v1\n")
+    _git(["add", "file.txt"], seed)
+    _git(["commit", "-m", "main v1"], seed)
+    _git(["remote", "add", "origin", str(remote)], seed)
+    _git(["push", "-u", "origin", "main"], seed)
+    _git(["--git-dir", str(remote), "symbolic-ref", "HEAD", "refs/heads/main"], tmp_path)
+
+    _git(["checkout", "-b", "hive/issue-9"], seed)
+    (seed / "file.txt").write_text("old issue attempt\n")
+    _git(["commit", "-am", "old issue attempt"], seed)
+    _git(["push", "-u", "origin", "hive/issue-9"], seed)
+    old_issue = _git(["rev-parse", "HEAD"], seed).stdout.strip()
+
+    _git(["checkout", "main"], seed)
+    (seed / "file.txt").write_text("main v2\n")
+    _git(["commit", "-am", "main v2"], seed)
+    _git(["push", "origin", "main"], seed)
+    new_main = _git(["rev-parse", "HEAD"], seed).stdout.strip()
+
+    monkeypatch.setattr("hive.runner.WORKDIR", tmp_path / "work")
+    monkeypatch.setattr("hive.runner.time.time", lambda: 123456)
+
+    dirty_path = checkout(str(remote), "hive/issue-9")
+    (dirty_path / "file.txt").write_text("dirty cancelled review\n")
+    (dirty_path / "scratch.txt").write_text("left behind\n")
+
+    path = checkout(str(remote), "hive/issue-9", fresh_branch=True)
+
+    assert (path / "file.txt").read_text() == "main v2\n"
+    assert not (path / "scratch.txt").exists()
+    assert _git(["rev-parse", "HEAD"], path).stdout.strip() == new_main
+    assert _git(["--git-dir", str(remote), "rev-parse", "hive/issue-9"], tmp_path).stdout.strip() == new_main
+    backup = "hive/issue-9-previous-123456"
+    assert _git(["--git-dir", str(remote), "rev-parse", backup], tmp_path).stdout.strip() == old_issue
 
 
 def test_boot_marks_interrupted_probe_unknown_then_queues_fresh_probe():

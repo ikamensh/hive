@@ -259,6 +259,7 @@ textarea:focus {
   display: inline-flex;
   align-items: center;
   white-space: nowrap;
+  min-width: 0;
   max-width: min(230px, 42vw);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -465,6 +466,16 @@ textarea:focus {
   }
   .q-counter {
     gap: 0;
+  }
+  .storage-chip {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 420px) {
+  .storage-chip {
+    flex-basis: 100%;
+    width: fit-content;
   }
 }
 
@@ -1263,6 +1274,86 @@ textarea:focus {
   align-items: flex-end;
   gap: 8px;
 }
+.scan-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.scan-error,
+.preflight-summary {
+  max-width: 520px;
+  text-align: right;
+}
+.preflight-summary {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-dim);
+}
+.preflight-summary > span {
+  color: var(--ink);
+}
+.preflight-summary.blocked > span {
+  color: var(--amber);
+}
+.preflight-summary small {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink-faint);
+}
+.scan-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.scan-checks li {
+  display: grid;
+  grid-template-columns: auto 130px minmax(180px, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  color: var(--ink-faint);
+}
+.scan-checks li span {
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.scan-checks li.ok span {
+  color: var(--green);
+}
+.scan-checks li.warn span {
+  color: var(--amber);
+}
+.scan-checks li.fail span {
+  color: var(--red);
+}
+.scan-checks b {
+  color: var(--ink-dim);
+  font-weight: 600;
+}
+@media (max-width: 720px) {
+  .scan-actions,
+  .scan-error,
+  .preflight-summary {
+    align-items: stretch;
+    text-align: left;
+    width: 100%;
+  }
+  .scan-buttons {
+    justify-content: stretch;
+  }
+  .scan-buttons button {
+    flex: 1 1 140px;
+  }
+  .scan-checks li {
+    grid-template-columns: auto 1fr;
+  }
+  .scan-checks li small {
+    grid-column: 1 / -1;
+  }
+}
 .scan-summary {
   font-family: var(--mono);
   font-size: 11.5px;
@@ -1581,6 +1672,11 @@ textarea:focus {
 }
 .task-card.task-failed .task-result {
   border-color: #f0786133;
+}
+.task-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
 }
 
 .trace-panel {
