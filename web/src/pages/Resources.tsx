@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { marked } from "marked";
 import { ago, api, countdown, money, usePoll } from "../api";
+import type { LocalRunnerInfo } from "../types";
 
 function HumanTasks() {
   const { data, refresh } = usePoll(() => api.humanTasks(), []);
@@ -176,6 +177,8 @@ function OrgContext() {
 export default function Resources() {
   const { data, failed, refresh } = usePoll(() => api.resources(), []);
   const [probing, setProbing] = useState<string | null>(null);
+  const [startingRunner, setStartingRunner] = useState(false);
+  const [runnerError, setRunnerError] = useState("");
   // 1s ticker so cooldown countdowns feel live between polls.
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -185,6 +188,12 @@ export default function Resources() {
 
   const runnerName = (id: string) => data?.runners.find((r) => r.id === id)?.name ?? id;
   const runnerOnline = (id: string) => data?.runners.find((r) => r.id === id)?.online ?? false;
+  const runnerForMachine = (id: string) => data?.runners.find((r) => r.machine_id === id);
+  const resourcesForMachine = (id: string) =>
+    data?.resources.filter((r) => {
+      if (r.machine_id === id) return true;
+      return data.runners.find((runner) => runner.id === r.runner_id)?.machine_id === id;
+    }) ?? [];
 
   const probe = async (id: string) => {
     setProbing(id);
@@ -196,17 +205,85 @@ export default function Resources() {
     }
   };
 
+  const startLocalRunner = async () => {
+    setStartingRunner(true);
+    setRunnerError("");
+    try {
+      await api.startLocalRunner();
+      await refresh();
+    } catch {
+      setRunnerError("could not start local runner");
+    } finally {
+      setStartingRunner(false);
+    }
+  };
+
+  const localRunner = data?.local_runner;
+
   return (
     <div className="page page-resources">
       <div className="page-head">
         <h1>Resources</h1>
+        {localRunner?.supported && (
+          <LocalRunnerAction
+            localRunner={localRunner}
+            busy={startingRunner}
+            onStart={startLocalRunner}
+          />
+        )}
       </div>
       {!data && <p className="muted">{failed ? "unreachable" : "loading…"}</p>}
 
       {data && (
         <>
+          {runnerError && <p className="form-error runner-error">{runnerError}</p>}
+          {(data.machines ?? []).length > 0 && (
+            <>
+              <h2 className="col-title">known machines</h2>
+              <div className="runner-grid">
+                {(data.machines ?? []).map((m) => {
+                  const runner = runnerForMachine(m.id);
+                  const resources = resourcesForMachine(m.id);
+                  return (
+                    <article key={m.id} className={`runner-card ${runner?.online ? "online" : "offline"}`}>
+                      <header>
+                        <i className="dot" />
+                        <h3>{m.name}</h3>
+                        <span className="runner-seen">
+                          {runner?.online ? "runner online" : `last seen ${ago(m.last_seen)}`}
+                        </span>
+                      </header>
+                      <div className="backend-chips">
+                        <span className="chip">{m.kind}</span>
+                        {resources.map((r) => (
+                          <span key={r.id} className="chip">
+                            {r.backend}
+                          </span>
+                        ))}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </>
+          )}
+          <h2 className="col-title">active runners</h2>
           <div className="runner-grid">
-            {data.runners.length === 0 && <p className="muted">no runners registered</p>}
+            {data.runners.length === 0 && (
+              <section className="runner-empty">
+                <h2>No runners registered</h2>
+                <p className="muted">
+                  Start a runner on this control-plane host to discover local agent CLIs and queue probes.
+                </p>
+                {localRunner?.supported ? (
+                  <button onClick={startLocalRunner} disabled={startingRunner}>
+                    {startingRunner ? "starting" : "enroll this host"}
+                  </button>
+                ) : (
+                  <code>uv run python -m hive.runner</code>
+                )}
+              </section>
+            )}
             {data.runners.map((r) => (
               <article key={r.id} className={`runner-card ${r.online ? "online" : "offline"}`}>
                 <header>
@@ -293,5 +370,28 @@ export default function Resources() {
       <Subscriptions />
       <OrgContext />
     </div>
+  );
+}
+
+function LocalRunnerAction({
+  localRunner,
+  busy,
+  onStart,
+}: {
+  localRunner: LocalRunnerInfo;
+  busy: boolean;
+  onStart: () => void;
+}) {
+  if (localRunner.registered) {
+    return (
+      <span className="local-runner-chip" title={localRunner.message || localRunner.log_path}>
+        this host enrolled
+      </span>
+    );
+  }
+  return (
+    <button className="ghost" onClick={onStart} disabled={busy}>
+      {busy ? "starting" : "enroll this host"}
+    </button>
   );
 }

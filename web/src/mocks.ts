@@ -2,6 +2,7 @@
 // the UI stays interactive for screenshots and offline development.
 
 import type {
+  AuthInfo,
   HumanTask,
   Project,
   ProjectCreate,
@@ -231,9 +232,13 @@ const tasks: Task[] = [
 ];
 
 const resourcesPayload: ResourcesPayload = {
+  machines: [
+    { id: "m-hex1", workspace_id: "default", name: "hex-1", hostname: "hex-1", kind: "runner", first_seen: now - 86400 * 6, last_seen: now - 12 },
+    { id: "m-hex2", workspace_id: "default", name: "hex-2", hostname: "hex-2", kind: "runner", first_seen: now - 86400 * 4, last_seen: now - 60 * 47 },
+  ],
   runners: [
-    { id: "r-hex1", name: "hex-1", backends: ["claude", "codex"], last_seen: now - 12, online: true },
-    { id: "r-hex2", name: "hex-2", backends: ["cursor", "gemini-cli"], last_seen: now - 60 * 47, online: false },
+    { id: "r-hex1", workspace_id: "default", machine_id: "m-hex1", name: "hex-1", backends: ["claude", "codex"], last_seen: now - 12, online: true },
+    { id: "r-hex2", workspace_id: "default", machine_id: "m-hex2", name: "hex-2", backends: ["cursor", "gemini-cli"], last_seen: now - 60 * 47, online: false },
   ],
   resources: [
     { id: "res-1", runner_id: "r-hex1", backend: "claude", discovery_status: "ok", discovery_text: "", discovered_at: now - 120, cli_path: "/usr/local/bin/claude", cli_version: "1.0.0", usability_status: "usable", last_probe_at: now - 3600, last_probe_task_id: "probe-1", last_probe_text: "HIVE PROBE PASSED", cooldown_until: 0, total_cost_usd: 214.6, total_tasks: 131, available: true },
@@ -241,12 +246,35 @@ const resourcesPayload: ResourcesPayload = {
     { id: "res-3", runner_id: "r-hex2", backend: "cursor", discovery_status: "warning", discovery_text: "authentication issue detected by preflight", discovered_at: now - 80, cli_path: "/usr/local/bin/cursor-agent", cli_version: "1.0.0", usability_status: "failed", last_probe_at: now - 900, last_probe_task_id: "probe-3", last_probe_text: "not authenticated", cooldown_until: now + 1860, total_cost_usd: 41.9, total_tasks: 23, available: false },
     { id: "res-4", runner_id: "r-hex2", backend: "gemini-cli", discovery_status: "ok", discovery_text: "", discovered_at: now - 80, cli_path: "/usr/local/bin/gemini", cli_version: "1.0.0", usability_status: "usable", last_probe_at: now - 7200, last_probe_task_id: "probe-4", last_probe_text: "HIVE PROBE PASSED", cooldown_until: 0, total_cost_usd: 3.2, total_tasks: 4, available: false },
   ],
+  local_runner: {
+    supported: true,
+    running: false,
+    registered: false,
+    runner_name: "this-host",
+    pid: 0,
+    autostart: false,
+    log_path: "/tmp/hive-data/local-runner.log",
+    message: "",
+  },
 };
 
 let orgContext =
   "We are Acme Corp. Prefer boring technology, Postgres over anything fancier.\nAll services deploy to GCP europe-west4. Python backends, TypeScript frontends.";
 
 export const api = {
+  me: async (): Promise<AuthInfo> => ({
+    user: {
+      id: "github:ikamensh",
+      github_login: "ikamensh",
+      display_name: "ikamensh",
+      created_at: now - 86400,
+      last_seen: Date.now() / 1000,
+    },
+    workspace: { id: "default", name: "ikamen", created_at: now - 86400 },
+    auth_mode: "dev",
+  }),
+  logout: async (): Promise<void> => {},
+
   projects: async (): Promise<Project[]> => structuredClone(projects),
 
   createProject: async (body: ProjectCreate): Promise<Project> => {
@@ -324,6 +352,36 @@ export const api = {
   },
 
   resources: async (): Promise<ResourcesPayload> => structuredClone(resourcesPayload),
+  startLocalRunner: async () => {
+    const local = resourcesPayload.local_runner!;
+    local.running = true;
+    local.registered = true;
+    local.pid = 4242;
+    local.message = "local runner starting";
+    if (!resourcesPayload.runners.some((r) => r.name === local.runner_name)) {
+      resourcesPayload.runners.unshift({
+        id: "r-local",
+        workspace_id: "default",
+        machine_id: "m-local",
+        name: local.runner_name,
+        backends: ["codex"],
+        last_seen: Date.now() / 1000,
+        online: true,
+      });
+    }
+    if (!resourcesPayload.machines?.some((m) => m.id === "m-local")) {
+      resourcesPayload.machines?.unshift({
+        id: "m-local",
+        workspace_id: "default",
+        name: local.runner_name,
+        hostname: local.runner_name,
+        kind: "runner",
+        first_seen: Date.now() / 1000,
+        last_seen: Date.now() / 1000,
+      });
+    }
+    return structuredClone(local);
+  },
   probeResource: async (id: string) => {
     const res = resourcesPayload.resources.find((r) => r.id === id);
     if (!res) throw new Error("not found");

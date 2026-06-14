@@ -26,10 +26,14 @@ from hive.backends import (
     discover_backends,
     make_session,
 )
+from hive.models import DEFAULT_WORKSPACE_ID
 
 HIVE_URL = os.environ.get("HIVE_URL", "http://localhost:8000")
 HIVE_BASIC_AUTH = os.environ.get("HIVE_BASIC_AUTH", "")  # "user:pass" when behind Caddy
 RUNNER_TOKEN = os.environ.get("HIVE_RUNNER_TOKEN", "dev-token")
+WORKSPACE_ID = os.environ.get("HIVE_WORKSPACE_ID", DEFAULT_WORKSPACE_ID)
+MACHINE_ID = os.environ.get("HIVE_MACHINE_ID", "")
+MACHINE_NAME = os.environ.get("HIVE_MACHINE_NAME", "")
 RUNNER_NAME = os.environ.get("HIVE_RUNNER_NAME", socket.gethostname())
 WORKDIR = Path(os.environ.get("HIVE_RUNNER_WORKDIR", "~/hive-work")).expanduser()
 TASK_TIMEOUT_S = float(os.environ.get("HIVE_TASK_TIMEOUT_S", "3600"))
@@ -202,7 +206,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    headers = {"X-Hive-Token": RUNNER_TOKEN}
+    headers = {"X-Hive-Token": RUNNER_TOKEN, "X-Hive-Workspace": WORKSPACE_ID}
     auth = tuple(HIVE_BASIC_AUTH.split(":", 1)) if HIVE_BASIC_AUTH else None
     client = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=40.0, auth=auth)
 
@@ -213,6 +217,8 @@ def main(argv: list[str] | None = None) -> None:
             json={
                 "name": RUNNER_NAME,
                 "backends": backends,
+                "machine_id": MACHINE_ID,
+                "machine_name": MACHINE_NAME,
                 "boot": boot,
                 "discoveries": discoveries,
                 "auto_probe": True,

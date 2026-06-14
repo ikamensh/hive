@@ -29,6 +29,17 @@ CONFIG_KEYS: dict[str, str] = {
     "HIVE_GCP_PROJECT": "Firestore project (enables persistence across restarts)",
     "HIVE_GCS_BUCKET": "GCS bucket for blob storage",
     "HIVE_RUNNER_TOKEN": "shared token runners present as X-Hive-Token",
+    "HIVE_AUTOSTART_RUNNER": "true/false: start a local runner with `hive run`",
+    "HIVE_AUTH_MODE": "auth mode: dev | github",
+    "HIVE_ALLOWED_GITHUB_USERS": "comma-separated GitHub users allowed to log in",
+    "HIVE_GITHUB_CLIENT_ID": "GitHub OAuth app client ID",
+    "HIVE_GITHUB_CLIENT_SECRET": "GitHub OAuth app client secret",
+    "HIVE_AUTH_SECRET": "secret used to sign Hive browser sessions",
+    "HIVE_PUBLIC_URL": "public base URL for OAuth callbacks",
+    "HIVE_WORKSPACE_ID": "active workspace ID for this control-plane process",
+    "HIVE_WORKSPACE_NAME": "display name for the active workspace",
+    "HIVE_MACHINE_ID": "stable ID for this machine",
+    "HIVE_MACHINE_NAME": "display name for this machine",
 }
 
 
@@ -61,7 +72,7 @@ def save_stored_config(values: dict[str, str], path=None):
 
 
 def _is_secret(key: str) -> bool:
-    return key.endswith("_TOKEN") or key.endswith("_API_KEY")
+    return key.endswith("_TOKEN") or key.endswith("_API_KEY") or key.endswith("_SECRET")
 
 
 def _mask(key: str, value: str) -> str:
@@ -224,6 +235,20 @@ def prepare_run_env(env: dict[str, str], stored: dict[str, str]) -> list[str]:
     else:
         notes.append("store: in-memory (throwaway; set HIVE_GCP_PROJECT to persist)")
 
+    auth_mode = env.get("HIVE_AUTH_MODE", "dev")
+    if auth_mode == "github":
+        allowed = env.get("HIVE_ALLOWED_GITHUB_USERS", "ikamensh")
+        notes.append(f"auth: GitHub OAuth allowlist ({allowed})")
+    else:
+        notes.append("auth: dev mode (local/test only)")
+
+    runner_mode = (
+        "enabled"
+        if env.get("HIVE_AUTOSTART_RUNNER", "").lower() in {"1", "true", "yes", "on"}
+        else "disabled"
+    )
+    notes.append(f"local runner autostart: {runner_mode}")
+
     return notes
 
 
@@ -268,8 +293,11 @@ def _run_config(args: argparse.Namespace) -> None:
 def _run_control_plane(args: argparse.Namespace) -> None:
     import uvicorn
 
+    from hive.local_runner import local_control_plane_url
+
     for line in prepare_run_env(os.environ, load_stored_config()):
         print(f"  {line}")
+    os.environ.setdefault("HIVE_PUBLIC_URL", local_control_plane_url(args.host, args.port))
     print(f"hive control plane → http://{args.host}:{args.port}\n")
     uvicorn.run(
         "hive.api:production_app",

@@ -16,10 +16,17 @@ import subprocess
 import time
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+from hive.auth import (
+    SESSION_COOKIE,
+    AuthContext,
+    AuthManager,
+    ensure_control_plane_machine,
+    ensure_machine,
+)
 from hive.backends import REGISTRY, probe_instructions
 from hive.config import Config
 from hive.escalation import escalate
@@ -29,6 +36,7 @@ from hive.models import (
     GuessPropensity,
     HumanTask,
     HumanTaskStatus,
+    Machine,
     Mode,
     Project,
     Question,
@@ -105,6 +113,8 @@ class BackendDiscoveryInput(BaseModel):
 class RunnerRegister(BaseModel):
     name: str
     backends: list[str]
+    machine_id: str = ""
+    machine_name: str = ""
     boot: bool = False  # true on daemon startup (vs periodic heartbeat)
     discoveries: list[BackendDiscoveryInput] = []
     auto_probe: bool = False
@@ -133,8 +143,31 @@ def _ensure_probe_repo(data_dir: Path) -> Path:
     return repo
 
 
-def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> FastAPI:
+def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_runner=None) -> FastAPI:
     app = FastAPI(title="hive")
+    auth = AuthManager(store, config)
+    auth.validate_config()
+    control_machine = ensure_control_plane_machine(store, config)
+
+    def current(request: Request) -> AuthContext:
+        return auth.require(request)
+
+    def runner_auth(
+        x_hive_token: str = Header(default=""),
+        x_hive_workspace: str = Header(default=""),
+    ) -> str:
+        if x_hive_token != config.runner_token:
+            raise HTTPException(401, "bad runner token")
+        workspace_id = x_hive_workspace or config.workspace_id
+        if workspace_id != config.workspace_id:
+            raise HTTPException(403, "runner token is not valid for this workspace")
+        return workspace_id
+
+    def require_project(project_id: str, ctx: AuthContext) -> Project:
+        project = store.get(Project, project_id)
+        if not project or project.workspace_id != ctx.workspace_id:
+            raise HTTPException(404)
+        return project
 
     def can_write_spec_repo(project: Project) -> bool:
         """Avoid slow surprise network attempts in throwaway/local runs.
@@ -192,28 +225,45 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
                 "from the project question history."
             ),
             project_id=project.id,
+            workspace_id=project.workspace_id,
         )
-
-    def runner_auth(x_hive_token: str = Header(default="")) -> None:
-        if x_hive_token != config.runner_token:
-            raise HTTPException(401, "bad runner token")
 
     @contextlib.asynccontextmanager
     async def lifespan(_app):
+        ensure_control_plane_machine(store, config)
         supervisor.acquire_leadership()  # raises if another control plane is live
+        if config.autostart_runner and local_runner is not None:
+            status = local_runner.start()
+            log.info(
+                "%s as %s (log: %s)",
+                status["message"],
+                status["runner_name"],
+                status["log_path"],
+            )
         loop_task = asyncio.create_task(supervisor.run_forever())
-        yield
-        loop_task.cancel()
+        try:
+            yield
+        finally:
+            if local_runner is not None:
+                local_runner.stop()
+            loop_task.cancel()
 
     app.router.lifespan_context = lifespan
     app.state.supervisor = supervisor
     app.state.store = store
+    app.state.auth = auth
+    app.state.machine = control_machine
 
     def active_probe_task(resource: Resource) -> Task | None:
         if not resource.last_probe_task_id:
             return None
         task = store.get(Task, resource.last_probe_task_id)
-        if task and task.kind == TaskKind.probe and task.status == TaskStatus.running:
+        if (
+            task
+            and task.workspace_id == resource.workspace_id
+            and task.kind == TaskKind.probe
+            and task.status == TaskStatus.running
+        ):
             return task
         return None
 
@@ -226,6 +276,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         repo = _ensure_probe_repo(Path(config.data_dir or "/tmp/hive-data"))
         task = store.put(
             Task(
+                workspace_id=resource.workspace_id,
                 project_id="",
                 workstream_id="",
                 repo=str(repo),
@@ -243,11 +294,34 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         store.put(resource)
         return task, resource
 
+    # ---- auth ---------------------------------------------------------------
+
+    @app.get("/api/auth/me")
+    def auth_me(ctx: AuthContext = Depends(current)):
+        return {
+            "user": ctx.user.model_dump(),
+            "workspace": ctx.workspace.model_dump(),
+            "auth_mode": config.auth_mode,
+        }
+
+    @app.get("/api/auth/github/start")
+    def github_start():
+        return auth.github_start()
+
+    @app.get("/api/auth/github/callback")
+    def github_callback(code: str, state: str):
+        return auth.github_callback(code, state)
+
+    @app.post("/api/auth/logout")
+    def logout(response: Response):
+        response.delete_cookie(SESSION_COOKIE)
+        return {"ok": True}
+
     # ---- web API -------------------------------------------------------------
 
     @app.get("/api/projects")
-    def list_projects():
-        return [p.model_dump() for p in store.list(Project)]
+    def list_projects(ctx: AuthContext = Depends(current)):
+        return [p.model_dump() for p in store.list(Project, workspace_id=ctx.workspace_id)]
 
     def planning_wake_event(mission: str, iteration_goal: str) -> str:
         mission = mission.strip()
@@ -264,43 +338,53 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         return "Project configured. Plan the opening workstreams."
 
     @app.post("/api/projects")
-    def create_project(body: ProjectCreate):
-        project = store.put(Project(name=body.name.strip()))
+    def create_project(body: ProjectCreate, ctx: AuthContext = Depends(current)):
+        project = store.put(Project(workspace_id=ctx.workspace_id, name=body.name.strip()))
         return project.model_dump()
 
     @app.post("/api/projects/{project_id}/start")
-    def start_project(project_id: str, body: ProjectStart):
-        project = store.get(Project, project_id)
-        if not project:
-            raise HTTPException(404)
+    def start_project(
+        project_id: str, body: ProjectStart, ctx: AuthContext = Depends(current)
+    ):
+        project = require_project(project_id, ctx)
         if not project.spec_repo.strip():
             raise HTTPException(400, "spec_repo must be set before starting")
         supervisor.wake(project_id, planning_wake_event(body.mission, body.iteration_goal))
         return project.model_dump()
 
     @app.get("/api/projects/{project_id}")
-    def get_project(project_id: str):
-        project = store.get(Project, project_id)
-        if not project:
-            raise HTTPException(404)
+    def get_project(project_id: str, ctx: AuthContext = Depends(current)):
+        project = require_project(project_id, ctx)
         return {
             "project": project.model_dump(),
-            "workstreams": [w.model_dump() for w in store.list(Workstream, project_id=project_id)],
-            "tasks": [t.model_dump() for t in store.list(Task, project_id=project_id, limit=50)],
-            "questions": [q.model_dump() for q in store.list(Question, project_id=project_id)],
-            "human_tasks": [t.model_dump() for t in store.list(HumanTask, project_id=project_id)],
+            "workstreams": [
+                w.model_dump()
+                for w in store.list(Workstream, workspace_id=ctx.workspace_id, project_id=project_id)
+            ],
+            "tasks": [
+                t.model_dump()
+                for t in store.list(
+                    Task, workspace_id=ctx.workspace_id, project_id=project_id, limit=50
+                )
+            ],
+            "questions": [
+                q.model_dump()
+                for q in store.list(Question, workspace_id=ctx.workspace_id, project_id=project_id)
+            ],
+            "human_tasks": [
+                t.model_dump()
+                for t in store.list(HumanTask, workspace_id=ctx.workspace_id, project_id=project_id)
+            ],
             "spend_today": supervisor.spend_today(project_id),
         }
 
     @app.patch("/api/projects/{project_id}")
-    def patch_project(project_id: str, body: ProjectPatch):
-        project = store.get(Project, project_id)
-        if not project:
-            raise HTTPException(404)
+    def patch_project(project_id: str, body: ProjectPatch, ctx: AuthContext = Depends(current)):
+        project = require_project(project_id, ctx)
         updates = body.model_dump(exclude_none=True)
         note = updates.pop("new_iteration_note", None)
         if "spec_repo" in updates and not updates["spec_repo"].strip():
-            if store.list(Workstream, project_id=project_id):
+            if store.list(Workstream, workspace_id=ctx.workspace_id, project_id=project_id):
                 raise HTTPException(400, "cannot clear spec_repo after work has started")
         for key, value in updates.items():
             setattr(project, key, value)
@@ -319,13 +403,13 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         return project.model_dump()
 
     @app.post("/api/questions/{question_id}/answer")
-    def answer_question(question_id: str, body: AnswerBody):
+    def answer_question(
+        question_id: str, body: AnswerBody, ctx: AuthContext = Depends(current)
+    ):
         question = store.get(Question, question_id)
-        if not question:
+        if not question or question.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
-        project = store.get(Project, question.project_id)
-        if not project:
-            raise HTTPException(404, "question project not found")
+        project = require_project(question.project_id, ctx)
         answered_at = time.time()
         input_log_note = ""
         if can_write_spec_repo(project):
@@ -354,9 +438,9 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         return question.model_dump()
 
     @app.post("/api/questions/{question_id}/dismiss")
-    def dismiss_question(question_id: str):
+    def dismiss_question(question_id: str, ctx: AuthContext = Depends(current)):
         question = store.get(Question, question_id)
-        if not question:
+        if not question or question.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
         question.status = QuestionStatus.dismissed
         store.put(question)
@@ -368,20 +452,21 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         return question.model_dump()
 
     @app.post("/api/feedback")
-    def add_feedback(body: FeedbackBody):
-        return store.put(Feedback(**body.model_dump())).model_dump()
+    def add_feedback(body: FeedbackBody, ctx: AuthContext = Depends(current)):
+        require_project(body.project_id, ctx)
+        return store.put(Feedback(workspace_id=ctx.workspace_id, **body.model_dump())).model_dump()
 
     @app.get("/api/tasks/{task_id}")
-    def get_task(task_id: str):
+    def get_task(task_id: str, ctx: AuthContext = Depends(current)):
         task = store.get(Task, task_id)
-        if not task:
+        if not task or task.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
         return task.model_dump()
 
     @app.post("/api/tasks/{task_id}/cancel")
-    def cancel_task(task_id: str):
+    def cancel_task(task_id: str, ctx: AuthContext = Depends(current)):
         task = store.get(Task, task_id)
-        if not task:
+        if not task or task.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
         if task.status == TaskStatus.pending:
             # Never dispatched: drop it outright.
@@ -396,23 +481,27 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
             store.put(task)
         return task.model_dump()
 
-    @app.post("/api/tasks/{task_id}/trace", dependencies=[Depends(runner_auth)])
-    async def upload_trace(task_id: str, request: Request):
+    @app.post("/api/tasks/{task_id}/trace")
+    async def upload_trace(
+        task_id: str,
+        request: Request,
+        workspace_id: str = Depends(runner_auth),
+    ):
         task = store.get(Task, task_id)
-        if not task:
+        if not task or task.workspace_id != workspace_id:
             raise HTTPException(404)
         if blobs is None:
             raise HTTPException(503, "no blob store configured")
-        key = f"traces/{task_id}.jsonl"
+        key = f"workspaces/{workspace_id}/traces/{task_id}.jsonl"
         blobs.put(key, await request.body())
         task.trace_blob = key
         store.put(task)
         return {"ok": True}
 
     @app.get("/api/tasks/{task_id}/trace")
-    def get_trace(task_id: str):
+    def get_trace(task_id: str, ctx: AuthContext = Depends(current)):
         task = store.get(Task, task_id)
-        if not task or not task.trace_blob or blobs is None:
+        if not task or task.workspace_id != ctx.workspace_id or not task.trace_blob or blobs is None:
             raise HTTPException(404)
         data = blobs.get(task.trace_blob)
         if data is None:
@@ -420,8 +509,8 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         return PlainTextResponse(data, media_type="application/x-ndjson")
 
     @app.get("/api/resources")
-    def resources():
-        runners = {r.id: r for r in store.list(Runner)}
+    def resources(ctx: AuthContext = Depends(current)):
+        runners = {r.id: r for r in store.list(Runner, workspace_id=ctx.workspace_id)}
 
         def resource_payload(resource: Resource) -> dict:
             runner = runners.get(resource.runner_id)
@@ -433,34 +522,74 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
             )
             return {**resource.model_dump(), "available": available}
 
+        def local_runner_payload() -> dict:
+            if local_runner is None:
+                return {
+                    "supported": False,
+                    "running": False,
+                    "registered": False,
+                    "runner_name": "",
+                    "pid": 0,
+                    "autostart": False,
+                    "log_path": "",
+                    "message": "local runner management is unavailable",
+                }
+            status = local_runner.status()
+            status["registered"] = any(
+                r.name == status["runner_name"] and r.online()
+                for r in runners.values()
+            )
+            return status
+
         return {
+            "machines": [
+                m.model_dump() for m in store.list(Machine, workspace_id=ctx.workspace_id)
+            ],
             "runners": [
                 {**r.model_dump(), "online": r.online()} for r in runners.values()
             ],
             "resources": [
-                resource_payload(r) for r in store.list(Resource)
+                resource_payload(r)
+                for r in store.list(Resource, workspace_id=ctx.workspace_id)
             ],
+            "local_runner": local_runner_payload(),
         }
 
+    @app.post("/api/local-runner/start")
+    def start_local_runner(ctx: AuthContext = Depends(current)):
+        if local_runner is None:
+            raise HTTPException(404, "local runner management is unavailable")
+        for runner in store.list(Runner, workspace_id=ctx.workspace_id):
+            if runner.name == local_runner.runner_name and runner.online():
+                status = local_runner.status(message="local runner already registered")
+                status["registered"] = True
+                return status
+        status = local_runner.start()
+        status["registered"] = False
+        return status
+
     @app.post("/api/resources/{resource_id}/probe")
-    def probe_resource(resource_id: str):
+    def probe_resource(resource_id: str, ctx: AuthContext = Depends(current)):
         resource = store.get(Resource, resource_id)
-        if not resource:
+        if not resource or resource.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
         runner = store.get(Runner, resource.runner_id)
-        if not runner or not runner.online():
+        if not runner or runner.workspace_id != ctx.workspace_id or not runner.online():
             raise HTTPException(409, "runner is offline")
         task, resource = queue_probe(resource, runner)
         return {"task": task.model_dump(), "resource": {**resource.model_dump(), "available": resource.available()}}
 
     @app.get("/api/subscriptions")
-    def list_subscriptions():
-        return [s.model_dump() for s in store.list(Subscription)]
+    def list_subscriptions(ctx: AuthContext = Depends(current)):
+        return [
+            s.model_dump() for s in store.list(Subscription, workspace_id=ctx.workspace_id)
+        ]
 
     @app.post("/api/subscriptions")
-    def create_subscription(body: dict):
+    def create_subscription(body: dict, ctx: AuthContext = Depends(current)):
         return store.put(
             Subscription(
+                workspace_id=ctx.workspace_id,
                 provider=body["provider"],
                 plan=body.get("plan", ""),
                 notes=body.get("notes", ""),
@@ -468,28 +597,35 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         ).model_dump()
 
     @app.delete("/api/subscriptions/{sub_id}")
-    def delete_subscription(sub_id: str):
+    def delete_subscription(sub_id: str, ctx: AuthContext = Depends(current)):
+        sub = store.get(Subscription, sub_id)
+        if not sub or sub.workspace_id != ctx.workspace_id:
+            raise HTTPException(404)
         store.delete(Subscription, sub_id)
         return {"ok": True}
 
     @app.get("/api/human-tasks")
-    def list_human_tasks():
-        return [t.model_dump() for t in store.list(HumanTask)]
+    def list_human_tasks(ctx: AuthContext = Depends(current)):
+        return [t.model_dump() for t in store.list(HumanTask, workspace_id=ctx.workspace_id)]
 
     @app.post("/api/human-tasks")
-    def create_human_task(body: dict):
+    def create_human_task(body: dict, ctx: AuthContext = Depends(current)):
+        project_id = body.get("project_id", "")
+        if project_id:
+            require_project(project_id, ctx)
         return store.put(
             HumanTask(
-                project_id=body.get("project_id", ""),
+                workspace_id=ctx.workspace_id,
+                project_id=project_id,
                 title=body["title"],
                 instructions=body.get("instructions", ""),
             )
         ).model_dump()
 
     @app.post("/api/human-tasks/{task_id}/done")
-    def complete_human_task(task_id: str):
+    def complete_human_task(task_id: str, ctx: AuthContext = Depends(current)):
         task = store.get(HumanTask, task_id)
-        if not task:
+        if not task or task.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
         task.status = HumanTaskStatus.done
         task.done_at = time.time()
@@ -500,25 +636,42 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
         if task.project_id:
             supervisor.wake(task.project_id, note)
         else:
-            for project in store.list(Project):
+            for project in store.list(Project, workspace_id=ctx.workspace_id):
                 supervisor.wake(project.id, note)
         return task.model_dump()
 
     @app.get("/api/org-context")
-    def get_org_context():
-        return {"text": store.get_org_context()}
+    def get_org_context(ctx: AuthContext = Depends(current)):
+        return {"text": store.get_org_context(ctx.workspace_id)}
 
     @app.put("/api/org-context")
-    def set_org_context(body: dict):
-        store.set_org_context(body.get("text", ""))
+    def set_org_context(body: dict, ctx: AuthContext = Depends(current)):
+        store.set_org_context(body.get("text", ""), ctx.workspace_id)
         return {"ok": True}
 
     # ---- runner protocol -------------------------------------------------------
 
-    @app.post("/api/runners/register", dependencies=[Depends(runner_auth)])
-    def register_runner(body: RunnerRegister):
-        existing = next((r for r in store.list(Runner) if r.name == body.name), None)
-        runner = existing or Runner(name=body.name)
+    @app.post("/api/runners/register")
+    def register_runner(body: RunnerRegister, workspace_id: str = Depends(runner_auth)):
+        machine = ensure_machine(
+            store,
+            workspace_id,
+            name=body.machine_name or body.name,
+            machine_id=body.machine_id,
+            hostname=body.name,
+            kind="runner",
+        )
+        existing = next(
+            (r for r in store.list(Runner, workspace_id=workspace_id) if r.name == body.name),
+            None,
+        )
+        runner = existing or Runner(
+            workspace_id=workspace_id,
+            machine_id=machine.id,
+            name=body.name,
+        )
+        runner.workspace_id = workspace_id
+        runner.machine_id = machine.id
         runner.backends = body.backends
         runner.last_seen = time.time()
         store.put(runner)
@@ -538,11 +691,14 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
                     task.runner_id = ""
                     task.delivered = False
 
-            for task in store.list(Task, status=TaskStatus.running, runner_id=runner.id):
+            for task in store.list(
+                Task, workspace_id=workspace_id, status=TaskStatus.running, runner_id=runner.id
+            ):
                 updated = store.update(Task, task.id, requeue)
                 if updated and updated.kind == TaskKind.probe:
                     for resource in store.list(
                         Resource,
+                        workspace_id=workspace_id,
                         runner_id=runner.id,
                         backend=updated.backend,
                     ):
@@ -555,7 +711,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
                     log.info("requeued task %s after runner %s reboot", task.id, runner.name)
 
         discovery_by_name = {d.name: d for d in body.discoveries}
-        resources_by_pair = {(r.runner_id, r.backend): r for r in store.list(Resource)}
+        resources_by_pair = {
+            (r.machine_id or r.runner_id, r.backend): r
+            for r in store.list(Resource, workspace_id=workspace_id)
+        }
 
         def apply_discovery(resource: Resource, discovery: BackendDiscoveryInput) -> None:
             resource.discovery_status = discovery.status
@@ -565,37 +724,48 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
             resource.cli_version = discovery.version
 
         for backend in body.backends:
-            resource = resources_by_pair.get((runner.id, backend)) or Resource(
-                runner_id=runner.id,
-                backend=backend,
+            resource = (
+                resources_by_pair.get((machine.id, backend))
+                or resources_by_pair.get((runner.id, backend))
+                or Resource(
+                    workspace_id=workspace_id,
+                    machine_id=machine.id,
+                    runner_id=runner.id,
+                    backend=backend,
+                )
             )
+            resource.workspace_id = workspace_id
+            resource.machine_id = machine.id
+            resource.runner_id = runner.id
             if discovery := discovery_by_name.get(backend):
                 apply_discovery(resource, discovery)
             store.put(resource)
-            resources_by_pair[(runner.id, backend)] = resource
+            resources_by_pair[(machine.id, backend)] = resource
             if body.auto_probe and resource.usability_status == ResourceUsability.unknown:
                 queue_probe(resource, runner)
 
         for discovery in body.discoveries:
             if discovery.installed:
                 continue
-            resource = resources_by_pair.get((runner.id, discovery.name))
+            resource = resources_by_pair.get((machine.id, discovery.name))
             if resource:
                 apply_discovery(resource, discovery)
                 store.put(resource)
 
-        return {"runner_id": runner.id}
+        return {"runner_id": runner.id, "machine_id": machine.id}
 
-    @app.post("/api/runners/{runner_id}/poll", dependencies=[Depends(runner_auth)])
-    async def poll(runner_id: str):
+    @app.post("/api/runners/{runner_id}/poll")
+    async def poll(runner_id: str, workspace_id: str = Depends(runner_auth)):
         runner = store.get(Runner, runner_id)
-        if not runner:
+        if not runner or runner.workspace_id != workspace_id:
             raise HTTPException(404, "unknown runner — re-register")
         deadline = time.monotonic() + RUNNER_POLL_WAIT_S
         while True:
             runner.last_seen = time.time()
             store.put(runner)
-            for task in store.list(Task, status=TaskStatus.running, runner_id=runner_id):
+            for task in store.list(
+                Task, workspace_id=workspace_id, status=TaskStatus.running, runner_id=runner_id
+            ):
                 if not task.delivered:
                     task.delivered = True
                     store.put(task)
@@ -604,8 +774,16 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
                 return {"task": None}
             await asyncio.sleep(2.0)
 
-    @app.post("/api/tasks/{task_id}/result", dependencies=[Depends(runner_auth)])
-    def task_result(task_id: str, body: TaskResult):
+    @app.post("/api/tasks/{task_id}/result")
+    def task_result(
+        task_id: str,
+        body: TaskResult,
+        workspace_id: str = Depends(runner_auth),
+    ):
+        existing = store.get(Task, task_id)
+        if not existing or existing.workspace_id != workspace_id:
+            raise HTTPException(404)
+
         def record(task: Task) -> None:
             if body.cancelled:
                 task.status = TaskStatus.cancelled
@@ -639,7 +817,12 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
             if body.resource_exhausted:
                 resource.cooldown_until = time.time() + RATE_LIMIT_COOLDOWN_S
 
-        for resource in store.list(Resource, runner_id=task.runner_id, backend=task.backend):
+        for resource in store.list(
+            Resource,
+            workspace_id=workspace_id,
+            runner_id=task.runner_id,
+            backend=task.backend,
+        ):
             store.update(Resource, resource.id, account)
 
         if task.kind == TaskKind.probe:
@@ -656,6 +839,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None) -> Fas
                         f"{chr(10) + chr(10) + hint if hint else ''}\n\n"
                         f"Recent probe output:\n\n```\n{body.text[:1500]}\n```"
                     ),
+                    workspace_id=workspace_id,
                 )
             return {"ok": True}
 
@@ -694,9 +878,23 @@ def production_app() -> FastAPI:
         blobs = LocalBlobStore(config.data_dir / "blobs")
     from hive.orchestrator import Orchestrator
 
+    machine = ensure_control_plane_machine(store, config)
     orchestrator = Orchestrator(store, blobs, config)
-    supervisor = Supervisor(store, orchestrator.invoke)
-    app = create_app(store, supervisor, config, blobs=blobs)
+    supervisor = Supervisor(
+        store,
+        orchestrator.invoke,
+        workspace_id=config.workspace_id,
+        machine_name=machine.name,
+    )
+    from hive.local_runner import LocalRunnerManager
+
+    app = create_app(
+        store,
+        supervisor,
+        config,
+        blobs=blobs,
+        local_runner=LocalRunnerManager(config),
+    )
 
     import os
     from pathlib import Path

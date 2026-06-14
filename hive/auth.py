@@ -1,0 +1,313 @@
+"""Authentication, workspace bootstrap, and machine enrollment.
+
+Hive is single-user in the MVP, but the durable boundary is a workspace so
+projects/resources can become team-owned later without a schema rewrite.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+import re
+import socket
+import time
+from dataclasses import dataclass
+
+import httpx
+from fastapi import HTTPException, Request
+from fastapi.responses import RedirectResponse
+
+from hive.config import Config
+from hive.models import (
+    DEFAULT_WORKSPACE_ID,
+    Machine,
+    User,
+    Workspace,
+    WorkspaceMembership,
+)
+
+SESSION_COOKIE = "hive_session"
+SESSION_TTL_S = 30 * 24 * 3600
+STATE_TTL_S = 10 * 60
+
+
+@dataclass(frozen=True)
+class AuthContext:
+    user: User
+    workspace: Workspace
+
+    @property
+    def workspace_id(self) -> str:
+        return self.workspace.id
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode().rstrip("=")
+
+
+def _unb64(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def _slug(text: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_.-]+", "-", text.strip().lower()).strip("-")
+    return slug or DEFAULT_WORKSPACE_ID
+
+
+def _machine_id(workspace_id: str, name: str) -> str:
+    digest = hashlib.sha256(f"{workspace_id}:{name}".encode()).hexdigest()[:16]
+    return f"machine-{digest}"
+
+
+def ensure_workspace(store, config: Config) -> Workspace:
+    workspace = store.get(Workspace, config.workspace_id)
+    if workspace:
+        return workspace
+    return store.put(Workspace(id=config.workspace_id, name=config.workspace_name or "personal"))
+
+
+def ensure_machine(
+    store,
+    workspace_id: str,
+    *,
+    name: str,
+    machine_id: str = "",
+    hostname: str = "",
+    kind: str = "unknown",
+) -> Machine:
+    machine_id = machine_id or _machine_id(workspace_id, name)
+    now = time.time()
+    machine = store.get(Machine, machine_id)
+    if machine is None or machine.workspace_id != workspace_id:
+        machine = Machine(
+            id=machine_id,
+            workspace_id=workspace_id,
+            name=name,
+            hostname=hostname or name,
+            kind=kind,
+            first_seen=now,
+            last_seen=now,
+        )
+    else:
+        machine.name = name or machine.name
+        machine.hostname = hostname or machine.hostname
+        machine.kind = kind or machine.kind
+        machine.last_seen = now
+    return store.put(machine)
+
+
+def ensure_control_plane_machine(store, config: Config) -> Machine:
+    name = config.machine_name or socket.gethostname()
+    return ensure_machine(
+        store,
+        config.workspace_id,
+        name=name,
+        machine_id=config.machine_id,
+        hostname=socket.gethostname(),
+        kind="control-plane",
+    )
+
+
+class AuthManager:
+    def __init__(self, store, config: Config) -> None:
+        self.store = store
+        self.config = config
+        self.workspace = ensure_workspace(store, config)
+        self.allowed_github = {
+            login.strip().lower()
+            for login in config.allowed_github_users.split(",")
+            if login.strip()
+        }
+
+    def validate_config(self) -> None:
+        if self.config.auth_mode == "github":
+            missing = [
+                name
+                for name, value in {
+                    "HIVE_GITHUB_CLIENT_ID": self.config.github_client_id,
+                    "HIVE_GITHUB_CLIENT_SECRET": self.config.github_client_secret,
+                }.items()
+                if not value
+            ]
+            if missing:
+                raise RuntimeError(
+                    "GitHub auth is enabled but missing " + ", ".join(missing)
+                )
+
+    def _secret(self) -> bytes:
+        secret = (
+            self.config.auth_secret
+            or self.config.github_client_secret
+            or ("dev-secret" if self.config.auth_mode == "dev" else "")
+        )
+        if not secret:
+            raise HTTPException(500, "HIVE_AUTH_SECRET or GitHub client secret is required")
+        return secret.encode()
+
+    def _sign(self, payload: dict) -> str:
+        raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        sig = hmac.new(self._secret(), raw, hashlib.sha256).digest()
+        return f"{_b64(raw)}.{_b64(sig)}"
+
+    def _verify(self, token: str) -> dict:
+        try:
+            raw_b64, sig_b64 = token.split(".", 1)
+            raw = _unb64(raw_b64)
+            sig = _unb64(sig_b64)
+        except ValueError as exc:
+            raise HTTPException(401, "bad session") from exc
+        expected = hmac.new(self._secret(), raw, hashlib.sha256).digest()
+        if not hmac.compare_digest(sig, expected):
+            raise HTTPException(401, "bad session")
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(401, "bad session") from exc
+        if payload.get("exp", 0) < time.time():
+            raise HTTPException(401, "session expired")
+        return payload
+
+    def _ensure_user(self, github_login: str, display_name: str = "") -> User:
+        login = github_login.lower()
+        existing = next(
+            (u for u in self.store.list(User) if u.github_login.lower() == login),
+            None,
+        )
+        user = existing or User(id=f"github:{login}", github_login=login)
+        user.display_name = display_name or user.display_name or github_login
+        user.last_seen = time.time()
+        self.store.put(user)
+
+        membership = next(
+            (
+                m
+                for m in self.store.list(
+                    WorkspaceMembership,
+                    workspace_id=self.workspace.id,
+                    user_id=user.id,
+                )
+            ),
+            None,
+        )
+        if membership is None:
+            self.store.put(
+                WorkspaceMembership(
+                    id=f"{self.workspace.id}:{user.id}",
+                    workspace_id=self.workspace.id,
+                    user_id=user.id,
+                    role="owner",
+                )
+            )
+        return user
+
+    def dev_context(self) -> AuthContext:
+        login = next(iter(self.allowed_github), "dev")
+        user = self._ensure_user(login, login)
+        return AuthContext(user=user, workspace=self.workspace)
+
+    def session_token(self, user: User) -> str:
+        return self._sign(
+            {
+                "typ": "session",
+                "sub": user.id,
+                "workspace_id": self.workspace.id,
+                "exp": time.time() + SESSION_TTL_S,
+            }
+        )
+
+    def require(self, request: Request) -> AuthContext:
+        if self.config.auth_mode == "dev":
+            return self.dev_context()
+        token = request.cookies.get(SESSION_COOKIE)
+        auth = request.headers.get("Authorization", "")
+        if auth.lower().startswith("bearer "):
+            token = auth.split(" ", 1)[1]
+        if not token:
+            raise HTTPException(401, "login required")
+        payload = self._verify(token)
+        if payload.get("typ") != "session" or payload.get("workspace_id") != self.workspace.id:
+            raise HTTPException(401, "bad session")
+        user = self.store.get(User, payload.get("sub", ""))
+        if not user:
+            raise HTTPException(401, "unknown user")
+        membership = self.store.list(
+            WorkspaceMembership,
+            workspace_id=self.workspace.id,
+            user_id=user.id,
+        )
+        if not membership:
+            raise HTTPException(403, "not a workspace member")
+        user.last_seen = time.time()
+        self.store.put(user)
+        return AuthContext(user=user, workspace=self.workspace)
+
+    def state_token(self) -> str:
+        return self._sign({"typ": "oauth_state", "exp": time.time() + STATE_TTL_S})
+
+    def verify_state(self, state: str) -> None:
+        payload = self._verify(state)
+        if payload.get("typ") != "oauth_state":
+            raise HTTPException(400, "bad oauth state")
+
+    def github_start(self) -> RedirectResponse:
+        self.validate_config()
+        from urllib.parse import urlencode
+
+        params = urlencode(
+            {
+                "client_id": self.config.github_client_id,
+                "redirect_uri": f"{self.config.public_url.rstrip('/')}/api/auth/github/callback",
+                "scope": "read:user",
+                "state": self.state_token(),
+            }
+        )
+        return RedirectResponse(f"https://github.com/login/oauth/authorize?{params}")
+
+    def github_callback(self, code: str, state: str) -> RedirectResponse:
+        self.validate_config()
+        self.verify_state(state)
+        token_response = httpx.post(
+            "https://github.com/login/oauth/access_token",
+            json={
+                "client_id": self.config.github_client_id,
+                "client_secret": self.config.github_client_secret,
+                "code": code,
+                "redirect_uri": f"{self.config.public_url.rstrip('/')}/api/auth/github/callback",
+            },
+            headers={"Accept": "application/json"},
+            timeout=30.0,
+        )
+        token_response.raise_for_status()
+        access_token = token_response.json().get("access_token", "")
+        if not access_token:
+            raise HTTPException(401, "GitHub did not return an access token")
+        user_response = httpx.get(
+            "https://api.github.com/user",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {access_token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=30.0,
+        )
+        user_response.raise_for_status()
+        profile = user_response.json()
+        login = str(profile.get("login", "")).lower()
+        if login not in self.allowed_github:
+            raise HTTPException(403, "GitHub user is not allowed")
+        user = self._ensure_user(login, profile.get("name") or login)
+        response = RedirectResponse("/")
+        response.set_cookie(
+            SESSION_COOKIE,
+            self.session_token(user),
+            max_age=SESSION_TTL_S,
+            httponly=True,
+            secure=self.config.public_url.startswith("https://"),
+            samesite="lax",
+        )
+        return response
+
+    def logout(self) -> dict:
+        return {"ok": True}

@@ -75,7 +75,12 @@ class Tools:
         """Create a workstream: a coarse direction of work (e.g. 'auth flow')
         touching a mostly-disjoint part of the codebase."""
         ws = self.store.put(
-            Workstream(project_id=self.project.id, title=title, description=description)
+            Workstream(
+                workspace_id=self.project.workspace_id,
+                project_id=self.project.id,
+                title=title,
+                description=description,
+            )
         )
         self.actions.append(f"created workstream {ws.id} '{title}'")
         return f"workstream_id={ws.id}"
@@ -95,7 +100,12 @@ class Tools:
         advertises (see RUNNERS in the snapshot), or the task cannot dispatch."""
         if backend not in BACKEND_NAMES:
             return f"error: unknown backend {backend!r}, use one of {BACKEND_NAMES}"
-        online = [b for r in self.store.list(Runner) if r.online() for b in r.backends]
+        online = [
+            b
+            for r in self.store.list(Runner, workspace_id=self.project.workspace_id)
+            if r.online()
+            for b in r.backends
+        ]
         if online and backend not in online:
             return f"error: no online runner offers {backend!r}; available now: {sorted(set(online))}"
         if not self.store.get(Workstream, workstream_id):
@@ -133,6 +143,7 @@ class Tools:
             prompt_versions["verify_suffix"] = version
         task = self.store.put(
             Task(
+                workspace_id=self.project.workspace_id,
                 project_id=self.project.id,
                 workstream_id=workstream_id,
                 repo=repo,
@@ -179,6 +190,7 @@ class Tools:
         given, that workstream is parked until the answer arrives."""
         q = self.store.put(
             Question(
+                workspace_id=self.project.workspace_id,
                 project_id=self.project.id,
                 workstream_id=workstream_id,
                 text=question_markdown,
@@ -247,6 +259,7 @@ class Tools:
         duplicates."""
         t = self.store.put(
             HumanTask(
+                workspace_id=self.project.workspace_id,
                 project_id="" if org_wide else self.project.id,
                 title=title,
                 instructions=instructions_markdown,
@@ -317,11 +330,13 @@ class Tools:
         ]
         runner_lines = [
             f"- {r.name}: backends={','.join(r.backends)} {'online' if r.online() else 'OFFLINE'}"
-            for r in self.store.list(Runner)
+            for r in self.store.list(Runner, workspace_id=self.project.workspace_id)
         ]
-        runners_by_id = {r.id: r for r in self.store.list(Runner)}
+        runners_by_id = {
+            r.id: r for r in self.store.list(Runner, workspace_id=self.project.workspace_id)
+        }
         resource_lines = []
-        for res in self.store.list(Resource):
+        for res in self.store.list(Resource, workspace_id=self.project.workspace_id):
             runner = runners_by_id.get(res.runner_id)
             runner_name = runner.name if runner else res.runner_id
             cooldown = f", cooldown_until={res.cooldown_until:.0f}" if res.cooldown_until else ""
@@ -342,11 +357,14 @@ class Tools:
             )
         todo_lines = [
             f"- {t.id} [{'org-wide' if not t.project_id else 'this project'}]: {t.title}"
-            for t in self.store.list(HumanTask, status=HumanTaskStatus.open)
+            for t in self.store.list(
+                HumanTask, workspace_id=self.project.workspace_id, status=HumanTaskStatus.open
+            )
             if t.project_id in ("", self.project.id)
         ]
         sub_lines = [
-            f"- {s.provider} ({s.plan or 'plan?'}): {s.notes}" for s in self.store.list(Subscription)
+            f"- {s.provider} ({s.plan or 'plan?'}): {s.notes}"
+            for s in self.store.list(Subscription, workspace_id=self.project.workspace_id)
         ]
         feedback_lines = [
             f"- {f.verdict} on {f.target_id}: {f.comment}"
@@ -418,7 +436,7 @@ class Orchestrator:
         history = self._load_history(project_id)
         result = self._generate(project, history, user_msg, tools)
         final_text = result.text
-        self._record_cost(project_id, result)
+        self._record_cost(project, result)
         log.info("orchestrator[%s]: %s | actions: %s", project.name, final_text[:200], tools.actions)
 
         # Persist model text only — echoing executed tool calls as text teaches
@@ -435,7 +453,7 @@ class Orchestrator:
     ) -> LoopResult:
         adapter = self._build_adapter()
         result = ToolLoop(MAX_REMOTE_CALLS).run(
-            adapter, self._system_prompt(), history, user_msg, ToolSet(tools.functions())
+            adapter, self._system_prompt(project), history, user_msg, ToolSet(tools.functions())
         )
         result.model = getattr(adapter, "model", "")
         return result
@@ -444,11 +462,12 @@ class Orchestrator:
         """The provider seam: tests override this to inject a scripted adapter."""
         return build_adapter(self.config)
 
-    def _record_cost(self, project_id: str, result: LoopResult) -> None:
+    def _record_cost(self, project: Project, result: LoopResult) -> None:
         cost = estimate_cost(result.model, result.usage.input_tokens, result.usage.output_tokens)
         self.store.put(
             OrchestratorRun(
-                project_id=project_id,
+                workspace_id=project.workspace_id,
+                project_id=project.id,
                 model=result.model,
                 input_tokens=result.usage.input_tokens,
                 output_tokens=result.usage.output_tokens,
@@ -456,15 +475,17 @@ class Orchestrator:
             )
         )
 
-    def _system_prompt(self) -> str:
+    def _system_prompt(self, project: Project) -> str:
         base_prompt, _version = load_prompt("orchestrator")
-        org_context = self.store.get_org_context()
+        org_context = self.store.get_org_context(project.workspace_id)
         return base_prompt + (f"\n\nORG CONTEXT:\n{org_context}" if org_context else "")
 
     # -- history persistence ---------------------------------------------------
 
     def _history_blob(self, project_id: str) -> str:
-        return f"orchestrator-context/{project_id}.json"
+        project = self.store.get(Project, project_id)
+        workspace_id = project.workspace_id if project else "unknown"
+        return f"workspaces/{workspace_id}/orchestrator-context/{project_id}.json"
 
     def _load_history(self, project_id: str) -> list[dict]:
         raw = self.blobs.get(self._history_blob(project_id))

@@ -13,6 +13,7 @@ export type ProjectState =
 
 export interface Project {
   id: string;
+  workspace_id?: string;
   name: string;
   spec_repo: string;
   member_repos: string[];
@@ -30,6 +31,7 @@ export interface Project {
 
 export interface Workstream {
   id: string;
+  workspace_id?: string;
   project_id: string;
   title: string;
   description: string;
@@ -40,6 +42,7 @@ export interface Workstream {
 
 export interface Task {
   id: string;
+  workspace_id?: string;
   project_id: string;
   workstream_id: string;
   repo: string;
@@ -67,6 +70,7 @@ export interface Task {
 
 export interface Question {
   id: string;
+  workspace_id?: string;
   project_id: string;
   workstream_id: string;
   text: string;
@@ -84,16 +88,50 @@ export interface ProjectDetail {
   human_tasks: HumanTask[];
 }
 
+export interface HiveUser {
+  id: string;
+  github_login: string;
+  display_name: string;
+  created_at: number;
+  last_seen: number;
+}
+
+export interface Workspace {
+  id: string;
+  name: string;
+  created_at: number;
+}
+
+export interface AuthInfo {
+  user: HiveUser;
+  workspace: Workspace;
+  auth_mode: string;
+}
+
 export interface RunnerInfo {
   id: string;
+  workspace_id?: string;
+  machine_id?: string;
   name: string;
   backends: string[];
   last_seen: number;
   online: boolean;
 }
 
+export interface MachineInfo {
+  id: string;
+  workspace_id: string;
+  name: string;
+  hostname: string;
+  kind: string;
+  first_seen: number;
+  last_seen: number;
+}
+
 export interface ResourceInfo {
   id: string;
+  workspace_id?: string;
+  machine_id?: string;
   runner_id: string;
   backend: string;
   discovery_status: string;
@@ -112,12 +150,26 @@ export interface ResourceInfo {
 }
 
 export interface ResourcesPayload {
+  machines?: MachineInfo[];
   runners: RunnerInfo[];
   resources: ResourceInfo[];
+  local_runner?: LocalRunnerInfo;
+}
+
+export interface LocalRunnerInfo {
+  supported: boolean;
+  running: boolean;
+  registered: boolean;
+  runner_name: string;
+  pid: number;
+  autostart: boolean;
+  log_path: string;
+  message: string;
 }
 
 export interface Subscription {
   id: string;
+  workspace_id?: string;
   provider: string;
   plan: string;
   notes: string;
@@ -126,6 +178,7 @@ export interface Subscription {
 
 export interface HumanTask {
   id: string;
+  workspace_id?: string;
   project_id: string; // empty = org-wide
   title: string;
   instructions: string;

@@ -29,12 +29,48 @@ export function useOverview() {
   return useOutletContext<ReturnType<typeof usePoll<Overview>>>();
 }
 
+const emptyOverview: Overview = {
+  details: [],
+  openQuestions: 0,
+  openTodos: 0,
+  resources: { machines: [], runners: [], resources: [] },
+};
+
 export default function App() {
-  const poll = usePoll(fetchOverview, []);
+  const auth = usePoll(() => api.me(), [], 30000);
+  const poll = usePoll(
+    () => (auth.data ? fetchOverview() : Promise.resolve(emptyOverview)),
+    [auth.data?.workspace.id],
+  );
   const { theme, toggle } = useTheme();
   const open = poll.data?.openQuestions ?? 0;
   const todos = poll.data?.openTodos ?? 0;
   const attention = open + todos;
+
+  if (!auth.data && auth.failed) {
+    return (
+      <div className="login-shell">
+        <section className="login-panel">
+          <div className="brand login-brand">
+            <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden>
+              <path
+                d="M12 1.5 21 6.75v10.5L12 22.5 3 17.25V6.75z"
+                fill="none"
+                stroke="var(--honey)"
+                strokeWidth="1.8"
+              />
+              <path d="M12 6.5 16.5 9.25v5.5L12 17.5 7.5 14.75v-5.5z" fill="var(--honey)" opacity="0.55" />
+            </svg>
+            <span>hive</span>
+          </div>
+          <h1>Sign in</h1>
+          <a className="login-button" href="/api/auth/github/start">
+            Continue with GitHub
+          </a>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="shell">

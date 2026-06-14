@@ -82,6 +82,8 @@ def test_leader_lease():
     assert store.claim_leader("a", 60) == "a"
     assert store.claim_leader("a", 60) == "a"  # renew by the holder
     assert store.claim_leader("b", 60) == "a"  # contender sees the live holder
+    assert store.claim_leader("b", 60, workspace_id="team-b") == "b"
+    assert store.claim_leader("c", 60, workspace_id="team-b") == "b"
 
     expired = MemoryStore()
     assert expired.claim_leader("a", 0.0) == "a"  # holds, but lease lapses immediately

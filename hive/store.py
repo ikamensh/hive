@@ -15,8 +15,10 @@ from abc import ABC, abstractmethod
 from typing import Callable, TypeVar
 
 from hive.models import (
+    DEFAULT_WORKSPACE_ID,
     Feedback,
     HumanTask,
+    Machine,
     OrchestratorRun,
     Project,
     Question,
@@ -26,11 +28,18 @@ from hive.models import (
     Subscription,
     Task,
     TaskStatus,
+    User,
     Workstream,
+    Workspace,
+    WorkspaceMembership,
 )
 
 M = TypeVar(
     "M",
+    User,
+    Workspace,
+    WorkspaceMembership,
+    Machine,
     Project,
     Workstream,
     Task,
@@ -44,6 +53,10 @@ M = TypeVar(
 )
 
 _COLLECTIONS: dict[type, str] = {
+    User: "users",
+    Workspace: "workspaces",
+    WorkspaceMembership: "workspace_memberships",
+    Machine: "machines",
     Project: "projects",
     Workstream: "workstreams",
     Task: "tasks",
@@ -59,6 +72,12 @@ _COLLECTIONS: dict[type, str] = {
 
 def _created_at(obj) -> float:
     return getattr(obj, "created_at", 0.0)
+
+
+def _matches(raw: dict, key: str, value) -> bool:
+    if key == "workspace_id" and value == DEFAULT_WORKSPACE_ID and key not in raw:
+        return True
+    return raw.get(key) == value
 
 
 class StoreBase(ABC):
@@ -86,13 +105,15 @@ class StoreBase(ABC):
     def delete(self, model: type[M], id: str) -> None: ...
 
     @abstractmethod
-    def get_org_context(self) -> str: ...
+    def get_org_context(self, workspace_id: str = DEFAULT_WORKSPACE_ID) -> str: ...
 
     @abstractmethod
-    def set_org_context(self, text: str) -> None: ...
+    def set_org_context(self, text: str, workspace_id: str = DEFAULT_WORKSPACE_ID) -> None: ...
 
     @abstractmethod
-    def claim_leader(self, holder: str, ttl_s: float) -> str: ...
+    def claim_leader(
+        self, holder: str, ttl_s: float, workspace_id: str = DEFAULT_WORKSPACE_ID
+    ) -> str: ...
 
     # -- derived queries (depend only on list) -------------------------------
 
@@ -130,7 +151,7 @@ class MemoryStore(StoreBase):
         out = [
             model.model_validate(raw)
             for raw in rows
-            if all(raw.get(k) == v for k, v in filters.items())
+            if all(_matches(raw, k, v) for k, v in filters.items())
         ]
         out.sort(key=_created_at)
         return out[-limit:] if limit is not None else out
@@ -150,24 +171,42 @@ class MemoryStore(StoreBase):
         with self._lock:
             self._data[_COLLECTIONS[model]].pop(id, None)
 
-    def get_org_context(self) -> str:
+    def get_org_context(self, workspace_id: str = DEFAULT_WORKSPACE_ID) -> str:
         with self._lock:
-            return self.org_context
+            if workspace_id == DEFAULT_WORKSPACE_ID:
+                return self.org_context
+            return getattr(self, "_org_contexts", {}).get(workspace_id, "")
 
-    def set_org_context(self, text: str) -> None:
+    def set_org_context(self, text: str, workspace_id: str = DEFAULT_WORKSPACE_ID) -> None:
         with self._lock:
-            self.org_context = text
+            if workspace_id == DEFAULT_WORKSPACE_ID:
+                self.org_context = text
+            else:
+                if not hasattr(self, "_org_contexts"):
+                    self._org_contexts = {}
+                self._org_contexts[workspace_id] = text
 
-    def claim_leader(self, holder: str, ttl_s: float) -> str:
+    def claim_leader(
+        self, holder: str, ttl_s: float, workspace_id: str = DEFAULT_WORKSPACE_ID
+    ) -> str:
         """Claim or renew the single-control-plane lease. Returns the holder
         that owns the lease after this attempt; callers losing the claim see
         the competing holder's name. A lease is free once its TTL lapses, so
         a crashed control plane is superseded within ttl_s."""
         with self._lock:
-            lease = self._lease
+            if workspace_id == DEFAULT_WORKSPACE_ID:
+                lease = self._lease
+            else:
+                if not hasattr(self, "_leases"):
+                    self._leases = {}
+                lease = self._leases.get(workspace_id)
             if lease and lease["holder"] != holder and lease["expires"] > time.time():
                 return lease["holder"]
-            self._lease = {"holder": holder, "expires": time.time() + ttl_s}
+            lease = {"holder": holder, "expires": time.time() + ttl_s}
+            if workspace_id == DEFAULT_WORKSPACE_ID:
+                self._lease = lease
+            else:
+                self._leases[workspace_id] = lease
             return holder
 
 
@@ -189,9 +228,18 @@ class FirestoreStore(StoreBase):
         from google.cloud.firestore_v1 import FieldFilter
 
         query = self._db.collection(_COLLECTIONS[model])
+        post_filters = {}
         for k, v in filters.items():
+            if k == "workspace_id" and v == DEFAULT_WORKSPACE_ID:
+                post_filters[k] = v
+                continue
             query = query.where(filter=FieldFilter(k, "==", v))
-        out = [model.model_validate(snap.to_dict()) for snap in query.stream()]
+            post_filters[k] = v
+        out = []
+        for snap in query.stream():
+            raw = snap.to_dict()
+            if all(_matches(raw, k, v) for k, v in post_filters.items()):
+                out.append(model.model_validate(raw))
         out.sort(key=_created_at)
         return out[-limit:] if limit is not None else out
 
@@ -216,17 +264,38 @@ class FirestoreStore(StoreBase):
     def delete(self, model: type[M], id: str) -> None:
         self._db.collection(_COLLECTIONS[model]).document(id).delete()
 
-    def get_org_context(self) -> str:
-        snap = self._db.collection("settings").document("org_context").get()
+    def get_org_context(self, workspace_id: str = DEFAULT_WORKSPACE_ID) -> str:
+        snap = (
+            self._db.collection("workspaces")
+            .document(workspace_id)
+            .collection("settings")
+            .document("org_context")
+            .get()
+        )
+        if not snap.exists and workspace_id == DEFAULT_WORKSPACE_ID:
+            snap = self._db.collection("settings").document("org_context").get()
         return snap.to_dict().get("text", "") if snap.exists else ""
 
-    def set_org_context(self, text: str) -> None:
-        self._db.collection("settings").document("org_context").set({"text": text})
+    def set_org_context(self, text: str, workspace_id: str = DEFAULT_WORKSPACE_ID) -> None:
+        (
+            self._db.collection("workspaces")
+            .document(workspace_id)
+            .collection("settings")
+            .document("org_context")
+            .set({"text": text})
+        )
 
-    def claim_leader(self, holder: str, ttl_s: float) -> str:
+    def claim_leader(
+        self, holder: str, ttl_s: float, workspace_id: str = DEFAULT_WORKSPACE_ID
+    ) -> str:
         from google.cloud import firestore
 
-        ref = self._db.collection("settings").document("leader_lease")
+        ref = (
+            self._db.collection("workspaces")
+            .document(workspace_id)
+            .collection("settings")
+            .document("leader_lease")
+        )
         transaction = self._db.transaction()
 
         @firestore.transactional

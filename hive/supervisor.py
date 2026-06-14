@@ -19,6 +19,7 @@ from typing import Callable
 
 from hive.escalation import escalate
 from hive.models import (
+    DEFAULT_WORKSPACE_ID,
     OrchestratorRun,
     Project,
     ProjectState,
@@ -86,10 +87,18 @@ class Supervisor:
     TICK_S = 15.0
     HEARTBEAT_MIN_INTERVAL_S = 600.0  # rate-limit decision wakes not driven by events
 
-    def __init__(self, store, orchestrate: Callable[[str, list[str]], None]) -> None:
+    def __init__(
+        self,
+        store,
+        orchestrate: Callable[[str, list[str]], None],
+        workspace_id: str = DEFAULT_WORKSPACE_ID,
+        machine_name: str = "",
+    ) -> None:
         self.store = store
         self.orchestrate = orchestrate
-        self.holder = f"{socket.gethostname()}:{os.getpid()}"
+        self.workspace_id = workspace_id
+        machine = machine_name or socket.gethostname()
+        self.holder = f"{machine}:{os.getpid()}"
         self._events: dict[str, list[str]] = defaultdict(list)
         self._wakeup = asyncio.Event()
         self._busy: set[str] = set()  # projects with an orchestrator invocation in flight
@@ -102,10 +111,11 @@ class Supervisor:
     def acquire_leadership(self) -> None:
         """Claim the single-control-plane lease or refuse to start. Two control
         planes on one store would double-dispatch and double-wake."""
-        owner = self.store.claim_leader(self.holder, LEASE_TTL_S)
+        owner = self.store.claim_leader(self.holder, LEASE_TTL_S, self.workspace_id)
         if owner != self.holder:
             raise RuntimeError(
-                f"another control plane ({owner}) holds the leader lease — "
+                f"another control plane ({owner}) holds the leader lease for workspace "
+                f"{self.workspace_id} — "
                 f"stop it or wait {LEASE_TTL_S:.0f}s for its lease to expire"
             )
 
@@ -113,10 +123,12 @@ class Supervisor:
 
     def available_backends(self) -> set[str]:
         """Backends an online runner currently offers with available quota."""
-        online = {r.id for r in self.store.list(Runner) if r.online()}
+        online = {
+            r.id for r in self.store.list(Runner, workspace_id=self.workspace_id) if r.online()
+        }
         return {
             res.backend
-            for res in self.store.list(Resource)
+            for res in self.store.list(Resource, workspace_id=self.workspace_id)
             if res.available() and res.runner_id in online
         }
 
@@ -124,12 +136,16 @@ class Supervisor:
         start = utc_day_start()
         tasks = sum(
             t.cost_usd
-            for t in self.store.list(Task, project_id=project_id)
+            for t in self.store.list(
+                Task, workspace_id=self.workspace_id, project_id=project_id
+            )
             if t.finished_at >= start
         )
         orchestrator = sum(
             r.cost_usd
-            for r in self.store.list(OrchestratorRun, project_id=project_id)
+            for r in self.store.list(
+                OrchestratorRun, workspace_id=self.workspace_id, project_id=project_id
+            )
             if r.created_at >= start
         )
         return tasks + orchestrator
@@ -138,10 +154,14 @@ class Supervisor:
         return project.daily_budget_usd > 0 and self.spend_today(project.id) >= project.daily_budget_usd
 
     def refresh_state(self, project: Project) -> ProjectState:
-        workstreams = self.store.list(Workstream, project_id=project.id)
+        workstreams = self.store.list(
+            Workstream, workspace_id=self.workspace_id, project_id=project.id
+        )
         tasks = [
             t
-            for t in self.store.list(Task, project_id=project.id)
+            for t in self.store.list(
+                Task, workspace_id=self.workspace_id, project_id=project.id
+            )
             if t.status in (TaskStatus.pending, TaskStatus.running)
         ]
         state = compute_state(
@@ -161,11 +181,13 @@ class Supervisor:
         """Assign pending tasks to runners. One task per repo at a time."""
         if self.over_budget(project):
             return 0  # daily soft cap reached; no new spend until UTC midnight
-        tasks = self.store.list(Task, project_id=project.id)
+        tasks = self.store.list(Task, workspace_id=self.workspace_id, project_id=project.id)
         busy_repos = {t.repo for t in tasks if t.status == TaskStatus.running}
-        runners = [r for r in self.store.list(Runner) if r.online()]
+        runners = [r for r in self.store.list(Runner, workspace_id=self.workspace_id) if r.online()]
         resources = {
-            (r.runner_id, r.backend): r for r in self.store.list(Resource) if r.available()
+            (r.runner_id, r.backend): r
+            for r in self.store.list(Resource, workspace_id=self.workspace_id)
+            if r.available()
         }
         dispatched = 0
         for task in tasks:
@@ -197,8 +219,10 @@ class Supervisor:
 
     def fail_orphaned_tasks(self) -> None:
         """Tasks running on runners that vanished come back as failures."""
-        runners = {r.id: r for r in self.store.list(Runner)}
-        for task in self.store.list(Task, status=TaskStatus.running):
+        runners = {r.id: r for r in self.store.list(Runner, workspace_id=self.workspace_id)}
+        for task in self.store.list(
+            Task, workspace_id=self.workspace_id, status=TaskStatus.running
+        ):
             runner = runners.get(task.runner_id)
             offline_s = time.time() - runner.last_seen if runner else float("inf")
             if offline_s <= RUNNER_OFFLINE_TASK_FAIL_S:
@@ -221,7 +245,7 @@ class Supervisor:
 
     async def run_forever(self) -> None:
         while True:
-            owner = self.store.claim_leader(self.holder, LEASE_TTL_S)
+            owner = self.store.claim_leader(self.holder, LEASE_TTL_S, self.workspace_id)
             if owner != self.holder:
                 # Fenced out: keeping the process alive would leave a second
                 # API mutating tasks. Hard-exit so supervision restarts us cleanly.
@@ -240,7 +264,7 @@ class Supervisor:
     async def _step(self) -> None:
         self.fail_orphaned_tasks()
         avail = self.available_backends()
-        for project in self.store.list(Project):
+        for project in self.store.list(Project, workspace_id=self.workspace_id):
             if project.paused or not project.spec_repo.strip():
                 continue
             self.dispatch(project)
@@ -324,4 +348,5 @@ class Supervisor:
                 "Fix the orchestrator configuration, then mark this todo done so Hive re-evaluates the project."
             ),
             project_id=project_id,
+            workspace_id=self.workspace_id,
         )

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  AuthInfo,
   HumanTask,
   Project,
   ProjectCreate,
@@ -20,7 +21,11 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
-  if (!res.ok) throw new Error(`${res.status} on ${path}`);
+  if (!res.ok) {
+    const err = new Error(`${res.status} on ${path}`);
+    (err as Error & { status?: number }).status = res.status;
+    throw err;
+  }
   return res.json();
 }
 
@@ -31,6 +36,10 @@ async function httpText(path: string, init?: RequestInit): Promise<string> {
 }
 
 const realApi = {
+  me: () => http<AuthInfo>("/api/auth/me"),
+  logout: async () => {
+    await http("/api/auth/logout", { method: "POST" });
+  },
   projects: () => http<Project[]>("/api/projects"),
   createProject: (body: ProjectCreate) =>
     http<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
@@ -50,6 +59,8 @@ const realApi = {
   task: (id: string) => http<Task>(`/api/tasks/${id}`),
   trace: (id: string) => httpText(`/api/tasks/${id}/trace`),
   resources: () => http<ResourcesPayload>("/api/resources"),
+  startLocalRunner: () =>
+    http<NonNullable<ResourcesPayload["local_runner"]>>("/api/local-runner/start", { method: "POST" }),
   probeResource: (id: string) =>
     http(`/api/resources/${id}/probe`, { method: "POST" }),
   subscriptions: () => http<Subscription[]>("/api/subscriptions"),

@@ -17,6 +17,44 @@ def now() -> float:
     return time.time()
 
 
+DEFAULT_WORKSPACE_ID = "default"
+
+
+class User(BaseModel):
+    id: str = Field(default_factory=new_id)
+    github_login: str = ""
+    display_name: str = ""
+    created_at: float = Field(default_factory=now)
+    last_seen: float = Field(default_factory=now)
+
+
+class Workspace(BaseModel):
+    id: str = DEFAULT_WORKSPACE_ID
+    name: str = "personal"
+    created_at: float = Field(default_factory=now)
+
+
+class WorkspaceMembership(BaseModel):
+    id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    user_id: str
+    role: str = "owner"
+    created_at: float = Field(default_factory=now)
+
+
+class Machine(BaseModel):
+    """A durable machine the user recognizes. Runner/control-plane processes
+    are ephemeral; this record is what keeps offline machines visible."""
+
+    id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    name: str
+    hostname: str = ""
+    kind: str = "unknown"
+    first_seen: float = Field(default_factory=now)
+    last_seen: float = Field(default_factory=now)
+
+
 class Mode(StrEnum):
     build = "build"
     maintain = "maintain"
@@ -46,6 +84,7 @@ class ProjectState(StrEnum):
 
 class Project(BaseModel):
     id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
     name: str
     spec_repo: str = ""  # git URL of the spec home; empty = draft (not yet configured)
     member_repos: list[str] = []  # git URLs; spec_repo included if it holds code
@@ -69,6 +108,7 @@ class WorkstreamStatus(StrEnum):
 
 class Workstream(BaseModel):
     id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
     project_id: str
     title: str
     description: str = ""
@@ -113,6 +153,7 @@ def parse_verdict(text: str) -> Verdict:
 
 class Task(BaseModel):
     id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
     project_id: str
     workstream_id: str
     repo: str  # git URL the runner checks out
@@ -146,6 +187,7 @@ class QuestionStatus(StrEnum):
 
 class Question(BaseModel):
     id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
     project_id: str
     workstream_id: str = ""  # empty = project-level
     text: str  # markdown: context, the gap, options, recommendation
@@ -157,6 +199,8 @@ class Question(BaseModel):
 
 class Runner(BaseModel):
     id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    machine_id: str = ""
     name: str
     backends: list[str] = []  # installed agent CLIs
     last_seen: float = Field(default_factory=now)
@@ -178,6 +222,8 @@ class Resource(BaseModel):
     """One (runner, backend) capacity unit with observed-usage accounting."""
 
     id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    machine_id: str = ""
     runner_id: str
     backend: str
     discovery_status: str = "unknown"  # runner-local CLI check: missing | ok | warning | error
@@ -203,6 +249,7 @@ class Subscription(BaseModel):
     currently advertise, and anchors login-todos for remote nodes."""
 
     id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
     provider: str  # backend name it powers: claude | codex | cursor | gemini-cli
     plan: str = ""  # e.g. "ChatGPT Plus", "Claude Max 5x"
     notes: str = ""  # e.g. which machines are logged in, renewal dates
@@ -219,6 +266,7 @@ class HumanTask(BaseModel):
     concrete instructions. Surfaced in the web UI next to questions."""
 
     id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
     project_id: str = ""  # empty = org-wide (runner logins, billing, DNS)
     title: str
     instructions: str  # markdown, copy-pasteable commands
@@ -231,6 +279,7 @@ class Feedback(BaseModel):
     """Explicit human feedback on a task or question. Future GEPA input."""
 
     id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
     project_id: str
     target_id: str  # task or question id
     verdict: str  # "up" | "down"
@@ -244,6 +293,7 @@ class OrchestratorRun(BaseModel):
     tracked on Task; this is the control-plane side of the bill)."""
 
     id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
     project_id: str
     model: str = ""
     input_tokens: int = 0

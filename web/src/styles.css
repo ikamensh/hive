@@ -88,6 +88,47 @@ body::before {
   padding: 0 28px 64px;
 }
 
+.login-shell {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-panel {
+  width: min(360px, 100%);
+  padding: 28px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 24px 80px #00000033;
+}
+
+.login-brand {
+  margin-bottom: 24px;
+}
+
+.login-panel h1 {
+  margin: 0 0 18px;
+  font-size: 24px;
+}
+
+.login-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 14px;
+  background: var(--honey);
+  color: var(--btn-on-honey);
+  border-radius: 6px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
 h1,
 h2,
 h3 {
@@ -1120,6 +1161,35 @@ textarea:focus {
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 14px;
   margin-bottom: 28px;
+}
+.runner-empty {
+  grid-column: 1 / -1;
+  padding: 22px 24px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--honey);
+  border-radius: 6px;
+}
+.runner-empty h2 {
+  margin-bottom: 6px;
+  font-size: 17px;
+}
+.runner-empty button,
+.runner-empty code {
+  margin-top: 12px;
+}
+.local-runner-chip {
+  margin-left: auto;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--green) 45%, var(--line));
+  border-radius: 999px;
+  color: var(--green);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.runner-error {
+  margin-top: -12px;
+  margin-bottom: 16px;
 }
 .runner-card {
   background: var(--panel);

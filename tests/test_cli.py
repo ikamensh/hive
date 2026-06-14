@@ -144,6 +144,7 @@ def test_prepare_run_env_no_gh_no_key(monkeypatch):
     notes = prepare_run_env(env, {})
     assert "HIVE_GH_TOKEN" not in env
     assert any("NO API key" in n for n in notes)
+    assert any("local runner autostart: disabled" in n for n in notes)
 
 
 def test_stored_config_overrides_ambient_env(monkeypatch):
@@ -156,6 +157,14 @@ def test_stored_config_overrides_ambient_env(monkeypatch):
     assert env["HIVE_GH_TOKEN"] == "hive-gh"
     assert any("OPENAI_API_KEY from stored config" in n for n in notes)
     assert any("Firestore (proj, from stored config)" in n for n in notes)
+
+
+def test_stored_config_can_enable_runner_autostart(monkeypatch):
+    _fake_gh(monkeypatch, "")
+    env: dict[str, str] = {}
+    notes = prepare_run_env(env, {"HIVE_AUTOSTART_RUNNER": "true"})
+    assert env["HIVE_AUTOSTART_RUNNER"] == "true"
+    assert any("local runner autostart: enabled" in n for n in notes)
 
 
 def test_config_command_set_show_unset(tmp_path, monkeypatch, capsys):

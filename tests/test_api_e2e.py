@@ -315,7 +315,7 @@ def test_openai_orchestrator_tool_loop(tmp_path):
     assert result.text == "planned"
     assert result.model == "gpt-test"
     assert (result.usage.input_tokens, result.usage.output_tokens) == (2500, 500)  # summed
-    orch._record_cost(project.id, result)
+    orch._record_cost(project, result)
     [run] = store.list(OrchestratorRun, project_id=project.id)
     assert run.input_tokens == 2500 and run.output_tokens == 500 and run.cost_usd == 0.0
     assert store.list(Workstream, project_id=project.id)[0].title == "Basics"
@@ -449,6 +449,63 @@ def test_resource_probe_marks_usable_and_failed(harness):
     assert store.list(HumanTask)[0].title == "Fix cursor login on probe-runner"
 
 
+def test_local_runner_start_endpoint(tmp_path):
+    from hive.api import create_app
+
+    class FakeLocalRunner:
+        runner_name = "local-host"
+
+        def __init__(self):
+            self.starts = 0
+            self.stops = 0
+
+        def status(self, *, message=""):
+            return {
+                "supported": True,
+                "running": self.starts > 0,
+                "registered": False,
+                "runner_name": self.runner_name,
+                "pid": 123 if self.starts > 0 else 0,
+                "autostart": False,
+                "log_path": str(tmp_path / "local-runner.log"),
+                "message": message,
+            }
+
+        def start(self):
+            self.starts += 1
+            return self.status(message="local runner starting")
+
+        def stop(self):
+            self.stops += 1
+
+    store = MemoryStore()
+    supervisor = Supervisor(store, ScriptedOrchestrator(store).invoke)
+    config = Config(
+        gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
+        orch_model="", runner_token="test-token", data_dir=tmp_path,
+    )
+    local_runner = FakeLocalRunner()
+    client = TestClient(create_app(store, supervisor, config, local_runner=local_runner))
+
+    assert client.get("/api/resources").json()["local_runner"]["registered"] is False
+    started = client.post("/api/local-runner/start").json()
+    assert started["running"] is True
+    assert started["registered"] is False
+    assert local_runner.starts == 1
+
+    client.post(
+        "/api/runners/register",
+        json={"name": "local-host", "backends": ["codex"]},
+        headers=RUNNER_HEADERS,
+    )
+    resources = client.get("/api/resources").json()
+    assert resources["local_runner"]["registered"] is True
+
+    again = client.post("/api/local-runner/start").json()
+    assert again["message"] == "local runner already registered"
+    assert local_runner.starts == 1
+
+
 def test_cancel_pending_task(harness):
     client, store, _orch = harness
     _create_started(client, "c")
@@ -478,7 +535,7 @@ def test_trace_roundtrip(harness):
     assert client.post(
         f"/api/tasks/{task.id}/trace", content=trace, headers=RUNNER_HEADERS
     ).json()["ok"]
-    assert store.get(Task, task.id).trace_blob == f"traces/{task.id}.jsonl"
+    assert store.get(Task, task.id).trace_blob == f"workspaces/default/traces/{task.id}.jsonl"
     got = client.get(f"/api/tasks/{task.id}/trace")
     assert got.status_code == 200 and b"run_init" in got.content
     # Trace upload is a runner action — unauthenticated callers are rejected.
