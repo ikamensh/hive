@@ -46,10 +46,12 @@ def test_dev_auth_bootstraps_user_workspace_and_machine():
     store = MemoryStore()
     client, config = make_client(store)
 
-    me = client.get("/api/auth/me").json()
+    response = client.get("/api/auth/me")
+    me = response.json()
 
     assert me["user"]["github_login"] == "ikamensh"
     assert me["workspace"]["id"] == config.workspace_id
+    assert "hive_session" in response.headers["set-cookie"]
     machines = store.list(Machine, workspace_id=config.workspace_id)
     assert [m.name for m in machines] == ["control-test"]
 

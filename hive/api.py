@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from hive.auth import (
     SESSION_COOKIE,
+    SESSION_TTL_S,
     AuthContext,
     AuthManager,
     ensure_control_plane_machine,
@@ -322,7 +323,16 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     # ---- auth ---------------------------------------------------------------
 
     @app.get("/api/auth/me")
-    def auth_me(ctx: AuthContext = Depends(current)):
+    def auth_me(response: Response, ctx: AuthContext = Depends(current)):
+        if config.auth_mode == "dev":
+            response.set_cookie(
+                SESSION_COOKIE,
+                auth.session_token(ctx.user),
+                max_age=SESSION_TTL_S,
+                httponly=True,
+                secure=config.public_url.startswith("https://"),
+                samesite="lax",
+            )
         return {
             "user": ctx.user.model_dump(),
             "workspace": ctx.workspace.model_dump(),

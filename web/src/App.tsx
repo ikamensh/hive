@@ -94,6 +94,16 @@ export default function App() {
           </NavLink>
           <NavLink to="/resources">resources</NavLink>
         </nav>
+        {auth.data && (
+          <div
+            className="account-chip"
+            title={`Signed in as ${auth.data.user.github_login} in workspace ${auth.data.workspace.name}`}
+          >
+            <span className="account-user">@{auth.data.user.github_login}</span>
+            <span className="account-workspace">{auth.data.workspace.name}</span>
+            {auth.data.auth_mode === "dev" && <span className="account-mode">dev</span>}
+          </div>
+        )}
         <button
           type="button"
           className="theme-toggle ghost"

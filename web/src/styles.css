@@ -250,8 +250,38 @@ textarea:focus {
   background: var(--bg-raise);
 }
 
-.q-counter {
+.account-chip {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-raise);
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+.account-user {
+  color: var(--ink);
+  font-size: 12.5px;
+}
+.account-workspace,
+.account-mode {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+.account-mode {
+  padding: 1px 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.q-counter {
+  margin-left: 0;
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -276,7 +306,7 @@ textarea:focus {
 }
 
 .theme-toggle {
-  margin-left: auto;
+  margin-left: 0;
   display: grid;
   place-items: center;
   width: 36px;
