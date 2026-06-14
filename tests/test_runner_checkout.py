@@ -64,6 +64,33 @@ def test_checkout_rewrites_existing_github_origin_before_fetch(monkeypatch, tmp_
     assert git_calls[1] == ["git", "fetch", "origin"]
 
 
+def test_checkout_restores_requested_origin_when_token_is_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(runner, "WORKDIR", tmp_path / "work")
+    monkeypatch.setattr(runner, "_runner_github_token", lambda: "")
+    (tmp_path / "work" / "hive").mkdir(parents=True)
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        if args[:2] == ["git", "symbolic-ref"]:
+            return _completed(args, "origin/main\n")
+        return _completed(args)
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    runner.checkout("git@github.com:ikamensh/hive.git")
+
+    git_calls = [args for args, _kwargs in calls]
+    assert git_calls[0] == [
+        "git",
+        "remote",
+        "set-url",
+        "origin",
+        "git@github.com:ikamensh/hive.git",
+    ]
+    assert git_calls[1] == ["git", "fetch", "origin"]
+
+
 def test_runner_github_token_uses_allowed_user_for_gh_detection(monkeypatch):
     seen = []
     monkeypatch.delenv("HIVE_GH_TOKEN", raising=False)

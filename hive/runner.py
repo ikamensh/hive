@@ -233,15 +233,14 @@ def checkout(repo_url: str, branch: str = "") -> Path:
     slug = checkout_url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
     path = WORKDIR / slug
     if path.exists():
-        if checkout_url != repo_url:
-            _run_checkout_git(
-                ["remote", "set-url", "origin", checkout_url],
-                cwd=path,
-                timeout=60,
-                env=env,
-                repo_url=checkout_url,
-                branch=branch,
-            )
+        _run_checkout_git(
+            ["remote", "set-url", "origin", checkout_url],
+            cwd=path,
+            timeout=60,
+            env=env,
+            repo_url=checkout_url,
+            branch=branch,
+        )
         _run_checkout_git(
             ["fetch", "origin"], cwd=path, timeout=300, env=env, repo_url=checkout_url, branch=branch
         )
