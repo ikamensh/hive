@@ -7,6 +7,7 @@ import socket
 from dataclasses import dataclass
 from pathlib import Path
 
+from hive.machine import machine_metadata
 from hive.models import DEFAULT_WORKSPACE_ID
 
 
@@ -32,12 +33,17 @@ class Config:
     workspace_name: str = "ikamen"
     machine_id: str = ""
     machine_name: str = ""
+    machine_type: str = ""
+    machine_os: str = ""
+    machine_arch: str = ""
+    machine_kind: str = ""
     autostart_runner: bool = False
 
     @classmethod
     def from_env(cls) -> "Config":
         data_dir = Path(os.environ.get("HIVE_DATA_DIR", "/tmp/hive-data"))
         data_dir.mkdir(parents=True, exist_ok=True)
+        machine = machine_metadata()
         return cls(
             gcp_project=os.environ.get("HIVE_GCP_PROJECT", ""),
             gcs_bucket=os.environ.get("HIVE_GCS_BUCKET", ""),
@@ -62,6 +68,10 @@ class Config:
             workspace_name=os.environ.get("HIVE_WORKSPACE_NAME", "ikamen"),
             machine_id=os.environ.get("HIVE_MACHINE_ID", ""),
             machine_name=os.environ.get("HIVE_MACHINE_NAME", socket.gethostname()),
+            machine_type=machine["machine_type"],
+            machine_os=machine["machine_os"],
+            machine_arch=machine["machine_arch"],
+            machine_kind=machine["machine_kind"],
             autostart_runner=os.environ.get("HIVE_AUTOSTART_RUNNER", "").lower()
             in {"1", "true", "yes", "on"},
         )

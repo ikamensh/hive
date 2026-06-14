@@ -115,6 +115,10 @@ class RunnerRegister(BaseModel):
     backends: list[str]
     machine_id: str = ""
     machine_name: str = ""
+    machine_type: str = ""
+    machine_os: str = ""
+    machine_arch: str = ""
+    machine_kind: str = ""
     boot: bool = False  # true on daemon startup (vs periodic heartbeat)
     discoveries: list[BackendDiscoveryInput] = []
     auto_probe: bool = False
@@ -660,6 +664,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             machine_id=body.machine_id,
             hostname=body.name,
             kind="runner",
+            machine_type=body.machine_type,
+            machine_os=body.machine_os,
+            machine_arch=body.machine_arch,
+            device_kind=body.machine_kind,
         )
         existing = next(
             (r for r in store.list(Runner, workspace_id=workspace_id) if r.name == body.name),

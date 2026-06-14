@@ -77,6 +77,10 @@ class LocalRunnerManager:
                 "HIVE_WORKSPACE_ID": self.config.workspace_id,
                 "HIVE_MACHINE_ID": self.config.machine_id,
                 "HIVE_MACHINE_NAME": self.config.machine_name or self.runner_name,
+                "HIVE_MACHINE_TYPE": self.config.machine_type,
+                "HIVE_MACHINE_OS": self.config.machine_os,
+                "HIVE_MACHINE_ARCH": self.config.machine_arch,
+                "HIVE_MACHINE_KIND": self.config.machine_kind,
                 "HIVE_RUNNER_NAME": self.runner_name,
                 "HIVE_RUNNER_WORKDIR": env.get(
                     "HIVE_RUNNER_WORKDIR",

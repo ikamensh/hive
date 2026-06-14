@@ -50,7 +50,11 @@ class Machine(BaseModel):
     workspace_id: str = DEFAULT_WORKSPACE_ID
     name: str
     hostname: str = ""
-    kind: str = "unknown"
+    kind: str = "unknown"  # process role: control-plane | runner | unknown
+    machine_type: str = ""  # human-facing host type: macbook | linux | win | ...
+    os: str = ""
+    arch: str = ""
+    device_kind: str = "unknown"  # availability class: laptop | server | unknown
     first_seen: float = Field(default_factory=now)
     last_seen: float = Field(default_factory=now)
 

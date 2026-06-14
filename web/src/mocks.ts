@@ -233,8 +233,32 @@ const tasks: Task[] = [
 
 const resourcesPayload: ResourcesPayload = {
   machines: [
-    { id: "m-hex1", workspace_id: "default", name: "hex-1", hostname: "hex-1", kind: "runner", first_seen: now - 86400 * 6, last_seen: now - 12 },
-    { id: "m-hex2", workspace_id: "default", name: "hex-2", hostname: "hex-2", kind: "runner", first_seen: now - 86400 * 4, last_seen: now - 60 * 47 },
+    {
+      id: "m-hex1",
+      workspace_id: "default",
+      name: "hex-1",
+      hostname: "hex-1",
+      kind: "runner",
+      machine_type: "linux",
+      os: "linux",
+      arch: "x86_64",
+      device_kind: "server",
+      first_seen: now - 86400 * 6,
+      last_seen: now - 12,
+    },
+    {
+      id: "m-hex2",
+      workspace_id: "default",
+      name: "hex-2",
+      hostname: "hex-2",
+      kind: "runner",
+      machine_type: "macbook",
+      os: "macos",
+      arch: "arm64",
+      device_kind: "laptop",
+      first_seen: now - 86400 * 4,
+      last_seen: now - 60 * 47,
+    },
   ],
   runners: [
     { id: "r-hex1", workspace_id: "default", machine_id: "m-hex1", name: "hex-1", backends: ["claude", "codex"], last_seen: now - 12, online: true },
@@ -376,6 +400,10 @@ export const api = {
         name: local.runner_name,
         hostname: local.runner_name,
         kind: "runner",
+        machine_type: "macbook",
+        os: "macos",
+        arch: "arm64",
+        device_kind: "laptop",
         first_seen: Date.now() / 1000,
         last_seen: Date.now() / 1000,
       });

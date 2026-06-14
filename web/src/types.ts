@@ -124,6 +124,10 @@ export interface MachineInfo {
   name: string;
   hostname: string;
   kind: string;
+  machine_type: string;
+  os: string;
+  arch: string;
+  device_kind: string;
   first_seen: number;
   last_seen: number;
 }

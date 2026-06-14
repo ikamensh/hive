@@ -1162,6 +1162,9 @@ textarea:focus {
   gap: 14px;
   margin-bottom: 28px;
 }
+.machine-grid {
+  grid-template-columns: 1fr;
+}
 .runner-empty {
   grid-column: 1 / -1;
   padding: 22px 24px;
@@ -1197,19 +1200,41 @@ textarea:focus {
   border-radius: 6px;
   padding: 16px 18px;
 }
+.machine-card {
+  padding: 0;
+  overflow: hidden;
+}
 .runner-card header {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-bottom: 12px;
 }
+.machine-card header {
+  margin-bottom: 0;
+  padding: 16px 18px 10px;
+}
 .runner-card h3 {
   font-size: 15px;
+}
+.machine-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.machine-host,
+.runner-inline {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-faint);
 }
 .runner-card .dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
+  flex: 0 0 auto;
 }
 .runner-card.online .dot {
   background: var(--green);
@@ -1233,6 +1258,16 @@ textarea:focus {
   gap: 6px;
   flex-wrap: wrap;
 }
+.machine-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 18px 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.machine-empty {
+  padding: 14px 18px 16px;
+}
 
 .res-table {
   width: 100%;
@@ -1243,6 +1278,11 @@ textarea:focus {
   overflow: hidden;
   margin-bottom: 32px;
 }
+.machine-agent-table {
+  margin-bottom: 0;
+  border: none;
+  border-radius: 0;
+}
 .res-table th {
   font-family: var(--mono);
   font-size: 10px;
@@ -1252,6 +1292,14 @@ textarea:focus {
   text-align: left;
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
+}
+.machine-agent-table th:first-child,
+.machine-agent-table td:first-child {
+  padding-left: 18px;
+}
+.machine-agent-table th:last-child,
+.machine-agent-table td:last-child {
+  padding-right: 18px;
 }
 .res-table td {
   padding: 10px 16px;

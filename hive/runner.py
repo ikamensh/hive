@@ -26,14 +26,20 @@ from hive.backends import (
     discover_backends,
     make_session,
 )
+from hive.machine import machine_metadata
 from hive.models import DEFAULT_WORKSPACE_ID
 
+MACHINE_METADATA = machine_metadata()
 HIVE_URL = os.environ.get("HIVE_URL", "http://localhost:8000")
 HIVE_BASIC_AUTH = os.environ.get("HIVE_BASIC_AUTH", "")  # "user:pass" when behind Caddy
 RUNNER_TOKEN = os.environ.get("HIVE_RUNNER_TOKEN", "dev-token")
 WORKSPACE_ID = os.environ.get("HIVE_WORKSPACE_ID", DEFAULT_WORKSPACE_ID)
 MACHINE_ID = os.environ.get("HIVE_MACHINE_ID", "")
 MACHINE_NAME = os.environ.get("HIVE_MACHINE_NAME", "")
+MACHINE_TYPE = MACHINE_METADATA["machine_type"]
+MACHINE_OS = MACHINE_METADATA["machine_os"]
+MACHINE_ARCH = MACHINE_METADATA["machine_arch"]
+MACHINE_KIND = MACHINE_METADATA["machine_kind"]
 RUNNER_NAME = os.environ.get("HIVE_RUNNER_NAME", socket.gethostname())
 WORKDIR = Path(os.environ.get("HIVE_RUNNER_WORKDIR", "~/hive-work")).expanduser()
 TASK_TIMEOUT_S = float(os.environ.get("HIVE_TASK_TIMEOUT_S", "3600"))
@@ -150,7 +156,12 @@ def execute(task: dict, headers: dict, auth) -> dict:
     text = result.text
     is_error = result.is_error
     if task["kind"] == "probe":
-        text, is_error = validate_probe_result(project_dir, text, is_error)
+        text, is_error = validate_probe_result(
+            project_dir,
+            text,
+            is_error,
+            backend=task.get("backend", ""),
+        )
     return {
         "text": text,
         "is_error": is_error,
@@ -161,10 +172,22 @@ def execute(task: dict, headers: dict, auth) -> dict:
     }
 
 
-def validate_probe_result(project_dir: Path, text: str, is_error: bool) -> tuple[str, bool]:
+def validate_probe_result(
+    project_dir: Path,
+    text: str,
+    is_error: bool,
+    *,
+    backend: str = "",
+) -> tuple[str, bool]:
     diagnostics = []
     if PROBE_MARKER not in text:
         diagnostics.append(f"probe marker {PROBE_MARKER!r} was not found in the agent reply")
+    if backend == "codex" and "--full-auto" in text and "deprecated" in text.lower():
+        diagnostics.append(
+            "codex-cli is installed, but the kodo Codex wrapper invoked the deprecated "
+            "`--full-auto` mode and returned no assistant message; update the wrapper to "
+            "use the current `codex exec --sandbox ...` interface"
+        )
     dirty = subprocess.run(
         ["git", "status", "--porcelain"],
         cwd=project_dir,
@@ -219,6 +242,10 @@ def main(argv: list[str] | None = None) -> None:
                 "backends": backends,
                 "machine_id": MACHINE_ID,
                 "machine_name": MACHINE_NAME,
+                "machine_type": MACHINE_TYPE,
+                "machine_os": MACHINE_OS,
+                "machine_arch": MACHINE_ARCH,
+                "machine_kind": MACHINE_KIND,
                 "boot": boot,
                 "discoveries": discoveries,
                 "auto_probe": True,

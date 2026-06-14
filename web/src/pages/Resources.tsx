@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { marked } from "marked";
 import { ago, api, countdown, money, usePoll } from "../api";
-import type { LocalRunnerInfo } from "../types";
+import type { LocalRunnerInfo, MachineInfo, ResourceInfo, ResourcesPayload, RunnerInfo } from "../types";
 
 function HumanTasks() {
   const { data, refresh } = usePoll(() => api.humanTasks(), []);
@@ -186,14 +186,7 @@ export default function Resources() {
     return () => clearInterval(id);
   }, []);
 
-  const runnerName = (id: string) => data?.runners.find((r) => r.id === id)?.name ?? id;
   const runnerOnline = (id: string) => data?.runners.find((r) => r.id === id)?.online ?? false;
-  const runnerForMachine = (id: string) => data?.runners.find((r) => r.machine_id === id);
-  const resourcesForMachine = (id: string) =>
-    data?.resources.filter((r) => {
-      if (r.machine_id === id) return true;
-      return data.runners.find((runner) => runner.id === r.runner_id)?.machine_id === id;
-    }) ?? [];
 
   const probe = async (id: string) => {
     setProbing(id);
@@ -219,6 +212,7 @@ export default function Resources() {
   };
 
   const localRunner = data?.local_runner;
+  const machineCards = data ? buildMachineCards(data) : [];
 
   return (
     <div className="page page-resources">
@@ -237,39 +231,9 @@ export default function Resources() {
       {data && (
         <>
           {runnerError && <p className="form-error runner-error">{runnerError}</p>}
-          {(data.machines ?? []).length > 0 && (
-            <>
-              <h2 className="col-title">known machines</h2>
-              <div className="runner-grid">
-                {(data.machines ?? []).map((m) => {
-                  const runner = runnerForMachine(m.id);
-                  const resources = resourcesForMachine(m.id);
-                  return (
-                    <article key={m.id} className={`runner-card ${runner?.online ? "online" : "offline"}`}>
-                      <header>
-                        <i className="dot" />
-                        <h3>{m.name}</h3>
-                        <span className="runner-seen">
-                          {runner?.online ? "runner online" : `last seen ${ago(m.last_seen)}`}
-                        </span>
-                      </header>
-                      <div className="backend-chips">
-                        <span className="chip">{m.kind}</span>
-                        {resources.map((r) => (
-                          <span key={r.id} className="chip">
-                            {r.backend}
-                          </span>
-                        ))}
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            </>
-          )}
-          <h2 className="col-title">active runners</h2>
-          <div className="runner-grid">
-            {data.runners.length === 0 && (
+          <h2 className="col-title">machines & agents</h2>
+          <div className="runner-grid machine-grid">
+            {machineCards.length === 0 && (
               <section className="runner-empty">
                 <h2>No runners registered</h2>
                 <p className="muted">
@@ -284,85 +248,16 @@ export default function Resources() {
                 )}
               </section>
             )}
-            {data.runners.map((r) => (
-              <article key={r.id} className={`runner-card ${r.online ? "online" : "offline"}`}>
-                <header>
-                  <i className="dot" />
-                  <h3>{r.name}</h3>
-                  <span className="runner-seen">{r.online ? "online" : `last seen ${ago(r.last_seen)}`}</span>
-                </header>
-                <div className="backend-chips">
-                  {r.backends.map((b) => (
-                    <span key={b} className="chip">
-                      {b}
-                    </span>
-                  ))}
-                </div>
-              </article>
+            {machineCards.map((card) => (
+              <MachineCard
+                key={card.machine.id}
+                card={card}
+                probing={probing}
+                runnerOnline={runnerOnline}
+                onProbe={probe}
+              />
             ))}
           </div>
-
-          <table className="res-table">
-            <thead>
-              <tr>
-                <th>backend</th>
-                <th>runner</th>
-                <th>discovery</th>
-                <th>usability</th>
-                <th>availability</th>
-                <th className="num">tasks</th>
-                <th className="num">total cost</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {data.resources.map((res) => (
-                <tr key={res.id}>
-                  <td className="mono">{res.backend}</td>
-                  <td>{runnerName(res.runner_id)}</td>
-                  <td>
-                    <span className={`probe-status discovery-${res.discovery_status}`} title={res.discovery_text || res.cli_path || "not checked yet"}>
-                      {res.discovery_status}
-                    </span>
-                    {res.cli_version && <span className="probe-age">{res.cli_version}</span>}
-                  </td>
-                  <td>
-                    <span className={`probe-status probe-${res.usability_status}`} title={res.last_probe_text || "not probed yet"}>
-                      {res.usability_status === "unknown" ? "probe required" : res.usability_status}
-                    </span>
-                    {res.last_probe_at > 0 && <span className="probe-age">{ago(res.last_probe_at)}</span>}
-                  </td>
-                  <td>
-                    {res.available ? (
-                      <span className="avail ok">available</span>
-                    ) : res.cooldown_until > Date.now() / 1000 ? (
-                      <span className="avail cool">cooldown {countdown(res.cooldown_until)}</span>
-                    ) : (
-                      <span className="avail wait">not dispatchable</span>
-                    )}
-                  </td>
-                  <td className="num">{res.total_tasks}</td>
-                  <td className="num">{money(res.total_cost_usd)}</td>
-                  <td className="num">
-                    <button
-                      className="ghost"
-                      disabled={!runnerOnline(res.runner_id) || res.usability_status === "probing" || probing === res.id}
-                      onClick={() => probe(res.id)}
-                    >
-                      {probing === res.id || res.usability_status === "probing" ? "probing" : "probe"}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {data.resources.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="muted">
-                    no resources
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
         </>
       )}
 
@@ -371,6 +266,217 @@ export default function Resources() {
       <OrgContext />
     </div>
   );
+}
+
+interface MachineCardData {
+  machine: MachineInfo;
+  runners: RunnerInfo[];
+  resources: ResourceInfo[];
+}
+
+function buildMachineCards(data: ResourcesPayload): MachineCardData[] {
+  const machines = data.machines ?? [];
+  const machineIds = new Set(machines.map((m) => m.id));
+  const resourcesById = new Set<string>();
+  const cards = machines.map((machine) => {
+    const runners = data.runners.filter((runner) => runner.machine_id === machine.id);
+    const runnerIds = new Set(runners.map((runner) => runner.id));
+    const resources = data.resources.filter((res) => res.machine_id === machine.id || runnerIds.has(res.runner_id));
+    resources.forEach((res) => resourcesById.add(res.id));
+    return { machine, runners, resources };
+  });
+
+  for (const runner of data.runners) {
+    if (runner.machine_id && machineIds.has(runner.machine_id)) continue;
+    const machine = virtualMachineForRunner(runner);
+    const resources = data.resources.filter((res) => res.runner_id === runner.id);
+    resources.forEach((res) => resourcesById.add(res.id));
+    cards.push({ machine, runners: [runner], resources });
+  }
+
+  const orphanResources = data.resources.filter((res) => !resourcesById.has(res.id));
+  if (orphanResources.length > 0) {
+    cards.push({
+      machine: {
+        id: "unassigned-resources",
+        workspace_id: "",
+        name: "unassigned",
+        hostname: "",
+        kind: "unknown",
+        machine_type: "",
+        os: "",
+        arch: "",
+        device_kind: "unknown",
+        first_seen: 0,
+        last_seen: 0,
+      },
+      runners: [],
+      resources: orphanResources,
+    });
+  }
+
+  return cards;
+}
+
+function virtualMachineForRunner(runner: RunnerInfo): MachineInfo {
+  return {
+    id: `runner:${runner.id}`,
+    workspace_id: runner.workspace_id ?? "",
+    name: runner.name,
+    hostname: runner.name,
+    kind: "runner",
+    machine_type: "",
+    os: "",
+    arch: "",
+    device_kind: "unknown",
+    first_seen: runner.last_seen,
+    last_seen: runner.last_seen,
+  };
+}
+
+function MachineCard({
+  card,
+  probing,
+  runnerOnline,
+  onProbe,
+}: {
+  card: MachineCardData;
+  probing: string | null;
+  runnerOnline: (id: string) => boolean;
+  onProbe: (id: string) => void;
+}) {
+  const online = card.runners.some((runner) => runner.online);
+  const lastSeen = Math.max(card.machine.last_seen, ...card.runners.map((runner) => runner.last_seen), 0);
+  const runnerNames = card.runners.map((runner) => runner.name).join(", ");
+  const runnerById = new Map(card.runners.map((runner) => [runner.id, runner.name]));
+
+  return (
+    <article className={`runner-card machine-card ${online ? "online" : "offline"}`}>
+      <header>
+        <div className="machine-title">
+          <i className="dot" />
+          <div>
+            <h3>{card.machine.name}</h3>
+            {card.machine.hostname && card.machine.hostname !== card.machine.name && (
+              <span className="machine-host">{card.machine.hostname}</span>
+            )}
+          </div>
+        </div>
+        <span className="runner-seen">
+          {online ? "runner online" : lastSeen > 0 ? `last seen ${ago(lastSeen)}` : "offline"}
+        </span>
+      </header>
+
+      <div className="machine-meta">
+        <span className="chip" title={machineTypeTitle(card.machine)}>
+          {machineTypeLabel(card.machine)}
+        </span>
+        <span className="chip" title={deviceKindTitle(card.machine.device_kind)}>
+          {deviceKindLabel(card.machine.device_kind)}
+        </span>
+        <span className="chip" title={runnerNames ? `runner process: ${runnerNames}` : "no runner process online"}>
+          {card.machine.kind || "unknown"}
+        </span>
+      </div>
+
+      {card.resources.length > 0 ? (
+        <table className="res-table machine-agent-table">
+          <thead>
+            <tr>
+              <th>agent</th>
+              <th>discovery</th>
+              <th>usability</th>
+              <th>availability</th>
+              <th className="num">tasks</th>
+              <th className="num">cost</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {card.resources.map((res) => (
+              <tr key={res.id}>
+                <td className="mono">
+                  <span>{res.backend}</span>
+                  {card.runners.length > 1 && runnerById.get(res.runner_id) && (
+                    <span className="runner-inline">{runnerById.get(res.runner_id)}</span>
+                  )}
+                </td>
+                <td>
+                  <span className={`probe-status discovery-${res.discovery_status}`} title={discoveryTitle(res)}>
+                    {res.discovery_status}
+                  </span>
+                  {res.cli_version && <span className="probe-age">{res.cli_version}</span>}
+                </td>
+                <td>
+                  <span className={`probe-status probe-${res.usability_status}`} title={usabilityTitle(res)}>
+                    {res.usability_status === "unknown" ? "probe required" : res.usability_status}
+                  </span>
+                </td>
+                <td>{availability(res)}</td>
+                <td className="num">{res.total_tasks}</td>
+                <td className="num">{money(res.total_cost_usd)}</td>
+                <td className="num">
+                  <button
+                    className="ghost"
+                    disabled={!runnerOnline(res.runner_id) || res.usability_status === "probing" || probing === res.id}
+                    onClick={() => onProbe(res.id)}
+                  >
+                    {probing === res.id || res.usability_status === "probing" ? "probing" : "probe"}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="muted machine-empty">no agent CLIs discovered for this machine</p>
+      )}
+    </article>
+  );
+}
+
+function machineTypeLabel(machine: MachineInfo): string {
+  const type = machine.machine_type || machine.os || "unknown";
+  return [type, machine.arch].filter(Boolean).join(" ");
+}
+
+function machineTypeTitle(machine: MachineInfo): string {
+  const parts = [
+    machine.machine_type && `type: ${machine.machine_type}`,
+    machine.os && `os: ${machine.os}`,
+    machine.arch && `arch: ${machine.arch}`,
+  ].filter(Boolean);
+  return parts.join("\n") || "machine type unknown";
+}
+
+function deviceKindLabel(kind: string): string {
+  if (kind === "server") return "server";
+  if (kind === "laptop") return "laptop";
+  return "availability unknown";
+}
+
+function deviceKindTitle(kind: string): string {
+  if (kind === "server") return "Expected to stay online unless explicitly stopped.";
+  if (kind === "laptop") return "May sleep, disconnect, or move between networks.";
+  return "Set HIVE_MACHINE_KIND=server or HIVE_MACHINE_KIND=laptop to make availability expectations explicit.";
+}
+
+function discoveryTitle(res: ResourceInfo): string {
+  const checked = res.discovered_at > 0 ? `discovered ${ago(res.discovered_at)}` : "not checked yet";
+  return [checked, res.cli_path, res.discovery_text].filter(Boolean).join("\n\n");
+}
+
+function usabilityTitle(res: ResourceInfo): string {
+  const checked = res.last_probe_at > 0 ? `last checked ${ago(res.last_probe_at)}` : "not probed yet";
+  return [checked, res.last_probe_task_id && `task ${res.last_probe_task_id}`, res.last_probe_text].filter(Boolean).join("\n\n");
+}
+
+function availability(res: ResourceInfo) {
+  if (res.available) return <span className="avail ok">available</span>;
+  if (res.cooldown_until > Date.now() / 1000) {
+    return <span className="avail cool">cooldown {countdown(res.cooldown_until)}</span>;
+  }
+  return <span className="avail wait">not dispatchable</span>;
 }
 
 function LocalRunnerAction({

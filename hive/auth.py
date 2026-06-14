@@ -76,6 +76,10 @@ def ensure_machine(
     machine_id: str = "",
     hostname: str = "",
     kind: str = "unknown",
+    machine_type: str = "",
+    machine_os: str = "",
+    machine_arch: str = "",
+    device_kind: str = "",
 ) -> Machine:
     machine_id = machine_id or _machine_id(workspace_id, name)
     now = time.time()
@@ -87,6 +91,10 @@ def ensure_machine(
             name=name,
             hostname=hostname or name,
             kind=kind,
+            machine_type=machine_type,
+            os=machine_os,
+            arch=machine_arch,
+            device_kind=device_kind or "unknown",
             first_seen=now,
             last_seen=now,
         )
@@ -94,6 +102,10 @@ def ensure_machine(
         machine.name = name or machine.name
         machine.hostname = hostname or machine.hostname
         machine.kind = kind or machine.kind
+        machine.machine_type = machine_type or machine.machine_type
+        machine.os = machine_os or machine.os
+        machine.arch = machine_arch or machine.arch
+        machine.device_kind = device_kind or machine.device_kind
         machine.last_seen = now
     return store.put(machine)
 
@@ -107,6 +119,10 @@ def ensure_control_plane_machine(store, config: Config) -> Machine:
         machine_id=config.machine_id,
         hostname=socket.gethostname(),
         kind="control-plane",
+        machine_type=config.machine_type,
+        machine_os=config.machine_os,
+        machine_arch=config.machine_arch,
+        device_kind=config.machine_kind,
     )
 
 

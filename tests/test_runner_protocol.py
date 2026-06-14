@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from hive.backends import PROBE_MARKER
 from hive.config import Config
 from hive.models import (
+    Machine,
     Project,
     Resource,
     ResourceUsability,
@@ -16,6 +17,7 @@ from hive.models import (
 )
 from hive.store import MemoryStore
 from hive.supervisor import Supervisor
+from hive.runner import validate_probe_result
 
 H = {"X-Hive-Token": "t"}
 
@@ -100,6 +102,49 @@ def test_register_auto_probes_new_resource_and_records_discovery():
         headers=H,
     )
     assert store.get(Resource, resource.id).usability_status == ResourceUsability.usable
+
+
+def test_register_records_machine_metadata():
+    store = MemoryStore()
+    client = make_client(store)
+    client.post(
+        "/api/runners/register",
+        json={
+            "name": "raven",
+            "backends": ["codex"],
+            "machine_id": "machine-raven",
+            "machine_name": "raven",
+            "machine_type": "macbook",
+            "machine_os": "macos",
+            "machine_arch": "arm64",
+            "machine_kind": "laptop",
+        },
+        headers=H,
+    )
+
+    machine = store.get(Machine, "machine-raven")
+    assert machine is not None
+    assert machine.machine_type == "macbook"
+    assert machine.os == "macos"
+    assert machine.arch == "arm64"
+    assert machine.device_kind == "laptop"
+
+    payload = client.get("/api/resources").json()
+    resource_machine = next(m for m in payload["machines"] if m["id"] == "machine-raven")
+    assert resource_machine["machine_type"] == "macbook"
+    assert resource_machine["device_kind"] == "laptop"
+
+
+def test_codex_probe_explains_deprecated_wrapper(tmp_path):
+    text, is_error = validate_probe_result(
+        tmp_path,
+        "warning: `--full-auto` is deprecated; use `--sandbox workspace-write` instead.",
+        False,
+        backend="codex",
+    )
+
+    assert is_error
+    assert "kodo Codex wrapper" in text
 
 
 def test_boot_marks_interrupted_probe_unknown_then_queues_fresh_probe():
