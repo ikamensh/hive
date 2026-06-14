@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { ago, api, duration, money, repoShort, usePoll } from "../api";
+import { RepoListEditor, RepoUrlInput } from "../components/RepoPicker";
 import {
   AUTONOMY_OPTIONS,
   GuessSlider,
@@ -13,7 +14,7 @@ import type { Autonomy, GuessPropensity, HumanTask, Mode, Project, ProjectPatch,
 
 function buildSetupPatch(fields: {
   specRepo: string;
-  memberRepos: string;
+  memberRepos: string[];
   mode: Mode;
   autonomy: Autonomy;
   guess: GuessPropensity;
@@ -22,10 +23,7 @@ function buildSetupPatch(fields: {
   const budget = parseFloat(fields.dailyBudget);
   return {
     spec_repo: fields.specRepo.trim(),
-    member_repos: fields.memberRepos
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean),
+    member_repos: fields.memberRepos.map((s) => s.trim()).filter(Boolean),
     mode: fields.mode,
     autonomy: fields.autonomy,
     guess_propensity: fields.guess,
@@ -43,7 +41,7 @@ function ProjectSetup({
   onStart: (patch: ProjectPatch, mission: string, iterationGoal: string) => Promise<void>;
 }) {
   const [specRepo, setSpecRepo] = useState(project.spec_repo);
-  const [memberRepos, setMemberRepos] = useState(project.member_repos.join("\n"));
+  const [memberRepos, setMemberRepos] = useState(project.member_repos);
   const [mission, setMission] = useState("");
   const [iterationGoal, setIterationGoal] = useState("");
   const [mode, setMode] = useState<Mode>(project.mode);
@@ -97,17 +95,16 @@ function ProjectSetup({
       </header>
       <form className="setup-form" onSubmit={start}>
         <label>
-          spec repo URL
-          <input
+          spec repo
+          <RepoUrlInput
             value={specRepo}
-            onChange={(e) => setSpecRepo(e.target.value)}
-            required
+            onChange={setSpecRepo}
             placeholder="git@github.com:org/project-spec.git"
           />
         </label>
         <label>
-          member repos (one per line)
-          <textarea value={memberRepos} onChange={(e) => setMemberRepos(e.target.value)} rows={3} />
+          member repos
+          <RepoListEditor repos={memberRepos} onChange={setMemberRepos} />
         </label>
         <label>
           mission
@@ -173,7 +170,7 @@ function ProjectSettings({
   project: Project;
   onPatch: (p: ProjectPatch) => void;
 }) {
-  const [memberRepos, setMemberRepos] = useState(project.member_repos.join("\n"));
+  const [memberRepos, setMemberRepos] = useState(project.member_repos);
   const [dailyBudget, setDailyBudget] = useState(
     project.daily_budget_usd > 0 ? String(project.daily_budget_usd) : "",
   );
@@ -184,10 +181,7 @@ function ProjectSettings({
     setBusy(true);
     const budget = parseFloat(dailyBudget);
     await onPatch({
-      member_repos: memberRepos
-        .split("\n")
-        .map((s) => s.trim())
-        .filter(Boolean),
+      member_repos: memberRepos.map((s) => s.trim()).filter(Boolean),
       daily_budget_usd: Number.isFinite(budget) && budget >= 0 ? budget : 0,
     });
     setBusy(false);
@@ -202,8 +196,8 @@ function ProjectSettings({
           <input value={project.spec_repo} readOnly />
         </label>
         <label>
-          member repos (one per line)
-          <textarea value={memberRepos} onChange={(e) => setMemberRepos(e.target.value)} rows={3} />
+          member repos
+          <RepoListEditor repos={memberRepos} onChange={setMemberRepos} />
         </label>
         <label>
           daily budget (USD)

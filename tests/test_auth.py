@@ -1,5 +1,7 @@
 from urllib.parse import parse_qs, urlparse
 
+import json
+
 from fastapi.testclient import TestClient
 
 from hive.config import Config
@@ -22,10 +24,11 @@ class FakeResponse:
 def make_client(store: MemoryStore, **overrides):
     from hive.api import create_app
 
+    gh_token = overrides.pop("gh_token", "")
     config = Config(
         gcp_project="",
         gcs_bucket="",
-        gh_token="",
+        gh_token=gh_token,
         gemini_api_key="",
         orch_model="",
         runner_token="t",
@@ -98,6 +101,134 @@ def test_github_login_accepts_allowlisted_user(monkeypatch):
     assert callback.status_code in {302, 307}
     assert "hive_session" in callback.headers["set-cookie"]
     assert client.get("/api/auth/me").json()["user"]["github_login"] == "ikamensh"
+
+
+def test_github_callback_stores_access_token(monkeypatch):
+    store = MemoryStore()
+    client, _config = make_client(
+        store,
+        auth_mode="github",
+        github_client_id="client-id",
+        github_client_secret="client-secret",
+        auth_secret="auth-secret",
+        public_url="http://testserver",
+    )
+    start = client.get("/api/auth/github/start", follow_redirects=False)
+    state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
+    monkeypatch.setattr(
+        "hive.auth.httpx.post",
+        lambda *a, **k: FakeResponse({"access_token": "gho_test"}),
+    )
+    monkeypatch.setattr(
+        "hive.auth.httpx.get",
+        lambda *a, **k: FakeResponse({"login": "ikamensh", "name": "Ikamen"}),
+    )
+
+    client.get(
+        f"/api/auth/github/callback?code=abc&state={state}",
+        follow_redirects=False,
+    )
+
+    from hive.models import User
+
+    user = store.list(User)[0]
+    assert user.github_access_token == "gho_test"
+
+
+def test_github_repos_uses_server_token_when_gh_unavailable(monkeypatch):
+    from hive.github_repos import clear_cache
+
+    clear_cache()
+    store = MemoryStore()
+    client, _config = make_client(store, gh_token="ghp_server")
+
+    def gh_fail(args, **kwargs):
+        proc = type("Proc", (), {})()
+        proc.returncode = 1
+        proc.stdout = ""
+        proc.stderr = "not logged in"
+        return proc
+
+    sample = [
+        {
+            "full_name": "acme/demo",
+            "ssh_url": "git@github.com:acme/demo.git",
+            "clone_url": "https://github.com/acme/demo.git",
+            "private": False,
+            "description": "",
+        }
+    ]
+
+    monkeypatch.setattr("hive.github_repos.subprocess.run", gh_fail)
+    monkeypatch.setattr(
+        "hive.github_repos.httpx.get",
+        lambda *a, **k: FakeResponse(sample),
+    )
+
+    response = client.get("/api/github/repos")
+
+    assert response.status_code == 200
+    assert response.json()[0]["full_name"] == "acme/demo"
+
+
+def test_github_validate_repo(monkeypatch):
+    from hive.github_repos import clear_cache
+
+    clear_cache()
+    store = MemoryStore()
+    client, _config = make_client(store, gh_token="ghp_server")
+
+    def fake_run(args, **kwargs):
+        proc = type("Proc", (), {})()
+        if args[:3] == ["gh", "repo", "view"]:
+            proc.returncode = 0
+            proc.stdout = json.dumps(
+                {
+                    "nameWithOwner": "acme/demo",
+                    "sshUrl": "git@github.com:acme/demo.git",
+                    "isPrivate": False,
+                    "description": "",
+                }
+            )
+        elif args[:4] == ["gh", "api", "user", "-q"]:
+            proc.returncode = 0
+            proc.stdout = "ikamensh"
+        else:
+            proc.returncode = 1
+            proc.stdout = ""
+            proc.stderr = "unexpected"
+        proc.stderr = proc.stderr if hasattr(proc, "stderr") else ""
+        return proc
+
+    monkeypatch.setattr("hive.github_repos.subprocess.run", fake_run)
+
+    response = client.get("/api/github/repos/validate?ref=acme/demo")
+
+    assert response.status_code == 200
+    assert response.json()["ssh_url"] == "git@github.com:acme/demo.git"
+
+
+def test_github_repos_without_gh_or_token(monkeypatch):
+    from hive.github_repos import clear_cache
+
+    clear_cache()
+    store = MemoryStore()
+    client, _config = make_client(store, gh_token="")
+
+    def gh_fail(args, **kwargs):
+        proc = type("Proc", (), {})()
+        proc.returncode = 1
+        proc.stdout = ""
+        proc.stderr = "not logged in"
+        return proc
+
+    monkeypatch.setattr("hive.github_repos.subprocess.run", gh_fail)
+    monkeypatch.setattr("hive.github_repos._gh_token", lambda: "")
+
+    response = client.get("/api/github/repos")
+
+    assert response.status_code == 503
+    assert "gh auth login" in response.json()["detail"]
 
 
 def test_github_login_rejects_non_allowlisted_user(monkeypatch):

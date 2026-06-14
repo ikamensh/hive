@@ -5,8 +5,9 @@ API but needs GCP, so it is exercised only in deployment, not here."""
 import threading
 import time
 
-from hive.models import Question, QuestionStatus, Resource, Task, TaskStatus
-from hive.store import MemoryStore, StoreBase
+from hive.models import Question, QuestionStatus, Project, Resource, Task, TaskStatus
+from hive.store import FileStore, MemoryStore, StoreBase
+from hive.storage import copy_store
 
 
 def test_memory_store_is_a_storebase():
@@ -89,3 +90,31 @@ def test_leader_lease():
     assert expired.claim_leader("a", 0.0) == "a"  # holds, but lease lapses immediately
     time.sleep(0.01)
     assert expired.claim_leader("b", 60) == "b"  # a's lease expired; b takes over
+
+
+def test_file_store_persists_across_restart(tmp_path):
+    store1 = FileStore(tmp_path)
+    project = store1.put(Project(name="durable"))
+    store1.set_org_context("org notes")
+
+    store2 = FileStore(tmp_path)
+    loaded = store2.get(Project, project.id)
+    assert loaded is not None and loaded.name == "durable"
+    assert store2.get_org_context() == "org notes"
+
+
+def test_file_store_is_a_storebase(tmp_path):
+    assert isinstance(FileStore(tmp_path), StoreBase)
+
+
+def test_copy_store_between_backends(tmp_path):
+    source = FileStore(tmp_path)
+    source.put(Project(name="migrate-me"))
+    source.set_org_context("keep this")
+
+    dest = MemoryStore()
+    counts = copy_store(source, dest)
+
+    assert counts["projects"] == 1
+    assert dest.list(Project)[0].name == "migrate-me"
+    assert dest.get_org_context() == "keep this"

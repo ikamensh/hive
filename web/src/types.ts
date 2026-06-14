@@ -88,6 +88,14 @@ export interface ProjectDetail {
   human_tasks: HumanTask[];
 }
 
+export interface GithubRepo {
+  full_name: string;
+  ssh_url: string;
+  clone_url: string;
+  private: boolean;
+  description: string;
+}
+
 export interface HiveUser {
   id: string;
   github_login: string;
@@ -106,6 +114,26 @@ export interface AuthInfo {
   user: HiveUser;
   workspace: Workspace;
   auth_mode: string;
+  storage?: StorageInfo;
+}
+
+export interface StorageInfo {
+  backend: "firestore" | "file" | "memory";
+  store_path?: string | null;
+  gcp_project?: string | null;
+  blob_backend: "gcs" | "local";
+  blob_path?: string | null;
+  gcs_bucket?: string | null;
+  counts: Record<string, number>;
+  export_available: boolean;
+}
+
+export interface StorageExportResult {
+  gcp_project: string;
+  gcs_bucket?: string | null;
+  documents: Record<string, number>;
+  blobs: number;
+  message: string;
 }
 
 export interface RunnerInfo {

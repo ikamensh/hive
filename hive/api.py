@@ -16,6 +16,7 @@ import subprocess
 import time
 from pathlib import Path
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
@@ -31,6 +32,7 @@ from hive.auth import (
 from hive.backends import REGISTRY, probe_instructions
 from hive.config import Config
 from hive.escalation import escalate
+from hive.github_repos import all_repos as list_github_repos
 from hive.models import (
     Autonomy,
     Feedback,
@@ -53,6 +55,8 @@ from hive.models import (
     parse_verdict,
 )
 from hive.specrepo import SpecRepo
+from hive.storage import export_to_gcp, storage_info
+from hive.store import FileStore
 from hive.supervisor import Supervisor
 
 log = logging.getLogger("hive.api")
@@ -142,6 +146,11 @@ class ResourcePatch(BaseModel):
 
 class LocalRunnerPatch(BaseModel):
     autostart: bool
+
+
+class StorageExport(BaseModel):
+    gcp_project: str
+    gcs_bucket: str = ""
 
 
 def _ensure_probe_repo(data_dir: Path) -> Path:
@@ -343,6 +352,9 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         )
         return status
 
+    def _storage_payload() -> dict:
+        return storage_info(store, config, blobs)
+
     # ---- auth ---------------------------------------------------------------
 
     @app.get("/api/auth/me")
@@ -357,9 +369,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 samesite="lax",
             )
         return {
-            "user": ctx.user.model_dump(),
+            "user": ctx.user.model_dump(exclude={"github_access_token"}),
             "workspace": ctx.workspace.model_dump(),
             "auth_mode": config.auth_mode,
+            "storage": _storage_payload(),
         }
 
     @app.get("/api/auth/github/start")
@@ -374,6 +387,44 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def logout(response: Response):
         response.delete_cookie(SESSION_COOKIE)
         return {"ok": True}
+
+    @app.get("/api/github/repos")
+    def github_repos(ctx: AuthContext = Depends(current)):
+        login, user_token = auth.github_credentials(ctx.user)
+        try:
+            return list_github_repos(
+                github_login=login,
+                user_token=ctx.user.github_access_token,
+                config_token=config.gh_token,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"GitHub API error: {exc}") from exc
+
+    @app.get("/api/github/repos/validate")
+    def github_validate_repo(ref: str, ctx: AuthContext = Depends(current)):
+        from hive.github_repos import parse_repo_ref, validate_repo
+
+        login, _token = auth.github_credentials(ctx.user)
+        try:
+            parse_repo_ref(ref)
+            return validate_repo(
+                ref,
+                github_login=login,
+                user_token=ctx.user.github_access_token,
+                config_token=config.gh_token,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"GitHub API error: {exc}") from exc
 
     # ---- web API -------------------------------------------------------------
 
@@ -721,6 +772,31 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         store.set_org_context(body.get("text", ""), ctx.workspace_id)
         return {"ok": True}
 
+    @app.get("/api/storage")
+    def get_storage(ctx: AuthContext = Depends(current)):
+        return _storage_payload()
+
+    @app.post("/api/storage/export")
+    def export_storage(body: StorageExport, ctx: AuthContext = Depends(current)):
+        if not isinstance(store, FileStore):
+            raise HTTPException(409, "export is only available from the local file store")
+        if not body.gcp_project.strip():
+            raise HTTPException(400, "gcp_project is required")
+        from hive.blobstore import LocalBlobStore
+
+        if blobs is None or not isinstance(blobs, LocalBlobStore):
+            raise HTTPException(409, "blob export requires a local blob store")
+        try:
+            return export_to_gcp(
+                store,
+                blobs,
+                gcp_project=body.gcp_project.strip(),
+                gcs_bucket=body.gcs_bucket.strip(),
+            )
+        except Exception as exc:
+            log.exception("storage export failed")
+            raise HTTPException(503, f"export failed: {exc}") from exc
+
     # ---- runner protocol -------------------------------------------------------
 
     @app.post("/api/runners/register")
@@ -940,22 +1016,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 def production_app() -> FastAPI:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     config = Config.from_env()
-    if config.gcp_project:
-        from hive.store import FirestoreStore
+    from hive.storage import make_blob_store, make_store
 
-        store = FirestoreStore(config.gcp_project)
-    else:
-        from hive.store import MemoryStore
-
-        store = MemoryStore()
-    if config.gcs_bucket:
-        from hive.blobstore import GcsBlobStore
-
-        blobs = GcsBlobStore(config.gcs_bucket)
-    else:
-        from hive.blobstore import LocalBlobStore
-
-        blobs = LocalBlobStore(config.data_dir / "blobs")
+    store = make_store(config)
+    blobs = make_blob_store(config)
     from hive.orchestrator import Orchestrator
 
     machine = ensure_control_plane_machine(store, config)

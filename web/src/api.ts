@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AuthInfo,
   HumanTask,
+  GithubRepo,
   Project,
   ProjectCreate,
   ProjectDetail,
@@ -9,20 +10,27 @@ import type {
   ProjectStart,
   Question,
   ResourcesPayload,
+  StorageExportResult,
+  StorageInfo,
   Subscription,
   Task,
 } from "./types";
 import { api as mockApi } from "./mocks";
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
-  // Resolve against origin: a document URL with embedded user:pass@ credentials
-  // would otherwise make relative-URL fetch() throw.
   const res = await fetch(new URL(path, window.location.origin), {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
   if (!res.ok) {
-    const err = new Error(`${res.status} on ${path}`);
+    let detail = "";
+    try {
+      const body = (await res.json()) as { detail?: string };
+      detail = body.detail ?? "";
+    } catch {
+      /* non-JSON error body */
+    }
+    const err = new Error(detail || `${res.status} on ${path}`);
     (err as Error & { status?: number }).status = res.status;
     throw err;
   }
@@ -83,6 +91,15 @@ const realApi = {
   setOrgContext: async (text: string) => {
     await http("/api/org-context", { method: "PUT", body: JSON.stringify({ text }) });
   },
+  githubRepos: () => http<GithubRepo[]>("/api/github/repos"),
+  validateGithubRepo: (ref: string) =>
+    http<GithubRepo>(`/api/github/repos/validate?ref=${encodeURIComponent(ref)}`),
+  storage: () => http<StorageInfo>("/api/storage"),
+  exportStorage: (body: { gcp_project: string; gcs_bucket?: string }) =>
+    http<StorageExportResult>("/api/storage/export", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };
 
 export const api: typeof realApi = import.meta.env.VITE_MOCK === "1" ? (mockApi as typeof realApi) : realApi;
@@ -133,6 +150,18 @@ export function usePoll<T>(fn: () => Promise<T>, deps: unknown[], intervalMs = 4
 export function repoShort(url: string): string {
   const tail = url.split("/").pop() ?? url;
   return tail.replace(/\.git$/, "");
+}
+
+/** Normalize git URLs and owner/repo refs for deduping (owner/repo, lowercased). */
+export function repoKey(url: string): string {
+  const trimmed = url.trim().replace(/\.git$/i, "");
+  const ownerRepo = trimmed.match(/^[\w.-]+\/[\w.-]+$/);
+  if (ownerRepo) return trimmed.toLowerCase();
+  const ssh = trimmed.match(/^git@github\.com:(.+)$/i);
+  if (ssh) return ssh[1].toLowerCase();
+  const https = trimmed.match(/^https?:\/\/github\.com\/(.+)$/i);
+  if (https) return https[1].toLowerCase();
+  return trimmed.toLowerCase();
 }
 
 export function ago(epoch: number): string {

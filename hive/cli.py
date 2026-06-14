@@ -33,11 +33,10 @@ def _mask(key: str, value: str) -> str:
     return f"…{value[-4:]}" if len(value) > 4 else "****"
 
 
-def _gh_token() -> str:
-    import subprocess
+def _gh_token(preferred_user: str = "") -> str:
+    from hive.github_repos import gh_token_for
 
-    proc = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True)
-    return proc.stdout.strip() if proc.returncode == 0 else ""
+    return gh_token_for(preferred_user)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -157,8 +156,9 @@ def prepare_run_env(env: dict[str, str], stored: dict[str, str]) -> list[str]:
 
     notes: list[str] = []
     gh_autodetected = False
+    preferred_gh = env.get("HIVE_ALLOWED_GITHUB_USERS", "ikamensh").split(",")[0].strip()
     if not env.get("HIVE_GH_TOKEN"):
-        if token := _gh_token():
+        if token := _gh_token(preferred_gh):
             env["HIVE_GH_TOKEN"] = token
             gh_autodetected = True
 
@@ -166,7 +166,7 @@ def prepare_run_env(env: dict[str, str], stored: dict[str, str]) -> list[str]:
         return "stored config" if key in stored else "environment"
 
     if gh_autodetected:
-        notes.append("github: token from `gh auth token`")
+        notes.append(f"github: token from `gh auth token -u {preferred_gh}`")
     elif env.get("HIVE_GH_TOKEN"):
         notes.append(f"github: HIVE_GH_TOKEN from {src('HIVE_GH_TOKEN')}")
     else:
@@ -185,7 +185,10 @@ def prepare_run_env(env: dict[str, str], stored: dict[str, str]) -> list[str]:
             f"store: Firestore ({env['HIVE_GCP_PROJECT']}, from {src('HIVE_GCP_PROJECT')})"
         )
     else:
-        notes.append("store: in-memory (throwaway; set HIVE_GCP_PROJECT to persist)")
+        data_dir = env.get("HIVE_DATA_DIR", "/tmp/hive-data")
+        notes.append(
+            f"store: local files ({data_dir}/store; set HIVE_GCP_PROJECT for Firestore)"
+        )
 
     auth_mode = env.get("HIVE_AUTH_MODE", "dev")
     if auth_mode == "github":
@@ -208,7 +211,7 @@ def detect_config(env: dict[str, str]) -> dict[str, str]:
     """Tokens/settings discoverable on this machine, as a seed for the store:
     the `gh` token plus any recognized hive vars already in the environment."""
     found = {key: env[key] for key in CONFIG_KEYS if env.get(key)}
-    if "HIVE_GH_TOKEN" not in found and (token := _gh_token()):
+    if "HIVE_GH_TOKEN" not in found and (token := _gh_token(env.get("HIVE_ALLOWED_GITHUB_USERS", "ikamensh").split(",")[0].strip())):
         found["HIVE_GH_TOKEN"] = token
     return found
 

@@ -3,6 +3,7 @@
 
 import type {
   AuthInfo,
+  GithubRepo,
   HumanTask,
   Project,
   ProjectCreate,
@@ -17,6 +18,37 @@ import type {
 } from "./types";
 
 const now = Date.now() / 1000;
+
+const mockGithubRepos: GithubRepo[] = [
+  {
+    full_name: "acme/atlas-spec",
+    ssh_url: "git@github.com:acme/atlas-spec.git",
+    clone_url: "https://github.com/acme/atlas-spec.git",
+    private: true,
+    description: "Atlas product spec home",
+  },
+  {
+    full_name: "acme/atlas-api",
+    ssh_url: "git@github.com:acme/atlas-api.git",
+    clone_url: "https://github.com/acme/atlas-api.git",
+    private: true,
+    description: "Atlas backend",
+  },
+  {
+    full_name: "acme/atlas-web",
+    ssh_url: "git@github.com:acme/atlas-web.git",
+    clone_url: "https://github.com/acme/atlas-web.git",
+    private: false,
+    description: "Atlas frontend",
+  },
+  {
+    full_name: "acme/relay",
+    ssh_url: "git@github.com:acme/relay.git",
+    clone_url: "https://github.com/acme/relay.git",
+    private: true,
+    description: "Relay service",
+  },
+];
 
 const projects: Project[] = [
   {
@@ -296,6 +328,16 @@ export const api = {
     },
     workspace: { id: "default", name: "ikamen", created_at: now - 86400 },
     auth_mode: "dev",
+    storage: {
+      backend: "file",
+      store_path: "/tmp/hive-data/store",
+      gcp_project: null,
+      blob_backend: "local",
+      blob_path: "/tmp/hive-data/blobs",
+      gcs_bucket: null,
+      counts: { projects: projects.length },
+      export_available: true,
+    },
   }),
   logout: async (): Promise<void> => {},
 
@@ -476,6 +518,39 @@ export const api = {
   setOrgContext: async (text: string): Promise<void> => {
     orgContext = text;
   },
+
+  githubRepos: async (): Promise<GithubRepo[]> => structuredClone(mockGithubRepos),
+
+  validateGithubRepo: async (ref: string): Promise<GithubRepo> => {
+    const key = ref.trim().toLowerCase().replace(/\.git$/, "");
+    const hit = mockGithubRepos.find(
+      (repo) =>
+        repo.full_name.toLowerCase() === key ||
+        repo.ssh_url.toLowerCase().includes(key) ||
+        repo.full_name.toLowerCase().includes(key),
+    );
+    if (hit) return structuredClone(hit);
+    throw Object.assign(new Error(`repo not found: ${ref}`), { status: 404 });
+  },
+
+  storage: async () => ({
+    backend: "file" as const,
+    store_path: "/tmp/hive-data/store",
+    gcp_project: null,
+    blob_backend: "local" as const,
+    blob_path: "/tmp/hive-data/blobs",
+    gcs_bucket: null,
+    counts: { projects: projects.length },
+    export_available: true,
+  }),
+
+  exportStorage: async () => ({
+    gcp_project: "hive-ikamen",
+    gcs_bucket: null,
+    documents: { projects: projects.length },
+    blobs: 0,
+    message: "Exported to Firestore project 'hive-ikamen'. Restart with HIVE_GCP_PROJECT='hive-ikamen' to use the cloud store.",
+  }),
 };
 
 const subscriptions: Subscription[] = [

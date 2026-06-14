@@ -135,7 +135,7 @@ def test_prepare_run_env_extracts_gh_token(monkeypatch):
     assert env["HIVE_GH_TOKEN"] == "ghp_abc"
     assert any("gh auth token" in n for n in notes)
     assert any("OPENAI_API_KEY from environment" in n for n in notes)
-    assert any("in-memory" in n for n in notes)
+    assert any("local files" in n for n in notes)
 
 
 def test_prepare_run_env_no_gh_no_key(monkeypatch):

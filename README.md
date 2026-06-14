@@ -10,7 +10,7 @@ The point isn't just "an agent writes code." It's the loop around it: hive decom
 
 ## Quickstart: run hive on your laptop
 
-This runs the whole system — control plane + a runner — on one machine, in throwaway in-memory mode (no cloud, nothing persisted). Perfect for a first interaction.
+This runs the whole system — control plane + a runner — on one machine. Without `HIVE_GCP_PROJECT`, projects persist as JSON under `HIVE_DATA_DIR/store` (default `/tmp/hive-data/store`). Perfect for a first interaction.
 
 ### 0. Prerequisites
 
@@ -41,11 +41,11 @@ uv run hive run
 ```
   github: token from `gh auth token`
   orchestrator: OPENAI_API_KEY from environment (provider=auto)
-  store: in-memory (throwaway; set HIVE_GCP_PROJECT to persist)
+  store: local files (/tmp/hive-data/store; set HIVE_GCP_PROJECT for Firestore)
 hive control plane → http://127.0.0.1:8000
 ```
 
-With `HIVE_GCP_PROJECT` unset it uses an in-memory store — fast to try, gone on restart. Leave it running. (Flags: `--host`, `--port`, `--reload`.)
+Without `HIVE_GCP_PROJECT` it uses a local file store — projects survive restarts under `HIVE_DATA_DIR`. Leave it running. (Flags: `--host`, `--port`, `--reload`.)
 
 **Giving hive its own tokens.** Autodetected tokens (the `gh` token, `OPENAI_API_KEY`/`GEMINI_API_KEY` from your shell) are just the starting point. To have hive use *separate* keys — e.g. so its spend is billed/tracked on their own account — store them in hive's own config (`~/.config/hive/config.env`, `chmod 600`); stored values take precedence over the ambient environment on `hive run`:
 
@@ -155,11 +155,19 @@ The iteration goal is always set *through hive* (`hive iterate` / the UI), which
 - `OPENAI_API_KEY` uses OpenAI's API; `HIVE_OPENAI_BASE_URL` can point at an OpenAI-compatible endpoint. `GEMINI_API_KEY` uses Gemini.
 - In `auto`, an explicit model prefix picks the provider; otherwise OpenAI is used when `OPENAI_API_KEY` exists, then Gemini.
 
-**Persisting state across restarts.** In-memory mode is throwaway. To keep projects/tasks between restarts, point `hive run` at Firestore + a data dir via the environment:
+**Persisting state across restarts.** Local runs write JSON to `HIVE_DATA_DIR/store` (default `/tmp/hive-data/store`) and blobs to `HIVE_DATA_DIR/blobs`. Set a stable data dir:
 
 ```bash
-HIVE_GCP_PROJECT=<gcp-project> HIVE_DATA_DIR=~/.hive-data uv run hive run
+HIVE_DATA_DIR=~/.hive-data uv run hive run
 ```
+
+For cloud persistence (or to migrate local data), set Firestore + optional GCS:
+
+```bash
+HIVE_GCP_PROJECT=<gcp-project> HIVE_GCS_BUCKET=<bucket> HIVE_DATA_DIR=~/.hive-data uv run hive run
+```
+
+The Resources page shows the active store and can export local files to GCP (`POST /api/storage/export`). After export, restart with `HIVE_GCP_PROJECT` to use Firestore.
 
 A leader lease in Firestore (`settings/leader_lease`) makes a *second* control plane on the same database refuse to start — so if a deployed instance owns that project, stop it first.
 

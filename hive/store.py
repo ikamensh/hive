@@ -1,5 +1,6 @@
-"""Persistence. `StoreBase` is the contract; `MemoryStore` (tests/dev) and
-`FirestoreStore` (prod) are independent implementations of it.
+"""Persistence. `StoreBase` is the contract; `MemoryStore` (tests), `FileStore`
+(local dev — JSON files under HIVE_DATA_DIR), and `FirestoreStore` (prod) are
+independent implementations of it.
 
 Documents are pydantic models serialized to dicts. `update` is the atomic
 read-modify-write: the way to mutate a document without clobbering a concurrent
@@ -9,9 +10,11 @@ writer (the supervisor loop and the request threadpool both touch tasks). Plain
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Callable, TypeVar
 
 from hive.models import (
@@ -208,6 +211,114 @@ class MemoryStore(StoreBase):
             else:
                 self._leases[workspace_id] = lease
             return holder
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, separators=(",", ":")))
+    tmp.replace(path)
+
+
+class FileStore(MemoryStore):
+    """JSON-on-disk store for local control-plane runs. Same in-process locking
+    as MemoryStore, but every mutation is flushed to ``root/<collection>/<id>.json``."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = Path(root)
+        super().__init__()
+        self._org_contexts: dict[str, str] = {}
+        self._leases: dict[str, dict] = {}
+        self._load()
+
+    def _collection_dir(self, collection: str) -> Path:
+        return self.root / collection
+
+    def _doc_path(self, collection: str, doc_id: str) -> Path:
+        return self._collection_dir(collection) / f"{doc_id}.json"
+
+    def _settings_path(self, name: str) -> Path:
+        return self.root / "settings" / name
+
+    def _load(self) -> None:
+        for collection in _COLLECTIONS.values():
+            directory = self._collection_dir(collection)
+            if not directory.is_dir():
+                continue
+            for path in directory.glob("*.json"):
+                raw = json.loads(path.read_text())
+                self._data[collection][raw["id"]] = raw
+
+        settings = self.root / "settings"
+        if not settings.is_dir():
+            return
+        org_path = settings / "org_context.json"
+        if org_path.is_file():
+            self.org_context = json.loads(org_path.read_text()).get("text", "")
+        for path in settings.glob("org_context_*.json"):
+            workspace_id = path.stem.removeprefix("org_context_")
+            self._org_contexts[workspace_id] = json.loads(path.read_text()).get("text", "")
+        lease_path = settings / "leader_lease.json"
+        if lease_path.is_file():
+            self._lease = json.loads(lease_path.read_text())
+        for path in settings.glob("leader_lease_*.json"):
+            workspace_id = path.stem.removeprefix("leader_lease_")
+            self._leases[workspace_id] = json.loads(path.read_text())
+
+    def _persist_doc(self, collection: str, doc_id: str, raw: dict) -> None:
+        _atomic_write_json(self._doc_path(collection, doc_id), raw)
+
+    def _delete_doc(self, collection: str, doc_id: str) -> None:
+        self._doc_path(collection, doc_id).unlink(missing_ok=True)
+
+    def _persist_org_context(self, workspace_id: str, text: str) -> None:
+        if workspace_id == DEFAULT_WORKSPACE_ID:
+            _atomic_write_json(self._settings_path("org_context.json"), {"text": text})
+        else:
+            _atomic_write_json(
+                self._settings_path(f"org_context_{workspace_id}.json"),
+                {"text": text},
+            )
+
+    def _persist_lease(self, workspace_id: str, lease: dict) -> None:
+        if workspace_id == DEFAULT_WORKSPACE_ID:
+            _atomic_write_json(self._settings_path("leader_lease.json"), lease)
+        else:
+            _atomic_write_json(self._settings_path(f"leader_lease_{workspace_id}.json"), lease)
+
+    def put(self, obj: M) -> M:
+        result = super().put(obj)
+        collection = _COLLECTIONS[type(obj)]
+        self._persist_doc(collection, obj.id, self._data[collection][obj.id])
+        return result
+
+    def update(self, model: type[M], id: str, mutate: Callable[[M], None]) -> M | None:
+        updated = super().update(model, id, mutate)
+        if updated is not None:
+            collection = _COLLECTIONS[model]
+            self._persist_doc(collection, id, self._data[collection][id])
+        return updated
+
+    def delete(self, model: type[M], id: str) -> None:
+        collection = _COLLECTIONS[model]
+        super().delete(model, id)
+        self._delete_doc(collection, id)
+
+    def set_org_context(self, text: str, workspace_id: str = DEFAULT_WORKSPACE_ID) -> None:
+        super().set_org_context(text, workspace_id)
+        self._persist_org_context(workspace_id, text)
+
+    def claim_leader(
+        self, holder: str, ttl_s: float, workspace_id: str = DEFAULT_WORKSPACE_ID
+    ) -> str:
+        owner = super().claim_leader(holder, ttl_s, workspace_id)
+        if owner == holder:
+            if workspace_id == DEFAULT_WORKSPACE_ID:
+                lease = self._lease
+            else:
+                lease = self._leases[workspace_id]
+            self._persist_lease(workspace_id, lease)
+        return owner
 
 
 class FirestoreStore(StoreBase):

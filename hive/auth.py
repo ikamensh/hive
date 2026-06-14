@@ -275,7 +275,7 @@ class AuthManager:
             {
                 "client_id": self.config.github_client_id,
                 "redirect_uri": f"{self.config.public_url.rstrip('/')}/api/auth/github/callback",
-                "scope": "read:user",
+                "scope": "read:user repo",
                 "state": self.state_token(),
             }
         )
@@ -314,6 +314,8 @@ class AuthManager:
         if login not in self.allowed_github:
             raise HTTPException(403, "GitHub user is not allowed")
         user = self._ensure_user(login, profile.get("name") or login)
+        user.github_access_token = access_token
+        self.store.put(user)
         response = RedirectResponse("/")
         response.set_cookie(
             SESSION_COOKIE,
@@ -327,3 +329,7 @@ class AuthManager:
 
     def logout(self) -> dict:
         return {"ok": True}
+
+    def github_credentials(self, user: User) -> tuple[str, str]:
+        """(github_login, token) for GitHub API — session OAuth token or server fallback."""
+        return user.github_login, user.github_access_token or self.config.gh_token.strip()

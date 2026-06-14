@@ -13,7 +13,7 @@ from hive.models import DEFAULT_WORKSPACE_ID
 
 @dataclass
 class Config:
-    gcp_project: str  # empty = in-memory store (dev/tests)
+    gcp_project: str  # empty = FileStore under data_dir; set for Firestore
     gcs_bucket: str  # empty = local blob store under data_dir
     gh_token: str
     gemini_api_key: str

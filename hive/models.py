@@ -24,6 +24,7 @@ class User(BaseModel):
     id: str = Field(default_factory=new_id)
     github_login: str = ""
     display_name: str = ""
+    github_access_token: str = ""  # OAuth token for GitHub API; never exposed via web API
     created_at: float = Field(default_factory=now)
     last_seen: float = Field(default_factory=now)
 
