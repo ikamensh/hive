@@ -5,6 +5,7 @@ import App from "./App";
 import Projects from "./pages/Projects";
 import ProjectPage from "./pages/Project";
 import Resources from "./pages/Resources";
+import Storage from "./pages/Storage";
 import "./styles.css";
 
 const router = createBrowserRouter([
@@ -15,6 +16,7 @@ const router = createBrowserRouter([
       { index: true, element: <Projects /> },
       { path: "p/:id", element: <ProjectPage /> },
       { path: "resources", element: <Resources /> },
+      { path: "storage", element: <Storage /> },
     ],
   },
 ]);

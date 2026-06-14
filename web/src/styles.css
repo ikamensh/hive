@@ -221,6 +221,13 @@ textarea:focus {
   margin-bottom: 28px;
 }
 
+.brand-cluster {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
 .brand {
   display: flex;
   align-items: baseline;
@@ -249,6 +256,12 @@ textarea:focus {
   color: var(--ink-faint);
 }
 .storage-chip {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  max-width: min(230px, 42vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-family: var(--mono);
   font-size: 10px;
   letter-spacing: 0.08em;
@@ -257,6 +270,12 @@ textarea:focus {
   border: 1px solid color-mix(in srgb, var(--accent-2) 35%, var(--line));
   border-radius: 999px;
   padding: 2px 8px;
+  text-decoration: none;
+}
+.storage-chip:hover,
+.storage-chip.active {
+  background: color-mix(in srgb, var(--accent-2) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent-2) 55%, var(--line));
 }
 
 .topbar nav {
@@ -411,8 +430,15 @@ textarea:focus {
     gap: 10px 12px;
     align-items: center;
   }
+  .brand-cluster {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .brand {
+    align-items: center;
+  }
   .brand small,
-  .storage-chip,
   .account-mode,
   .q-counter .q-label {
     display: none;
