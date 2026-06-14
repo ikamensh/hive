@@ -221,6 +221,13 @@ textarea:focus {
   margin-bottom: 28px;
 }
 
+.brand-cluster {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
 .brand {
   display: flex;
   align-items: baseline;
@@ -249,6 +256,9 @@ textarea:focus {
   color: var(--ink-faint);
 }
 .storage-chip {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
   font-family: var(--mono);
   font-size: 10px;
   letter-spacing: 0.08em;
@@ -257,6 +267,12 @@ textarea:focus {
   border: 1px solid color-mix(in srgb, var(--accent-2) 35%, var(--line));
   border-radius: 999px;
   padding: 2px 8px;
+  text-decoration: none;
+}
+.storage-chip:hover,
+.storage-chip.active {
+  background: color-mix(in srgb, var(--accent-2) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent-2) 55%, var(--line));
 }
 
 .topbar nav {
@@ -1948,3 +1964,99 @@ textarea:focus {
 .todo-actions { display: flex; justify-content: flex-end; margin-top: 0.7rem; }
 .sub-add { display: flex; gap: 0.5rem; margin-top: 0.7rem; flex-wrap: wrap; }
 .sub-add input { flex: 1 1 180px; }
+
+@media (max-width: 720px) {
+  .shell {
+    padding: 0 16px 48px;
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 12px;
+  }
+
+  .brand-cluster {
+    flex: 1 1 100%;
+    order: 1;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .brand {
+    align-items: center;
+  }
+
+  .brand small {
+    display: none;
+  }
+
+  .topbar nav {
+    order: 2;
+  }
+
+  .topbar nav a {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .account-menu {
+    order: 3;
+    margin-left: auto;
+  }
+
+  .account-chip {
+    min-height: 34px;
+    padding: 0 9px;
+  }
+
+  .account-user {
+    max-width: 96px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .theme-toggle {
+    order: 4;
+    width: 34px;
+    height: 34px;
+  }
+
+  .q-counter {
+    order: 5;
+    flex: 1 1 100%;
+  }
+
+  .q-counter .q-label {
+    letter-spacing: 0.12em;
+  }
+
+  .page-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .local-runner-controls {
+    margin-left: 0;
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .local-runner-chip {
+    margin-left: 0;
+  }
+
+  .runner-autostart {
+    white-space: nowrap;
+  }
+
+  .storage-export-form {
+    flex-direction: column;
+  }
+
+  .storage-export-form input {
+    flex: 0 1 auto;
+  }
+}

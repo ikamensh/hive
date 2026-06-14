@@ -153,24 +153,30 @@ export default function App() {
   return (
     <div className="shell">
       <header className="topbar">
-        <NavLink to="/" className="brand">
-          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden>
-            <path
-              d="M12 1.5 21 6.75v10.5L12 22.5 3 17.25V6.75z"
-              fill="none"
-              stroke="var(--accent)"
-              strokeWidth="1.8"
-            />
-            <path d="M12 6.5 16.5 9.25v5.5L12 17.5 7.5 14.75v-5.5z" fill="var(--accent-2)" opacity="0.7" />
-          </svg>
-          <span>hive</span>
-          <small>control plane</small>
+        <div className="brand-cluster">
+          <NavLink to="/" className="brand">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden>
+              <path
+                d="M12 1.5 21 6.75v10.5L12 22.5 3 17.25V6.75z"
+                fill="none"
+                stroke="var(--accent)"
+                strokeWidth="1.8"
+              />
+              <path d="M12 6.5 16.5 9.25v5.5L12 17.5 7.5 14.75v-5.5z" fill="var(--accent-2)" opacity="0.7" />
+            </svg>
+            <span>hive</span>
+            <small>control plane</small>
+          </NavLink>
           {auth.data?.storage && (
-            <span className="storage-chip" title={auth.data.storage.store_path ?? auth.data.storage.gcp_project ?? undefined}>
+            <NavLink
+              to="/storage"
+              className="storage-chip"
+              title={auth.data.storage.store_path ?? auth.data.storage.gcp_project ?? undefined}
+            >
               {storageLabel(auth.data.storage)}
-            </span>
+            </NavLink>
           )}
-        </NavLink>
+        </div>
         <nav>
           <NavLink to="/" end>
             projects
