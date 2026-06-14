@@ -8,7 +8,7 @@ function storageBackendLabel(storage: StorageInfo): string {
   return "In-memory (not persisted)";
 }
 
-export default function Storage() {
+export default function Settings() {
   const { data, failed } = usePoll(() => api.storage(), []);
   const [gcpProject, setGcpProject] = useState("");
   const [gcsBucket, setGcsBucket] = useState("");
@@ -37,15 +37,15 @@ export default function Storage() {
   const docTotal = data ? Object.values(data.counts).reduce((sum, n) => sum + n, 0) : 0;
 
   return (
-    <div className="page page-storage">
+    <div className="page page-settings">
       <div className="page-head">
-        <h1>Storage</h1>
+        <h1>Settings</h1>
       </div>
       {!data ? (
         <p className="muted">{failed ? "unreachable" : "loading…"}</p>
       ) : (
         <section className="storage-panel">
-          <h2 className="col-title">backends</h2>
+          <h2 className="col-title">persistence</h2>
           <div className="storage-grid">
             <div>
               <p className="storage-label">project data</p>
