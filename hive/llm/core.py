@@ -34,15 +34,42 @@ class ToolResult:
 
 
 @dataclass
+class Usage:
+    """Token counts for one or more model calls. Cost is derived later from a
+    pricing table (see hive/pricing.py) — providers report tokens, not dollars."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    def __add__(self, other: "Usage") -> "Usage":
+        return Usage(
+            self.input_tokens + other.input_tokens,
+            self.output_tokens + other.output_tokens,
+        )
+
+
+@dataclass
 class Completion:
     """One model turn: tool calls to execute, or (when empty) final text."""
 
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
+    usage: Usage = field(default_factory=Usage)
 
     @property
     def is_final(self) -> bool:
         return not self.tool_calls
+
+
+@dataclass
+class LoopResult:
+    """The outcome of a full tool-loop run: the final text, the model that
+    produced it, and the summed token usage across every round."""
+
+    text: str
+    usage: Usage = field(default_factory=Usage)
+    rounds: int = 0
+    model: str = ""
 
 
 @runtime_checkable
@@ -136,11 +163,13 @@ class ToolLoop:
         history: list[dict],
         user_msg: str,
         toolset: ToolSet,
-    ) -> str:
+    ) -> LoopResult:
         adapter.start(system, history, user_msg, toolset)
-        for _ in range(self.max_rounds):
+        usage = Usage()
+        for round_n in range(1, self.max_rounds + 1):
             completion = adapter.step()
+            usage = usage + completion.usage
             if completion.is_final:
-                return completion.text or "(no text)"
+                return LoopResult(completion.text or "(no text)", usage, round_n)
             adapter.add_tool_results([toolset.dispatch(c) for c in completion.tool_calls])
-        return "Stopped after maximum orchestrator tool-call rounds."
+        return LoopResult("Stopped after maximum orchestrator tool-call rounds.", usage, self.max_rounds)

@@ -62,6 +62,22 @@ def test_fix_rounds_capped():
     assert "task_id=" in tools.create_task(ws_id, "r", "next bit")
 
 
+def test_failed_work_streak_capped():
+    store = MemoryStore()
+    tools, project = _tools(store)
+    ws_id = tools.create_workstream("w", "d").split("=")[1]
+    for _ in range(MAX_FIX_ROUNDS):
+        store.put(Task(project_id=project.id, workstream_id=ws_id, repo="r", instructions="i",
+                       kind=TaskKind.work, status=TaskStatus.failed))
+    blocked = tools.create_task(ws_id, "r", "retry the same work")
+    assert "error" in blocked and "park" in blocked
+
+    # A successful work task resets the streak, so work can resume.
+    store.put(Task(project_id=project.id, workstream_id=ws_id, repo="r", instructions="i",
+                   kind=TaskKind.work, status=TaskStatus.done))
+    assert "task_id=" in tools.create_task(ws_id, "r", "next bit")
+
+
 def test_pr_mode_puts_work_on_a_branch():
     store = MemoryStore()
     tools, _ = _tools(store, autonomy="pr")

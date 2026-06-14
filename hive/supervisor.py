@@ -19,6 +19,7 @@ from typing import Callable
 
 from hive.escalation import escalate
 from hive.models import (
+    OrchestratorRun,
     Project,
     ProjectState,
     Resource,
@@ -121,11 +122,17 @@ class Supervisor:
 
     def spend_today(self, project_id: str) -> float:
         start = utc_day_start()
-        return sum(
+        tasks = sum(
             t.cost_usd
             for t in self.store.list(Task, project_id=project_id)
             if t.finished_at >= start
         )
+        orchestrator = sum(
+            r.cost_usd
+            for r in self.store.list(OrchestratorRun, project_id=project_id)
+            if r.created_at >= start
+        )
+        return tasks + orchestrator
 
     def over_budget(self, project: Project) -> bool:
         return project.daily_budget_usd > 0 and self.spend_today(project.id) >= project.daily_budget_usd
@@ -240,6 +247,11 @@ class Supervisor:
             state = self.refresh_state(project)
             if project.id in self._busy:
                 continue  # invocation in flight; events stay queued for the next step
+            if self.over_budget(project):
+                # The orchestrator itself costs money. Leave events queued and go
+                # quiet until spend rolls over at UTC midnight (dispatch is also
+                # skipped), so a budgeted project can't be drained by replanning.
+                continue
             events = self._events.pop(project.id, [])
             heartbeat_due = (
                 time.time() - self._last_heartbeat.get(project.id, 0)

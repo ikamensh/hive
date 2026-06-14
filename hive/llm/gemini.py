@@ -9,7 +9,16 @@ function-call content each round so per-call ids / thought signatures survive.
 
 from __future__ import annotations
 
-from hive.llm.core import Completion, ToolCall, ToolResult, ToolSet
+from hive.llm.core import Completion, ToolCall, ToolResult, ToolSet, Usage
+
+
+def _usage(metadata) -> Usage:
+    if metadata is None:
+        return Usage()
+    return Usage(
+        getattr(metadata, "prompt_token_count", 0) or 0,
+        getattr(metadata, "candidates_token_count", 0) or 0,
+    )
 
 
 class GeminiAdapter:
@@ -53,15 +62,17 @@ class GeminiAdapter:
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             ),
         )
+        usage = _usage(getattr(response, "usage_metadata", None))
         calls = response.function_calls or []
         if not calls:
-            return Completion(text=response.text or "(no text)")
+            return Completion(text=response.text or "(no text)", usage=usage)
         self._contents.append(response.candidates[0].content)
         return Completion(
+            usage=usage,
             tool_calls=[
                 ToolCall(id=call.id or "", name=call.name, arguments=dict(call.args or {}))
                 for call in calls
-            ]
+            ],
         )
 
     def add_tool_results(self, results: list[ToolResult]) -> None:

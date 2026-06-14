@@ -14,12 +14,13 @@ import logging
 from pathlib import Path
 
 from hive.backends import BACKEND_NAMES
-from hive.llm import ToolLoop, ToolSet, build_adapter
+from hive.llm import LoopResult, ToolLoop, ToolSet, build_adapter
 from hive.models import (
     Autonomy,
     Feedback,
     HumanTask,
     HumanTaskStatus,
+    OrchestratorRun,
     Project,
     Question,
     Resource,
@@ -32,6 +33,7 @@ from hive.models import (
     Workstream,
     WorkstreamStatus,
 )
+from hive.pricing import estimate_cost
 from hive.prompts import load as load_prompt
 from hive.specrepo import SpecRepo
 
@@ -104,6 +106,12 @@ class Tools:
                 "accept since. Don't queue another fix — park the workstream and ask the user "
                 "what to change (park_workstream + ask_user)."
             )
+        if kind == TaskKind.work and self._failed_work_streak(workstream_id) >= MAX_FIX_ROUNDS:
+            return (
+                f"error: workstream {workstream_id} has {MAX_FIX_ROUNDS} work tasks that failed "
+                "(runner/execution errors) with no success since. Re-running won't help — park "
+                "the workstream and ask the user (try a different backend or fix the blocker)."
+            )
         # PR (mature) mode keeps each workstream's work on its own branch so the
         # verify task reviews exactly those changes and a human merges the PR.
         # direct_push (fast) mode lands on the default branch; verify is the
@@ -150,6 +158,20 @@ class Tools:
             elif t.verdict == Verdict.reject:
                 count += 1
         return count
+
+    def _failed_work_streak(self, workstream_id: str) -> int:
+        """Consecutive failed work tasks since the last successful one — guards
+        against re-queueing work that keeps crashing (bad creds, runtime errors)
+        instead of failing quality review, which `_unresolved_rejects` covers."""
+        streak = 0
+        for t in self.store.list(Task, project_id=self.project.id, workstream_id=workstream_id):
+            if t.kind != TaskKind.work:
+                continue
+            if t.status == TaskStatus.failed:
+                streak += 1
+            elif t.status == TaskStatus.done:
+                streak = 0
+        return streak
 
     def ask_user(self, question_markdown: str, workstream_id: str = "") -> str:
         """Ask the human a clarification question (markdown: context, the
@@ -394,7 +416,9 @@ class Orchestrator:
             f"\n\nSPEC:\n{spec_digest}"
         )
         history = self._load_history(project_id)
-        final_text = self._generate(project, history, user_msg, tools)
+        result = self._generate(project, history, user_msg, tools)
+        final_text = result.text
+        self._record_cost(project_id, result)
         log.info("orchestrator[%s]: %s | actions: %s", project.name, final_text[:200], tools.actions)
 
         # Persist model text only — echoing executed tool calls as text teaches
@@ -406,15 +430,31 @@ class Orchestrator:
 
     # -- LLM call -------------------------------------------------------------
 
-    def _generate(self, project: Project, history: list[dict], user_msg: str, tools: Tools) -> str:
+    def _generate(
+        self, project: Project, history: list[dict], user_msg: str, tools: Tools
+    ) -> LoopResult:
         adapter = self._build_adapter()
-        return ToolLoop(MAX_REMOTE_CALLS).run(
+        result = ToolLoop(MAX_REMOTE_CALLS).run(
             adapter, self._system_prompt(), history, user_msg, ToolSet(tools.functions())
         )
+        result.model = getattr(adapter, "model", "")
+        return result
 
     def _build_adapter(self):
         """The provider seam: tests override this to inject a scripted adapter."""
         return build_adapter(self.config)
+
+    def _record_cost(self, project_id: str, result: LoopResult) -> None:
+        cost = estimate_cost(result.model, result.usage.input_tokens, result.usage.output_tokens)
+        self.store.put(
+            OrchestratorRun(
+                project_id=project_id,
+                model=result.model,
+                input_tokens=result.usage.input_tokens,
+                output_tokens=result.usage.output_tokens,
+                cost_usd=cost,
+            )
+        )
 
     def _system_prompt(self) -> str:
         base_prompt, _version = load_prompt("orchestrator")

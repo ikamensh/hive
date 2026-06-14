@@ -17,6 +17,7 @@ from typing import Callable, TypeVar
 from hive.models import (
     Feedback,
     HumanTask,
+    OrchestratorRun,
     Project,
     Question,
     QuestionStatus,
@@ -29,7 +30,17 @@ from hive.models import (
 )
 
 M = TypeVar(
-    "M", Project, Workstream, Task, Question, Runner, Resource, Feedback, Subscription, HumanTask
+    "M",
+    Project,
+    Workstream,
+    Task,
+    Question,
+    Runner,
+    Resource,
+    Feedback,
+    Subscription,
+    HumanTask,
+    OrchestratorRun,
 )
 
 _COLLECTIONS: dict[type, str] = {
@@ -42,6 +53,7 @@ _COLLECTIONS: dict[type, str] = {
     Feedback: "feedback",
     Subscription: "subscriptions",
     HumanTask: "human_tasks",
+    OrchestratorRun: "orchestrator_runs",
 }
 
 

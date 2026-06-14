@@ -4,7 +4,7 @@ adapter's translation, all without a network or real provider call."""
 import pytest
 
 from hive.config import Config
-from hive.llm import Completion, ToolCall, ToolLoop, ToolSet, build_adapter
+from hive.llm import Completion, ToolCall, ToolLoop, ToolSet, Usage, build_adapter
 from hive.llm.gemini import GeminiAdapter
 
 
@@ -71,17 +71,22 @@ class FakeAdapter:
         self.fed.append(results)
 
 
-def test_tool_loop_runs_tools_then_returns_final_text():
+def test_tool_loop_runs_tools_then_returns_final_text_and_sums_usage():
     surface = _Surface()
     toolset = ToolSet([surface.note])
     adapter = FakeAdapter(
         [
-            Completion(tool_calls=[ToolCall(name="note", arguments={"text": "a"}, id="c1")]),
-            Completion(text="all done"),
+            Completion(
+                tool_calls=[ToolCall(name="note", arguments={"text": "a"}, id="c1")],
+                usage=Usage(input_tokens=100, output_tokens=20),
+            ),
+            Completion(text="all done", usage=Usage(input_tokens=150, output_tokens=30)),
         ]
     )
     out = ToolLoop(max_rounds=5).run(adapter, "sys", [], "go", toolset)
-    assert out == "all done"
+    assert out.text == "all done"
+    assert out.rounds == 2
+    assert out.usage == Usage(input_tokens=250, output_tokens=50)  # summed across rounds
     assert surface.calls == [("a", False)]
     assert adapter.fed[0][0].content.startswith("noted 'a'")
     assert adapter.started[0] == "sys"
@@ -91,12 +96,13 @@ def test_tool_loop_stops_at_round_budget():
     toolset = ToolSet([_Surface().note])
     forever = [Completion(tool_calls=[ToolCall(name="note", arguments={"text": "x"})]) for _ in range(10)]
     out = ToolLoop(max_rounds=3).run(FakeAdapter(forever), "s", [], "u", toolset)
-    assert "maximum" in out
+    assert "maximum" in out.text
+    assert out.rounds == 3
 
 
 def test_tool_loop_empty_text_is_placeholder():
     out = ToolLoop(max_rounds=1).run(FakeAdapter([Completion(text="")]), "s", [], "u", ToolSet([]))
-    assert out == "(no text)"
+    assert out.text == "(no text)"
 
 
 # -- provider resolution ------------------------------------------------------
@@ -133,11 +139,18 @@ class _FakeFunctionCall:
         self.name, self.args, self.id = name, args, id
 
 
+class _FakeUsage:
+    def __init__(self, prompt, candidates):
+        self.prompt_token_count = prompt
+        self.candidates_token_count = candidates
+
+
 class _FakeResponse:
-    def __init__(self, function_calls=None, text="", content=None):
+    def __init__(self, function_calls=None, text="", content=None, usage=None):
         self.function_calls = function_calls or []
         self.text = text
         self.candidates = [type("C", (), {"content": content})] if content is not None else []
+        self.usage_metadata = usage
 
 
 class _FakeModels:
@@ -172,12 +185,14 @@ def test_gemini_adapter_drives_tool_calls_then_text():
             _FakeResponse(
                 function_calls=[_FakeFunctionCall("note", {"text": "g"}, id="fc1")],
                 content="MODEL_FUNC_CALL_CONTENT",
+                usage=_FakeUsage(prompt=80, candidates=12),
             ),
-            _FakeResponse(text="gemini done"),
+            _FakeResponse(text="gemini done", usage=_FakeUsage(prompt=90, candidates=8)),
         ]
     )
     out = ToolLoop(max_rounds=5).run(adapter, "sys", [{"role": "user", "text": "hi"}], "go", toolset)
-    assert out == "gemini done"
+    assert out.text == "gemini done"
+    assert out.usage == Usage(input_tokens=170, output_tokens=20)
     assert surface.calls == [("g", False)]
     # second turn resent the model's own function-call content plus a tool result
     second_turn = adapter._client.models.seen_contents[1]

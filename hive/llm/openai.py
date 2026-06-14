@@ -4,7 +4,7 @@ auto-selects the newest tool-capable model when none is configured."""
 
 from __future__ import annotations
 
-from hive.llm.core import Completion, ToolCall, ToolResult, ToolSet
+from hive.llm.core import Completion, ToolCall, ToolResult, ToolSet, Usage
 
 # Substrings marking non-chat models we must not auto-select for tool calling.
 MODEL_SKIP = (
@@ -19,6 +19,12 @@ MODEL_SKIP = (
     "transcribe",
     "tts",
 )
+
+
+def _usage(raw) -> Usage:
+    if not raw:
+        return Usage()
+    return Usage(raw.get("prompt_tokens", 0) or 0, raw.get("completion_tokens", 0) or 0)
 
 
 def _content_text(content) -> str:
@@ -61,14 +67,16 @@ class OpenAIAdapter:
             },
         )
         message = data["choices"][0]["message"]
+        usage = _usage(data.get("usage"))
         tool_calls = message.get("tool_calls") or []
         if not tool_calls:
-            return Completion(text=_content_text(message.get("content")))
+            return Completion(text=_content_text(message.get("content")), usage=usage)
         assistant = {"role": "assistant", "tool_calls": tool_calls}
         if message.get("content") is not None:
             assistant["content"] = message["content"]
         self.messages.append(assistant)
         return Completion(
+            usage=usage,
             tool_calls=[
                 ToolCall(
                     id=call["id"],

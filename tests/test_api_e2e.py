@@ -16,7 +16,17 @@ from hive.backends import PROBE_MARKER
 from hive.blobstore import LocalBlobStore
 from hive.config import Config
 from hive.llm.openai import OpenAIAdapter
-from hive.models import HumanTask, Project, Question, Resource, Task, TaskKind, TaskStatus, Workstream
+from hive.models import (
+    HumanTask,
+    OrchestratorRun,
+    Project,
+    Question,
+    Resource,
+    Task,
+    TaskKind,
+    TaskStatus,
+    Workstream,
+)
 from hive.orchestrator import Orchestrator, Tools
 from hive.store import MemoryStore
 from hive.supervisor import Supervisor
@@ -262,16 +272,25 @@ def test_openai_orchestrator_tool_loop(tmp_path):
                             ],
                         }
                     }
-                ]
+                ],
+                "usage": {"prompt_tokens": 1000, "completion_tokens": 200},
             },
-            {"choices": [{"message": {"role": "assistant", "content": "planned"}}]},
+            {
+                "choices": [{"message": {"role": "assistant", "content": "planned"}}],
+                "usage": {"prompt_tokens": 1500, "completion_tokens": 300},
+            },
         ],
     )
     orch = AdapterOrchestrator(store, LocalBlobStore(tmp_path / "blobs"), config, adapter)
 
-    text = orch._generate(project, [], "event", Tools(store, project, spec=None))
+    result = orch._generate(project, [], "event", Tools(store, project, spec=None))
 
-    assert text == "planned"
+    assert result.text == "planned"
+    assert result.model == "gpt-test"
+    assert (result.usage.input_tokens, result.usage.output_tokens) == (2500, 500)  # summed
+    orch._record_cost(project.id, result)
+    [run] = store.list(OrchestratorRun, project_id=project.id)
+    assert run.input_tokens == 2500 and run.output_tokens == 500 and run.cost_usd == 0.0
     assert store.list(Workstream, project_id=project.id)[0].title == "Basics"
     assert adapter.posts[0]["model"] == "gpt-test"
     assert adapter.posts[0]["tools"][0]["type"] == "function"
@@ -304,7 +323,7 @@ def test_openai_orchestrator_auto_selects_model(tmp_path):
     )
     orch = AdapterOrchestrator(store, LocalBlobStore(tmp_path / "blobs"), config, adapter)
 
-    assert orch._generate(project, [], "event", Tools(store, project, spec=None)) == "ok"
+    assert orch._generate(project, [], "event", Tools(store, project, spec=None)).text == "ok"
     assert adapter.posts[0]["model"] == "gpt-test-new"
 
 

@@ -10,6 +10,7 @@ import time
 
 from hive.models import (
     HumanTask,
+    OrchestratorRun,
     Project,
     ProjectState,
     Resource,
@@ -159,6 +160,19 @@ def test_over_budget_blocks_dispatch_and_state():
     assert sup.over_budget(project)
     assert sup.dispatch(project) == 0
     assert sup.refresh_state(project) == ProjectState.blocked_budget
+
+
+def test_orchestrator_spend_counts_against_budget():
+    store = MemoryStore()
+    project = seed(store)
+    project.daily_budget_usd = 1.0
+    store.put(project)
+    assert not make_supervisor(store).over_budget(project)
+    # The planner's own LLM calls, with no runner tasks at all, can blow the cap.
+    store.put(OrchestratorRun(project_id=project.id, model="gpt-5.5", cost_usd=1.5))
+    sup = make_supervisor(store)
+    assert sup.spend_today(project.id) == 1.5
+    assert sup.over_budget(project)
 
 
 def test_available_backends_tracks_online_and_cooldown():

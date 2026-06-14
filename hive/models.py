@@ -236,3 +236,17 @@ class Feedback(BaseModel):
     verdict: str  # "up" | "down"
     comment: str = ""
     created_at: float = Field(default_factory=now)
+
+
+class OrchestratorRun(BaseModel):
+    """One orchestrator invocation's LLM usage. Recorded so the planner's own
+    spend is visible and counts against the project budget (runner task cost is
+    tracked on Task; this is the control-plane side of the bill)."""
+
+    id: str = Field(default_factory=new_id)
+    project_id: str
+    model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    created_at: float = Field(default_factory=now)
