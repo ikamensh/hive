@@ -38,9 +38,9 @@ const emptyOverview: Overview = {
 };
 
 function storageLabel(storage: StorageInfo): string {
-  if (storage.backend === "firestore") return "cloud store";
-  if (storage.backend === "file") return "local files";
-  return "in-memory";
+  if (storage.backend === "firestore") return "persistence: cloud store";
+  if (storage.backend === "file") return "persistence: local files";
+  return "persistence: in-memory";
 }
 
 function AccountMenu({
@@ -139,7 +139,7 @@ export default function App() {
               />
               <path d="M12 6.5 16.5 9.25v5.5L12 17.5 7.5 14.75v-5.5z" fill="var(--accent-2)" opacity="0.7" />
             </svg>
-            <span>hive</span>
+            <span className="brand-word">hive</span>
           </div>
           <h1>Sign in</h1>
           <a className="login-button" href="/api/auth/github/start">
@@ -163,7 +163,7 @@ export default function App() {
             />
             <path d="M12 6.5 16.5 9.25v5.5L12 17.5 7.5 14.75v-5.5z" fill="var(--accent-2)" opacity="0.7" />
           </svg>
-          <span>hive</span>
+          <span className="brand-word">hive</span>
           <small>control plane</small>
           {auth.data?.storage && (
             <span className="storage-chip" title={auth.data.storage.store_path ?? auth.data.storage.gcp_project ?? undefined}>
