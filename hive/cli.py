@@ -23,6 +23,8 @@ from hive.config_file import (
     save_stored_config,
 )
 
+UVICORN_GRACEFUL_SHUTDOWN_S = 6
+
 
 def _is_secret(key: str) -> bool:
     return key.endswith("_TOKEN") or key.endswith("_API_KEY") or key.endswith("_SECRET")
@@ -286,6 +288,7 @@ def _run_control_plane(args: argparse.Namespace) -> None:
         host=args.host,
         port=args.port,
         reload=args.reload,
+        timeout_graceful_shutdown=UVICORN_GRACEFUL_SHUTDOWN_S,
     )
 
 

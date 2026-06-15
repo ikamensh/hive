@@ -87,7 +87,8 @@ from hive.supervisor import Supervisor
 
 log = logging.getLogger("hive.api")
 
-RUNNER_POLL_WAIT_S = 25.0
+RUNNER_POLL_WAIT_S = 5.0
+RUNNER_POLL_SLEEP_S = 1.0
 RATE_LIMIT_COOLDOWN_S = 3600.0
 PROBE_REPO_DIR = "agent-probe-repo"
 HUMAN_FIX_PATTERNS = re.compile(
@@ -1419,7 +1420,11 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                     return {"task": task.model_dump()}
             if time.monotonic() > deadline:
                 return {"task": None}
-            await asyncio.sleep(2.0)
+            try:
+                await asyncio.sleep(RUNNER_POLL_SLEEP_S)
+            except asyncio.CancelledError:
+                log.info("runner poll for %s cancelled during shutdown", runner_id)
+                return {"task": None}
 
     @app.post("/api/tasks/{task_id}/result")
     def task_result(
