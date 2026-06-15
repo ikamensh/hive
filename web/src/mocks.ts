@@ -235,6 +235,20 @@ const workstreams: Workstream[] = [
     created_at: now - 3600 * 30,
   },
   {
+    id: "ws-issue-46",
+    project_id: "p-beacon",
+    source: "issue",
+    issue_number: 46,
+    issue_url: "https://github.com/acme/beacon/issues/46",
+    order: 46,
+    title: "#46 Webhook retries stop after one attempt",
+    description:
+      "## #46 Webhook retries stop after one attempt\n\nFailed delivery attempts should back off and retry, but only the first retry is scheduled.",
+    status: "queued",
+    parked_reason: "",
+    created_at: now - 3600 * 10,
+  },
+  {
     id: "ws-issue-37",
     project_id: "p-beacon",
     source: "issue",
