@@ -39,12 +39,15 @@ from hive.issues import (
     attachment_key,
     create_review_task,
     download_issue_attachments,
+    ensure_issue_workstream,
     fetch_open_issues_full,
     issue_branch,
     issue_is_closed,
     LANDING_FAILED_PREFIX,
     merge_branch,
+    project_workstreams,
     reconcile,
+    refresh_issue_run,
     RESOLVE_BACKEND,
     resolve_issue_on_github,
 )
@@ -62,9 +65,14 @@ from hive.models import (
     GuessPropensity,
     HumanTask,
     HumanTaskStatus,
+    IssueRun,
+    IssueRunScope,
+    IssueRunStatus,
     Machine,
     Mode,
     Project,
+    ProjectWorkstream,
+    ProjectWorkstreamKind,
     ProjectState,
     Question,
     QuestionStatus,
@@ -140,6 +148,18 @@ class IntakeMessage(BaseModel):
 class ProjectRepoCreate(BaseModel):
     name: str = ""
     private: bool = True
+
+
+class ProjectWorkstreamCreate(BaseModel):
+    kind: ProjectWorkstreamKind = ProjectWorkstreamKind.github_issues
+    repo: str = ""
+
+
+class IssueRunCreate(BaseModel):
+    scope: IssueRunScope = IssueRunScope.all_open_now
+    issue_numbers: list[int] = []
+    backend: str = ""
+    model: str = ""
 
 
 class AnswerBody(BaseModel):
@@ -252,7 +272,10 @@ def _land_resolve(store, task: Task, body: "TaskResult", config: Config) -> None
     if ws.status == WorkstreamStatus.reviewing:
         project = store.get(Project, task.project_id)
         if project:
-            review = create_review_task(store, project, ws, backend=task.backend, model=task.model)
+            run = store.get(IssueRun, task.run_id) if task.run_id else None
+            review = create_review_task(store, project, ws, backend=task.backend, model=task.model, run=run)
+            if run:
+                refresh_issue_run(store, project, run)
             log.info("queued review task %s for issue #%s on %s", review.id, ws.issue_number, review.branch)
 
 
@@ -316,6 +339,10 @@ def _land_review(store, task: Task, body: "TaskResult", config: Config) -> None:
         log.warning("review task %s (issue #%s) errored → rejected (re-scan to retry): %s",
                     task.id, task.issue_number, body.text[:300])
         _set_ws_status(store, ws.id, WorkstreamStatus.rejected, "review errored — re-scan to retry")
+        project = store.get(Project, task.project_id)
+        run = store.get(IssueRun, task.run_id) if task.run_id else None
+        if project and run:
+            refresh_issue_run(store, project, run)
         return
     if task.verdict == Verdict.none:
         log.warning("review task %s (issue #%s) finished WITHOUT a `REVIEW:` line — treating as REJECT. "
@@ -325,6 +352,10 @@ def _land_review(store, task: Task, body: "TaskResult", config: Config) -> None:
         _set_ws_status(
             store, ws.id, WorkstreamStatus.rejected, "rejected at review — see the GitHub issue comment"
         )
+        project = store.get(Project, task.project_id)
+        run = store.get(IssueRun, task.run_id) if task.run_id else None
+        if project and run:
+            refresh_issue_run(store, project, run)
         return
     branch = issue_branch(ws.issue_number)
     log.info("review task %s ACCEPTED issue #%s — merging %s and closing the issue",
@@ -351,9 +382,17 @@ def _land_review(store, task: Task, body: "TaskResult", config: Config) -> None:
             workspace_id=task.workspace_id,
         )
         _set_ws_status(store, ws.id, WorkstreamStatus.rejected, f"{LANDING_FAILED_PREFIX}: {exc}")
+        project = store.get(Project, task.project_id)
+        run = store.get(IssueRun, task.run_id) if task.run_id else None
+        if project and run:
+            refresh_issue_run(store, project, run)
         return
     log.info("issue #%s landed: merged + closed; workstream done", ws.issue_number)
     _set_ws_status(store, ws.id, WorkstreamStatus.done, "")
+    project = store.get(Project, task.project_id)
+    run = store.get(IssueRun, task.run_id) if task.run_id else None
+    if project and run:
+        refresh_issue_run(store, project, run)
 
 
 def _should_advance_after_issue_result(store, task: Task) -> bool:
@@ -429,6 +468,114 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if not project or project.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
         return project
+
+    def require_project_workstream(
+        project: Project,
+        workstream_id: str,
+        ctx: AuthContext,
+    ) -> ProjectWorkstream:
+        workstream = store.get(ProjectWorkstream, workstream_id)
+        if (
+            not workstream
+            or workstream.workspace_id != ctx.workspace_id
+            or workstream.project_id != project.id
+        ):
+            raise HTTPException(404)
+        return workstream
+
+    def issue_preflight_checks(project: Project, repo: str):
+        try:
+            return preflight_checks(store, config, project, repo=repo)
+        except TypeError:
+            return preflight_checks(store, config, project)
+
+    def sync_issue_workstream(project: Project, workstream: ProjectWorkstream) -> tuple[list[str], int, int, int]:
+        if workstream.kind != ProjectWorkstreamKind.github_issues:
+            raise HTTPException(400, "workstream does not read GitHub issues")
+        hard_failed = [
+            c
+            for c in issue_preflight_checks(project, workstream.repo)
+            if c.hard and not c.ok
+        ]
+        if hard_failed:
+            raise HTTPException(
+                409,
+                {
+                    "error": "preflight failed; fix these before running issue solving",
+                    "checks": checks_payload(hard_failed),
+                },
+            )
+        issues = fetch_open_issues_full(workstream.repo, config.gh_token)
+        notes = reconcile(store, project, issues, workstream=workstream)
+        downloaded = failed = 0
+        if blobs is not None:
+            downloaded, failed = download_issue_attachments(
+                store,
+                blobs,
+                project,
+                config.gh_token,
+                workstream=workstream,
+            )
+        return notes, len(issues), downloaded, failed
+
+    def start_issue_run(
+        project: Project,
+        workstream: ProjectWorkstream,
+        body: IssueRunCreate,
+    ) -> tuple[IssueRun, list[str], int, int, int, int]:
+        notes, open_count, downloaded, failed = sync_issue_workstream(project, workstream)
+        open_items = [
+            w
+            for w in store.list(Workstream, project_id=project.id)
+            if w.source == WorkstreamSource.issue
+            and w.workstream_id == workstream.id
+            and w.issue_number
+        ]
+        open_numbers = {
+            w.issue_number
+            for w in open_items
+            if w.status not in (WorkstreamStatus.done, WorkstreamStatus.cancelled)
+        }
+        if body.scope == IssueRunScope.selected:
+            selected = [n for n in dict.fromkeys(body.issue_numbers) if n in open_numbers]
+            if not selected:
+                raise HTTPException(400, "select at least one open issue")
+            issue_numbers = selected
+        else:
+            issue_numbers = sorted(open_numbers)
+        status = IssueRunStatus.done if body.scope == IssueRunScope.scan_only else IssueRunStatus.queued
+        run = store.put(
+            IssueRun(
+                workspace_id=project.workspace_id,
+                project_id=project.id,
+                workstream_id=workstream.id,
+                repo=workstream.repo,
+                scope=body.scope,
+                issue_numbers=issue_numbers,
+                status=status,
+                counts={
+                    "open_issues": open_count,
+                    "attachments_downloaded": downloaded,
+                    "attachments_failed": failed,
+                },
+                started_at=time.time() if body.scope != IssueRunScope.scan_only else 0,
+                finished_at=time.time() if body.scope == IssueRunScope.scan_only else 0,
+            )
+        )
+        queued = 0
+        if body.scope != IssueRunScope.scan_only:
+            queued = advance_issues(
+                store,
+                project,
+                workstream=workstream,
+                run=run,
+                backend=body.backend or config.issue_backend,
+                model=body.model or config.issue_model,
+            )
+            run = store.get(IssueRun, run.id) or run
+        else:
+            run = refresh_issue_run(store, project, run)
+        return run, notes, open_count, queued, downloaded, failed
 
     def can_write_spec_repo(project: Project) -> bool:
         """Avoid slow surprise network attempts in throwaway/local runs.
@@ -982,51 +1129,64 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @app.post("/api/projects/{project_id}/scan-issues")
     def scan_issues(project_id: str, ctx: AuthContext = Depends(current)):
-        """Pull the spec repo's open GitHub issues (with comments and embedded
-        images), reconcile them into issue work items, and queue a codex
-        resolve task per actionable issue. Human-triggered — no automatic re-scan."""
+        """Compatibility wrapper: run all currently open issues on the default
+        GitHub-issues workstream."""
         project = require_project(project_id, ctx)
         if not project.spec_repo.strip():
             raise HTTPException(400, "spec_repo must be set before scanning")
-        hard_failed = [c for c in preflight_checks(store, config, project) if c.hard and not c.ok]
-        if hard_failed:
-            raise HTTPException(
-                409,
-                {
-                    "error": "preflight failed; fix these before scanning (see `hive preflight`)",
-                    "checks": checks_payload(hard_failed),
-                },
-            )
-        issues = fetch_open_issues_full(project.spec_repo, config.gh_token)
-        notes = reconcile(store, project, issues)
-        downloaded = failed = 0
-        if blobs is not None:
-            downloaded, failed = download_issue_attachments(store, blobs, project, config.gh_token)
-        queued = advance_issues(store, project, backend=config.issue_backend, model=config.issue_model)
+        workstream = ensure_issue_workstream(store, project)
+        run, notes, open_count, queued, downloaded, failed = start_issue_run(
+            project,
+            workstream,
+            IssueRunCreate(scope=IssueRunScope.all_open_now),
+        )
         log.info(
             "scan %s: %d open issue(s), %d resolve task(s) started, attachments %d ok / %d failed; changes: %s",
-            project_id, len(issues), queued, downloaded, failed, "; ".join(notes) or "none",
-        )
-        supervisor.wake(
-            project_id,
-            f"Issue scan: {len(issues)} open issue(s); {queued} resolve task(s) queued.",
+            project_id, open_count, queued, downloaded, failed, "; ".join(notes) or "none",
         )
         return {
-            "open_issues": len(issues),
+            "open_issues": open_count,
             "resolve_queued": queued,
             "attachments_downloaded": downloaded,
             "attachments_failed": failed,
             "changes": notes,
+            "run_id": run.id,
         }
 
     @app.post("/api/projects/{project_id}/issues-preflight")
     def issues_preflight(project_id: str, ctx: AuthContext = Depends(current)):
-        """Check the preconditions an issue-solving run depends on. Returns the
-        control-plane checks and, if they pass and a codex runner is online,
-        queues a runner self-check (push + gh auth) whose task id the caller can
-        poll for the agent-facing verdict."""
+        """Compatibility wrapper for the default GitHub-issues workstream."""
         project = require_project(project_id, ctx)
-        checks = preflight_checks(store, config, project)
+        if not project.spec_repo.strip():
+            raise HTTPException(400, "spec_repo must be set before preflight")
+        workstream = ensure_issue_workstream(store, project)
+        return issue_workstream_preflight(project_id, workstream.id, ctx)
+
+    @app.post("/api/projects/{project_id}/workstreams")
+    def create_project_workstream(
+        project_id: str,
+        body: ProjectWorkstreamCreate,
+        ctx: AuthContext = Depends(current),
+    ):
+        project = require_project(project_id, ctx)
+        if body.kind != ProjectWorkstreamKind.github_issues:
+            raise HTTPException(400, "only GitHub issue workstreams can be created manually")
+        repo = body.repo.strip() or project.spec_repo
+        if not repo.strip():
+            raise HTTPException(400, "repo is required")
+        return ensure_issue_workstream(store, project, repo=repo).model_dump()
+
+    @app.post("/api/projects/{project_id}/workstreams/{workstream_id}/preflight")
+    def issue_workstream_preflight(
+        project_id: str,
+        workstream_id: str,
+        ctx: AuthContext = Depends(current),
+    ):
+        project = require_project(project_id, ctx)
+        workstream = require_project_workstream(project, workstream_id, ctx)
+        if workstream.kind != ProjectWorkstreamKind.github_issues:
+            raise HTTPException(400, "workstream does not read GitHub issues")
+        checks = issue_preflight_checks(project, workstream.repo)
         hard_ok = all(c.ok for c in checks if c.hard)
         runner_task = None
         issue_backend = config.issue_backend or RESOLVE_BACKEND
@@ -1034,20 +1194,62 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             runner_task = create_preflight_task(
                 store,
                 project,
+                workstream_id=workstream.id,
+                repo=workstream.repo,
                 backend=issue_backend,
                 model=config.issue_model,
             ).id
-            supervisor.wake(project_id, "Issues preflight: runner self-check queued.")
         return {"ok": hard_ok, "checks": checks_payload(checks), "runner_check_task": runner_task}
+
+    @app.post("/api/projects/{project_id}/workstreams/{workstream_id}/sync")
+    def sync_workstream_issues(
+        project_id: str,
+        workstream_id: str,
+        ctx: AuthContext = Depends(current),
+    ):
+        project = require_project(project_id, ctx)
+        workstream = require_project_workstream(project, workstream_id, ctx)
+        notes, open_count, downloaded, failed = sync_issue_workstream(project, workstream)
+        return {
+            "open_issues": open_count,
+            "resolve_queued": 0,
+            "attachments_downloaded": downloaded,
+            "attachments_failed": failed,
+            "changes": notes,
+        }
+
+    @app.post("/api/projects/{project_id}/workstreams/{workstream_id}/issue-runs")
+    def create_issue_run(
+        project_id: str,
+        workstream_id: str,
+        body: IssueRunCreate,
+        ctx: AuthContext = Depends(current),
+    ):
+        project = require_project(project_id, ctx)
+        workstream = require_project_workstream(project, workstream_id, ctx)
+        run, notes, open_count, queued, downloaded, failed = start_issue_run(project, workstream, body)
+        return {
+            "run": run.model_dump(),
+            "open_issues": open_count,
+            "resolve_queued": queued,
+            "attachments_downloaded": downloaded,
+            "attachments_failed": failed,
+            "changes": notes,
+        }
 
     @app.get("/api/projects/{project_id}")
     def get_project(project_id: str, ctx: AuthContext = Depends(current)):
         project = require_project(project_id, ctx)
+        work_items = store.list(Workstream, workspace_id=ctx.workspace_id, project_id=project_id)
         return {
             "project": project.model_dump(),
             "workstreams": [
                 w.model_dump()
-                for w in store.list(Workstream, workspace_id=ctx.workspace_id, project_id=project_id)
+                for w in project_workstreams(store, project)
+            ],
+            "work_items": [
+                w.model_dump()
+                for w in work_items
             ],
             "tasks": [
                 t.model_dump()
@@ -1066,6 +1268,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             "conversations": [
                 c.model_dump()
                 for c in store.list(AgentConversation, workspace_id=ctx.workspace_id, project_id=project_id)
+            ],
+            "issue_runs": [
+                r.model_dump()
+                for r in store.list(IssueRun, workspace_id=ctx.workspace_id, project_id=project_id)
             ],
             "spend_today": supervisor.spend_today(project_id),
         }
@@ -1687,7 +1893,16 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             # Strict per-issue: when this issue parked or landed, start the next.
             project = store.get(Project, task.project_id)
             if project:
-                advance_issues(store, project, backend=config.issue_backend, model=config.issue_model)
+                run = store.get(IssueRun, task.run_id) if task.run_id else None
+                workstream = store.get(ProjectWorkstream, run.workstream_id) if run else None
+                advance_issues(
+                    store,
+                    project,
+                    workstream=workstream,
+                    run=run,
+                    backend=config.issue_backend,
+                    model=config.issue_model,
+                )
 
         if task.kind in (TaskKind.resolve, TaskKind.review, TaskKind.preflight):
             return {"ok": True}

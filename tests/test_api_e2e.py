@@ -160,6 +160,8 @@ def test_full_loop(harness):
     _pump(client, store)
     detail = client.get(f"/api/projects/{pid}").json()
     assert len(detail["workstreams"]) == 1
+    assert detail["workstreams"][0]["kind"] == "iteration"
+    assert len(detail["work_items"]) == 1
     assert len(detail["tasks"]) == 1
 
     # 2. runner registers and polls — gets the task after dispatch
@@ -189,7 +191,7 @@ def test_full_loop(harness):
     assert store.get(Task, verify["id"]).verdict == "accept"  # parsed deterministically
     detail = client.get(f"/api/projects/{pid}").json()
     assert len(detail["questions"]) == 1
-    assert detail["workstreams"][0]["status"] == "parked"
+    assert detail["work_items"][0]["status"] == "parked"
 
     # 5. answer → goal complete; resource usage was recorded
     qid = detail["questions"][0]["id"]

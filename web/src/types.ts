@@ -35,8 +35,26 @@ export interface Project {
   created_at: number;
 }
 
-/** Spec-mode statuses plus the issues-mode per-issue lifecycle. */
-export type WorkstreamStatus =
+export type WorkstreamKind = "iteration" | "github_issues";
+export type ProjectWorkstreamStatus = "idle" | "active" | "blocked" | "disabled";
+
+export interface Workstream {
+  id: string;
+  workspace_id?: string;
+  project_id: string;
+  kind: WorkstreamKind;
+  title: string;
+  repo: string;
+  source_ref: Record<string, unknown>;
+  status: ProjectWorkstreamStatus;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  created_at: number;
+  updated_at: number;
+}
+
+/** Iteration work items plus the issue-solving per-issue lifecycle. */
+export type WorkItemStatus =
   | "active"
   | "queued"
   | "parked"
@@ -47,20 +65,23 @@ export type WorkstreamStatus =
   | "rejected"
   | "cancelled";
 
-export interface Workstream {
+export interface WorkItem {
   id: string;
   workspace_id?: string;
   project_id: string;
+  workstream_id?: string;
+  repo?: string;
   title: string;
   description: string;
-  status: WorkstreamStatus;
+  status: WorkItemStatus;
   parked_reason: string;
-  // Issues mode: each workstream tracks one GitHub issue.
+  // Issue solving: each work item tracks one GitHub issue.
   source?: "manual" | "issue";
   issue_number?: number;
   issue_url?: string;
   order?: number;
   issue_attachments?: string[];
+  external_ref?: Record<string, unknown>;
   created_at: number;
 }
 
@@ -69,6 +90,8 @@ export interface Task {
   workspace_id?: string;
   project_id: string;
   workstream_id: string;
+  work_item_id?: string;
+  run_id?: string;
   repo: string;
   branch: string;
   fresh_branch: boolean;
@@ -128,10 +151,27 @@ export interface Question {
 export interface ProjectDetail {
   project: Project;
   workstreams: Workstream[];
+  work_items: WorkItem[];
   tasks: Task[];
   questions: Question[];
   human_tasks: HumanTask[];
   conversations: AgentConversation[];
+  issue_runs: IssueRun[];
+}
+
+export interface IssueRun {
+  id: string;
+  workspace_id?: string;
+  project_id: string;
+  workstream_id: string;
+  repo: string;
+  scope: "selected" | "all_open_now" | "scan_only";
+  issue_numbers: number[];
+  status: "scanning" | "queued" | "running" | "blocked" | "done" | "cancelled" | "failed";
+  counts: Record<string, number>;
+  created_at: number;
+  started_at: number;
+  finished_at: number;
 }
 
 export interface GithubRepo {
@@ -321,4 +361,9 @@ export interface ScanResult {
   attachments_downloaded: number;
   attachments_failed: number;
   changes: string[];
+  run_id?: string;
+}
+
+export interface IssueRunResult extends ScanResult {
+  run: IssueRun;
 }

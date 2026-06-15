@@ -5,6 +5,7 @@ import type {
   HumanTask,
   GithubRepo,
   IntakeMessage,
+  IssueRunResult,
   Project,
   ProjectCreate,
   ProjectDetail,
@@ -109,6 +110,19 @@ const realApi = {
     http<PreflightResult>(`/api/projects/${id}/issues-preflight`, { method: "POST" }),
   scanIssues: (id: string) =>
     http<ScanResult>(`/api/projects/${id}/scan-issues`, { method: "POST" }),
+  workstreamPreflight: (projectId: string, workstreamId: string) =>
+    http<PreflightResult>(`/api/projects/${projectId}/workstreams/${workstreamId}/preflight`, { method: "POST" }),
+  syncIssues: (projectId: string, workstreamId: string) =>
+    http<ScanResult>(`/api/projects/${projectId}/workstreams/${workstreamId}/sync`, { method: "POST" }),
+  runIssues: (
+    projectId: string,
+    workstreamId: string,
+    body: { scope: "selected" | "all_open_now" | "scan_only"; issue_numbers?: number[] },
+  ) =>
+    http<IssueRunResult>(`/api/projects/${projectId}/workstreams/${workstreamId}/issue-runs`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   answerQuestion: (id: string, answer: string) =>
     http<Question>(`/api/questions/${id}/answer`, { method: "POST", body: JSON.stringify({ answer }) }),
   feedback: async (project_id: string, target_id: string, verdict: "up" | "down", comment: string) => {

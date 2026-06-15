@@ -25,9 +25,11 @@ from hive.models import (
     DEFAULT_WORKSPACE_ID,
     Feedback,
     HumanTask,
+    IssueRun,
     Machine,
     OrchestratorRun,
     Project,
+    ProjectWorkstream,
     Question,
     QuestionStatus,
     Resource,
@@ -51,6 +53,7 @@ M = TypeVar(
     WorkspaceMembership,
     Machine,
     Project,
+    ProjectWorkstream,
     Workstream,
     Task,
     Question,
@@ -59,6 +62,7 @@ M = TypeVar(
     Feedback,
     Subscription,
     HumanTask,
+    IssueRun,
     OrchestratorRun,
 )
 
@@ -69,6 +73,7 @@ _COLLECTIONS: dict[type, str] = {
     WorkspaceMembership: "workspace_memberships",
     Machine: "machines",
     Project: "projects",
+    ProjectWorkstream: "project_workstreams",
     Workstream: "workstreams",
     Task: "tasks",
     Question: "questions",
@@ -77,6 +82,7 @@ _COLLECTIONS: dict[type, str] = {
     Feedback: "feedback",
     Subscription: "subscriptions",
     HumanTask: "human_tasks",
+    IssueRun: "issue_runs",
     OrchestratorRun: "orchestrator_runs",
 }
 

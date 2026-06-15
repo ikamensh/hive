@@ -1,4 +1,4 @@
-"""Issues-mode preflight: turn the things that break a real run into checked
+"""Issue-solving preflight: turn the things that break a real run into checked
 preconditions, so misconfiguration surfaces before a big run rather than as a
 half-finished pipeline that's hard to debug.
 
@@ -61,10 +61,11 @@ def codex_runner_usable(store, workspace_id: str, backend: str = RESOLVE_BACKEND
     )
 
 
-def preflight_checks(store, config, project) -> list[Check]:
+def preflight_checks(store, config, project, repo: str | None = None) -> list[Check]:
     checks: list[Check] = []
-    has_repo = bool(project.spec_repo.strip())
-    checks.append(Check("spec_repo_set", has_repo, project.spec_repo or "no spec_repo configured"))
+    repo_ref = (repo or project.spec_repo).strip()
+    has_repo = bool(repo_ref)
+    checks.append(Check("repo_set", has_repo, repo_ref or "no repo configured"))
     token = config.gh_token
     checks.append(
         Check(
@@ -78,7 +79,7 @@ def preflight_checks(store, config, project) -> list[Check]:
 
     if token and has_repo:
         try:
-            perms = repo_permissions(project.spec_repo, token)
+            perms = repo_permissions(repo_ref, token)
         except (httpx.HTTPError, LookupError, PermissionError) as exc:
             checks.append(Check("repo_write_access", False, f"could not read the repo with this token: {exc}"))
         else:
@@ -115,18 +116,28 @@ def preflight_checks(store, config, project) -> list[Check]:
     return checks
 
 
-def create_preflight_task(store, project, backend: str = RESOLVE_BACKEND, model: str = "") -> Task:
-    """Queue the runner self-check (push + gh auth) against the spec repo."""
+def create_preflight_task(
+    store,
+    project,
+    *,
+    workstream_id: str = "",
+    repo: str | None = None,
+    backend: str = RESOLVE_BACKEND,
+    model: str = "",
+) -> Task:
+    """Queue the runner self-check (push + gh auth) against an issue repo."""
+    repo_ref = (repo or project.spec_repo).strip()
     return store.put(
         Task(
             workspace_id=project.workspace_id,
             project_id=project.id,
-            workstream_id="",
-            repo=project.spec_repo,
+            workstream_id=workstream_id,
+            run_id="",
+            repo=repo_ref,
             kind=TaskKind.preflight,
             backend=backend,
             model=model,
-            instructions="Hive runner self-check: verify git push and gh auth against the spec repo.",
+            instructions="Hive runner self-check: verify git push and gh auth against the issue repo.",
         )
     )
 

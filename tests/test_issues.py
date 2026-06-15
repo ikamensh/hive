@@ -12,6 +12,7 @@ from hive.config import Config
 from hive.issues import (
     activate_next,
     advance_issues,
+    ensure_issue_workstream,
     issue_branch,
     LANDING_FAILED_PREFIX,
     reconcile,
@@ -22,6 +23,9 @@ from hive.models import (
     ProjectState,
     HumanTask,
     HumanTaskStatus,
+    IssueRun,
+    IssueRunScope,
+    IssueRunStatus,
     Task,
     TaskKind,
     TaskStatus,
@@ -125,6 +129,32 @@ def test_advance_issues_starts_one_at_a_time():
     # a second call is a no-op while issue #1 is in flight
     assert advance_issues(store, project) == 0
     assert len(store.list(Task, project_id=project.id)) == 1
+
+
+def test_selected_issue_run_starts_only_selected_issue():
+    store = MemoryStore()
+    project = issues_project(store)
+    stream = ensure_issue_workstream(store, project)
+    reconcile(store, project, [issue(1), issue(2)], workstream=stream)
+    run = store.put(
+        IssueRun(
+            project_id=project.id,
+            workstream_id=stream.id,
+            repo=stream.repo,
+            scope=IssueRunScope.selected,
+            issue_numbers=[2],
+        )
+    )
+
+    assert advance_issues(store, project, workstream=stream, run=run) == 1
+
+    task = store.list(Task, project_id=project.id)[0]
+    assert task.issue_number == 2
+    assert task.run_id == run.id
+    assert task.work_item_id == task.workstream_id
+    statuses = {w.issue_number: w.status for w in store.list(Workstream, project_id=project.id)}
+    assert statuses == {1: WorkstreamStatus.queued, 2: WorkstreamStatus.resolving}
+    assert store.get(IssueRun, run.id).status == IssueRunStatus.running
 
 
 def test_resolve_task_carries_issue_context():
@@ -520,6 +550,32 @@ def test_scan_allowed_on_normal_project(app, monkeypatch):
     assert resp.json()["open_issues"] == 1
     ws = store.list(Workstream, project_id=project["id"])[0]
     assert ws.source == WorkstreamSource.issue and ws.issue_number == 9
+
+
+def test_issue_workstream_run_selected_endpoint(app, monkeypatch):
+    client, store = app
+    project = client.post("/api/projects", json={"name": "spec"}).json()
+    client.patch(f"/api/projects/{project['id']}", json={"spec_repo": "https://github.com/o/r.git"})
+    _pass_preflight(monkeypatch)
+    monkeypatch.setattr(
+        "hive.api.fetch_open_issues_full",
+        lambda repo, token: [issue(1, "skip"), issue(2, "run me")],
+    )
+
+    detail = client.get(f"/api/projects/{project['id']}").json()
+    stream = next(w for w in detail["workstreams"] if w["kind"] == "github_issues")
+    sync = client.post(f"/api/projects/{project['id']}/workstreams/{stream['id']}/sync").json()
+    assert sync["open_issues"] == 2 and sync["resolve_queued"] == 0
+
+    resp = client.post(
+        f"/api/projects/{project['id']}/workstreams/{stream['id']}/issue-runs",
+        json={"scope": "selected", "issue_numbers": [2]},
+    ).json()
+
+    assert resp["run"]["issue_numbers"] == [2]
+    assert resp["resolve_queued"] == 1
+    task = store.list(Task, project_id=project["id"])[0]
+    assert task.issue_number == 2 and task.run_id == resp["run"]["id"]
 
 
 # -- preflight ---------------------------------------------------------------

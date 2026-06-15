@@ -1,18 +1,20 @@
-"""Issues mode: resolve a repo's open GitHub issues with a deterministic
+"""Issue solving: resolve a repo's open GitHub issues with a deterministic
 per-issue pipeline (see wiki/issues-mode.md).
 
 Two concerns, kept separate so the store logic is testable without network:
 - GitHub I/O (`fetch_open_issues_full`, `merge_branch`, `resolve_issue_on_github`)
   — thin httpx calls authed with the control-plane token, like `github_repos.py`.
-- Store logic (`reconcile`, `create_resolve_tasks`, `create_review_task`) — pure
-  ops mapping issues to workstreams and queuing the codex resolve/review tasks.
+- Store logic (`reconcile`, `advance_issues`, `create_review_task`) — pure ops
+  mapping issues to work items and queuing the codex resolve/review tasks.
 
-An issue becomes a `Workstream` (source=issue); the lifecycle is
+An issue becomes a work item (`Workstream` during the migration, source=issue);
+the lifecycle is
 queued → resolving → (blocked_clarity | reviewing) → (rejected | done).
-Sequencing is **strict per-issue**: `advance_issues` keeps at most one issue in
-the resolve→review pipeline at a time, so each issue branches from a default
-branch that already includes prior landed fixes. `activate_next`/`IN_FLIGHT` are
-a separate dormant variant used by the spec-mode orchestrator, kept for reuse.
+Sequencing is **strict per GitHub-issues workstream**: `advance_issues` keeps at
+most one issue in the resolve→review pipeline at a time, so each issue branches
+from a default branch that already includes prior landed fixes.
+`activate_next`/`IN_FLIGHT` are a separate dormant variant used by the
+spec-mode orchestrator, kept for reuse.
 """
 
 from __future__ import annotations
@@ -25,7 +27,13 @@ import httpx
 
 from hive.github_repos import _GH_HEADERS, parse_repo_ref
 from hive.models import (
+    IssueRun,
+    IssueRunScope,
+    IssueRunStatus,
     Project,
+    ProjectWorkstream,
+    ProjectWorkstreamKind,
+    ProjectWorkstreamStatus,
     Task,
     TaskKind,
     TaskStatus,
@@ -191,7 +199,13 @@ def _safe_name(url: str, index: int) -> str:
     return name if name and "." in name else f"image-{index}"
 
 
-def download_issue_attachments(store, blobs, project: Project, token: str) -> tuple[int, int]:
+def download_issue_attachments(
+    store,
+    blobs,
+    project: Project,
+    token: str,
+    workstream: ProjectWorkstream | None = None,
+) -> tuple[int, int]:
     """Download every issue-workstream's embedded images on the control plane —
     which is authed to the repo — into the blob store, and replace the URL list on
     each workstream with the stored filenames. Runners fetch the bytes back from
@@ -204,7 +218,7 @@ def download_issue_attachments(store, blobs, project: Project, token: str) -> tu
     failed count is surfaced on the scan so the operator notices."""
     headers = {**_headers(token), "Accept": "application/octet-stream"}
     downloaded = failed = 0
-    for ws in _issue_workstreams(store, project):
+    for ws in _issue_workstreams(store, project, workstream):
         if not ws.issue_attachments:
             continue
         names: list[str] = []
@@ -268,26 +282,149 @@ def issue_is_closed(repo_ref: str, number: int, token: str) -> bool:
 # -- store reconciliation + task creation ------------------------------------
 
 
-def _issue_workstreams(store, project: Project) -> list[Workstream]:
+def now_s() -> float:
+    import time
+
+    return time.time()
+
+
+def ensure_iteration_workstream(store, project: Project) -> ProjectWorkstream:
+    existing = store.list(
+        ProjectWorkstream,
+        workspace_id=project.workspace_id,
+        project_id=project.id,
+        kind=ProjectWorkstreamKind.iteration,
+    )
+    if existing:
+        return existing[0]
+    return store.put(
+        ProjectWorkstream(
+            workspace_id=project.workspace_id,
+            project_id=project.id,
+            kind=ProjectWorkstreamKind.iteration,
+            title="Iteration goal",
+            status=ProjectWorkstreamStatus.active,
+        )
+    )
+
+
+def ensure_issue_workstream(store, project: Project, repo: str | None = None) -> ProjectWorkstream:
+    repo = (repo or project.spec_repo).strip()
+    if not repo:
+        raise ValueError("repo is required for GitHub issue solving")
+    existing = store.list(
+        ProjectWorkstream,
+        workspace_id=project.workspace_id,
+        project_id=project.id,
+        kind=ProjectWorkstreamKind.github_issues,
+        repo=repo,
+    )
+    if existing:
+        return existing[0]
+    return store.put(
+        ProjectWorkstream(
+            workspace_id=project.workspace_id,
+            project_id=project.id,
+            kind=ProjectWorkstreamKind.github_issues,
+            title=f"GitHub issues: {parse_repo_ref(repo)}",
+            repo=repo,
+            source_ref={"provider": "github", "issues": True},
+            status=ProjectWorkstreamStatus.idle,
+        )
+    )
+
+
+def project_workstreams(store, project: Project) -> list[ProjectWorkstream]:
+    ensure_iteration_workstream(store, project)
+    if project.spec_repo.strip():
+        try:
+            ensure_issue_workstream(store, project)
+        except ValueError:
+            pass
+    return store.list(
+        ProjectWorkstream,
+        workspace_id=project.workspace_id,
+        project_id=project.id,
+    )
+
+
+def _item_in_workstream(item: Workstream, workstream: ProjectWorkstream | None) -> bool:
+    if workstream is None:
+        return True
+    if item.workstream_id:
+        return item.workstream_id == workstream.id
+    return item.repo in ("", workstream.repo)
+
+
+def _issue_workstreams(
+    store,
+    project: Project,
+    workstream: ProjectWorkstream | None = None,
+) -> list[Workstream]:
     return [
         w
         for w in store.list(Workstream, project_id=project.id)
-        if w.source == WorkstreamSource.issue
+        if w.source == WorkstreamSource.issue and _item_in_workstream(w, workstream)
     ]
+
+
+def _issue_items_for_run(store, project: Project, run: IssueRun | None) -> list[Workstream]:
+    workstream = store.get(ProjectWorkstream, run.workstream_id) if run else None
+    items = _issue_workstreams(store, project, workstream)
+    if run and run.issue_numbers:
+        allowed = set(run.issue_numbers)
+        items = [w for w in items if w.issue_number in allowed]
+    return items
+
+
+def refresh_issue_run(store, project: Project, run: IssueRun) -> IssueRun:
+    items = _issue_items_for_run(store, project, run)
+    counts = {
+        "queued": sum(1 for w in items if w.status == WorkstreamStatus.queued),
+        "running": sum(1 for w in items if w.status in (WorkstreamStatus.resolving, WorkstreamStatus.reviewing)),
+        "blocked": sum(1 for w in items if w.status in (WorkstreamStatus.blocked_clarity, WorkstreamStatus.rejected)),
+        "done": sum(1 for w in items if w.status == WorkstreamStatus.done),
+        "cancelled": sum(1 for w in items if w.status == WorkstreamStatus.cancelled),
+    }
+
+    def update(saved: IssueRun) -> None:
+        saved.counts = {**saved.counts, **counts}
+        if saved.status == IssueRunStatus.cancelled:
+            return
+        if counts["running"]:
+            saved.status = IssueRunStatus.running
+            if not saved.started_at:
+                saved.started_at = now_s()
+        elif counts["blocked"]:
+            saved.status = IssueRunStatus.blocked
+        elif counts["queued"]:
+            saved.status = IssueRunStatus.queued
+        elif items or saved.scope == IssueRunScope.scan_only:
+            saved.status = IssueRunStatus.done
+            if not saved.finished_at:
+                saved.finished_at = now_s()
+
+    return store.update(IssueRun, run.id, update) or run
 
 
 def issue_branch(number: int) -> str:
     return f"hive/issue-{number}"
 
 
-def reconcile(store, project: Project, issues: list[dict]) -> list[str]:
-    """Sync issue-workstreams to the repo's open issues (full dicts from
+def reconcile(
+    store,
+    project: Project,
+    issues: list[dict],
+    workstream: ProjectWorkstream | None = None,
+) -> list[str]:
+    """Sync issue work items to the repo's open issues (full dicts from
     `fetch_open_issues_full`). New issues enter as `queued`; any still-open issue
     that isn't `done` and has no live task is reset to `queued` (so a re-scan
     restarts blocked/rejected/reopened or errored-mid-flight issues for another
     attempt); externally-closed ones are cancelled; content is refreshed.
     `advance_issues` then starts the next one. Returns change notes."""
-    by_number = {w.issue_number: w for w in _issue_workstreams(store, project)}
+    workstream = workstream or ensure_issue_workstream(store, project)
+    by_number = {w.issue_number: w for w in _issue_workstreams(store, project, workstream)}
     open_numbers = {i["number"] for i in issues}
     notes: list[str] = []
 
@@ -298,6 +435,8 @@ def reconcile(store, project: Project, issues: list[dict]) -> list[str]:
                 Workstream(
                     workspace_id=project.workspace_id,
                     project_id=project.id,
+                    workstream_id=workstream.id,
+                    repo=workstream.repo,
                     title=f"#{issue['number']} {issue['title']}",
                     description=issue["doc"],
                     status=WorkstreamStatus.queued,
@@ -305,13 +444,17 @@ def reconcile(store, project: Project, issues: list[dict]) -> list[str]:
                     issue_number=issue["number"],
                     issue_url=issue["url"],
                     issue_attachments=issue["attachments"],
+                    external_ref={"provider": "github", "issue_number": issue["number"], "url": issue["url"]},
                     order=issue["number"],
                 )
             )
             notes.append(f"ingested issue #{issue['number']} '{issue['title']}'")
             continue
+        ws.workstream_id = workstream.id
+        ws.repo = workstream.repo
         ws.description = issue["doc"]  # pick up new comments/images
         ws.issue_attachments = issue["attachments"]
+        ws.external_ref = {"provider": "github", "issue_number": issue["number"], "url": issue["url"]}
         if (
             ws.status not in (WorkstreamStatus.done, WorkstreamStatus.queued)
             and not _has_live_task(store, project, ws.id)
@@ -368,6 +511,7 @@ def _make_issue_task(
     kind: TaskKind,
     backend: str,
     model: str = DEFAULT_ISSUE_MODEL,
+    run: IssueRun | None = None,
 ) -> Task:
     prompt_name = "resolve" if kind == TaskKind.resolve else "review"
     instructions, versions = _instructions(ws, prompt_name)
@@ -376,6 +520,8 @@ def _make_issue_task(
             workspace_id=project.workspace_id,
             project_id=project.id,
             workstream_id=ws.id,
+            work_item_id=ws.id,
+            run_id=run.id if run else "",
             repo=project.spec_repo,
             branch=issue_branch(ws.issue_number),
             fresh_branch=kind == TaskKind.resolve,
@@ -394,6 +540,8 @@ def _make_issue_task(
 def advance_issues(
     store,
     project: Project,
+    workstream: ProjectWorkstream | None = None,
+    run: IssueRun | None = None,
     backend: str = RESOLVE_BACKEND,
     model: str = DEFAULT_ISSUE_MODEL,
 ) -> int:
@@ -403,16 +551,23 @@ def advance_issues(
     and queue its resolve task. Returns 1 if it started an issue, else 0.
     Idempotent — call after every scan and every issue-task landing so the next
     issue branches from a default branch that already has the prior fixes."""
-    wss = _issue_workstreams(store, project)
+    if run and run.scope == IssueRunScope.scan_only:
+        refresh_issue_run(store, project, run)
+        return 0
+    wss = _issue_items_for_run(store, project, run) if run else _issue_workstreams(store, project, workstream)
     if any(
         w.status in (WorkstreamStatus.resolving, WorkstreamStatus.reviewing) for w in wss
     ):
+        if run:
+            refresh_issue_run(store, project, run)
         return 0
     queued = sorted(
         (w for w in wss if w.status == WorkstreamStatus.queued),
         key=lambda w: (w.order, w.issue_number),
     )
     if not queued:
+        if run:
+            refresh_issue_run(store, project, run)
         return 0
     nxt = queued[0]
 
@@ -421,7 +576,9 @@ def advance_issues(
         w.parked_reason = ""
 
     ws = store.update(Workstream, nxt.id, promote)
-    _make_issue_task(store, project, ws, TaskKind.resolve, backend, model=model)
+    _make_issue_task(store, project, ws, TaskKind.resolve, backend, model=model, run=run)
+    if run:
+        refresh_issue_run(store, project, run)
     log.info(
         "advance: issue #%s → resolving (%d issue(s) still queued)",
         ws.issue_number, len(queued) - 1,
@@ -435,9 +592,10 @@ def create_review_task(
     ws: Workstream,
     backend: str = RESOLVE_BACKEND,
     model: str = DEFAULT_ISSUE_MODEL,
+    run: IssueRun | None = None,
 ) -> Task:
     """Queue the independent review task for a fixed issue."""
-    return _make_issue_task(store, project, ws, TaskKind.review, backend, model=model)
+    return _make_issue_task(store, project, ws, TaskKind.review, backend, model=model, run=run)
 
 
 def activate_next(store, project: Project) -> Workstream | None:

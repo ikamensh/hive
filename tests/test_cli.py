@@ -87,7 +87,8 @@ def test_cli_drives_full_loop(harness):
 
     detail = cli(client, "show", pid)
     build_tasks = [task for task in detail["tasks"] if task["kind"] not in ("intake", "probe")]
-    assert len(detail["workstreams"]) == 1 and len(build_tasks) == 1
+    assert len(detail["work_items"]) == 1 and len(build_tasks) == 1
+    assert detail["workstreams"][0]["kind"] == "iteration"
 
     # fake runner executes work + verify tasks over the real protocol
     for text in ("implemented, tests pass", "VERDICT: ACCEPT"):

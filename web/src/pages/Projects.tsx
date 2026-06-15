@@ -6,9 +6,11 @@ import { StateBadge } from "../components/shared";
 import type { ProjectDetail } from "../types";
 
 function ProjectRow({ detail, cooldownHint }: { detail: ProjectDetail; cooldownHint?: string }) {
-  const { project, workstreams, tasks, questions } = detail;
+  const { project, workstreams, work_items, tasks, questions } = detail;
   const open = questions.filter((q) => q.status === "open").length;
-  const active = workstreams.filter((w) => w.status === "active").length;
+  const active = work_items.filter((w) => w.status === "active").length;
+  const issueNeeds = work_items.filter((w) => w.source === "issue" && (w.status === "blocked_clarity" || w.status === "rejected")).length;
+  const issueRunning = work_items.filter((w) => w.source === "issue" && (w.status === "resolving" || w.status === "reviewing")).length;
   const running = tasks.filter((t) => t.status === "running").length;
   const cost = tasks.reduce((s, t) => s + t.cost_usd, 0);
 
@@ -26,7 +28,16 @@ function ProjectRow({ detail, cooldownHint }: { detail: ProjectDetail; cooldownH
       <StateBadge state={project.state} questionCount={open} cooldownHint={cooldownHint} />
       <div className="pr-stats">
         <span>
-          <b>{active}</b> active ws
+          <b>{active}</b> active work
+        </span>
+        <span>
+          <b>{workstreams.length}</b> streams
+        </span>
+        <span>
+          <b>{issueRunning}</b> issues running
+        </span>
+        <span>
+          <b>{issueNeeds}</b> issue blockers
         </span>
         <span>
           <b>{running}</b> running

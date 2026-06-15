@@ -7,6 +7,7 @@ import type {
   GithubRepo,
   HumanTask,
   IntakeMessage,
+  IssueRun,
   Project,
   ProjectCreate,
   ProjectDetail,
@@ -19,6 +20,7 @@ import type {
   ScanResult,
   Subscription,
   Task,
+  WorkItem,
   Workstream,
 } from "./types";
 
@@ -180,7 +182,49 @@ const conversations: AgentConversation[] = [
   },
 ];
 
-const workstreams: Workstream[] = [
+const projectWorkstreams: Workstream[] = [
+  {
+    id: "stream-atlas-iteration",
+    project_id: "p-atlas",
+    kind: "iteration",
+    title: "Iteration goal",
+    repo: "",
+    source_ref: {},
+    status: "active",
+    enabled: true,
+    config: {},
+    created_at: now - 86400 * 6,
+    updated_at: now - 3600,
+  },
+  {
+    id: "stream-beacon-iteration",
+    project_id: "p-beacon",
+    kind: "iteration",
+    title: "Iteration goal",
+    repo: "",
+    source_ref: {},
+    status: "idle",
+    enabled: true,
+    config: {},
+    created_at: now - 86400 * 8,
+    updated_at: now - 3600,
+  },
+  {
+    id: "stream-beacon-issues",
+    project_id: "p-beacon",
+    kind: "github_issues",
+    title: "GitHub issues: acme/beacon",
+    repo: "https://github.com/acme/beacon.git",
+    source_ref: { provider: "github", issues: true },
+    status: "active",
+    enabled: true,
+    config: {},
+    created_at: now - 86400 * 8,
+    updated_at: now - 1800,
+  },
+];
+
+const workItems: WorkItem[] = [
   {
     id: "ws-auth",
     project_id: "p-atlas",
@@ -314,6 +358,29 @@ const workstreams: Workstream[] = [
     status: "cancelled",
     parked_reason: "Issue closed on GitHub by a human.",
     created_at: now - 86400 * 6,
+  },
+];
+
+for (const item of workItems) {
+  if (item.project_id === "p-beacon" && item.source === "issue") {
+    item.workstream_id = "stream-beacon-issues";
+    item.repo = "https://github.com/acme/beacon.git";
+  }
+}
+
+const issueRuns: IssueRun[] = [
+  {
+    id: "run-beacon-1",
+    project_id: "p-beacon",
+    workstream_id: "stream-beacon-issues",
+    repo: "https://github.com/acme/beacon.git",
+    scope: "all_open_now",
+    issue_numbers: [42, 51, 46, 37, 29, 64],
+    status: "running",
+    counts: { running: 2, blocked: 2, queued: 2 },
+    created_at: now - 3600 * 8,
+    started_at: now - 3600 * 8,
+    finished_at: 0,
   },
 ];
 
@@ -772,11 +839,13 @@ export const api = {
     if (!project) throw new Error("not found");
     return structuredClone({
       project,
-      workstreams: workstreams.filter((w) => w.project_id === id),
+      workstreams: projectWorkstreams.filter((w) => w.project_id === id),
+      work_items: workItems.filter((w) => w.project_id === id),
       tasks: tasks.filter((t) => t.project_id === id),
       questions: questions.filter((q) => q.project_id === id),
       human_tasks: humanTasks.filter((t) => t.project_id === id),
       conversations: conversations.filter((c) => c.project_id === id),
+      issue_runs: issueRuns.filter((r) => r.project_id === id),
     });
   },
 
@@ -794,7 +863,7 @@ export const api = {
   issuesPreflight: async (): Promise<PreflightResult> => ({
     ok: true,
     checks: [
-      { name: "spec_repo_set", ok: true, detail: "git@github.com:acme/beacon.git", hard: true },
+      { name: "repo_set", ok: true, detail: "git@github.com:acme/beacon.git", hard: true },
       { name: "gh_token_present", ok: true, detail: "control-plane GitHub token present", hard: true },
       { name: "repo_write_access", ok: true, detail: "token can push/merge to acme/beacon", hard: true },
       { name: "codex_runner_usable", ok: true, detail: "an online runner offers a usable 'codex' resource", hard: false },
@@ -806,9 +875,23 @@ export const api = {
     const project = projects.find((p) => p.id === id);
     if (!project) throw new Error("not found");
     if (!project.spec_repo.trim()) throw new Error("spec_repo required");
-    const open = workstreams.filter(
+    const open = workItems.filter(
       (w) => w.project_id === id && w.source === "issue" && w.status !== "done" && w.status !== "cancelled",
     );
+    const run = {
+      id: `run-${Date.now()}`,
+      project_id: id,
+      workstream_id: projectWorkstreams.find((w) => w.project_id === id && w.kind === "github_issues")?.id || "",
+      repo: project.spec_repo,
+      scope: "all_open_now" as const,
+      issue_numbers: open.map((w) => w.issue_number || 0).filter(Boolean),
+      status: "running" as const,
+      counts: { open_issues: open.length },
+      created_at: Date.now() / 1000,
+      started_at: Date.now() / 1000,
+      finished_at: 0,
+    };
+    issueRuns.push(run);
     return {
       open_issues: open.length,
       resolve_queued: open.filter((w) => w.status === "resolving").length,
@@ -819,6 +902,66 @@ export const api = {
         "re-gated #29 (rejected) → resolving",
         "no new open issues",
       ],
+      run_id: run.id,
+    };
+  },
+
+  workstreamPreflight: async (): Promise<PreflightResult> => ({
+    ok: true,
+    checks: [
+      { name: "repo_set", ok: true, detail: "git@github.com:acme/beacon.git", hard: true },
+      { name: "gh_token_present", ok: true, detail: "control-plane GitHub token present", hard: true },
+      { name: "repo_write_access", ok: true, detail: "token can push/merge to acme/beacon", hard: true },
+      { name: "codex_runner_usable", ok: true, detail: "an online runner offers a usable 'codex' resource", hard: false },
+    ],
+    runner_check_task: "task-preflight-mock",
+  }),
+
+  syncIssues: async (id: string): Promise<ScanResult> => {
+    const open = workItems.filter(
+      (w) => w.project_id === id && w.source === "issue" && w.status !== "done" && w.status !== "cancelled",
+    );
+    return {
+      open_issues: open.length,
+      resolve_queued: 0,
+      attachments_downloaded: 0,
+      attachments_failed: 0,
+      changes: ["synced GitHub issues"],
+    };
+  },
+
+  runIssues: async (
+    id: string,
+    workstreamId: string,
+    body: { scope: "selected" | "all_open_now" | "scan_only"; issue_numbers?: number[] },
+  ) => {
+    const open = workItems.filter(
+      (w) => w.project_id === id && w.source === "issue" && w.status !== "done" && w.status !== "cancelled",
+    );
+    const issueNumbers = body.scope === "selected"
+      ? body.issue_numbers || []
+      : open.map((w) => w.issue_number || 0).filter(Boolean);
+    const run: IssueRun = {
+      id: `run-${Date.now()}`,
+      project_id: id,
+      workstream_id: workstreamId,
+      repo: projectWorkstreams.find((w) => w.id === workstreamId)?.repo || "",
+      scope: body.scope,
+      issue_numbers: issueNumbers,
+      status: body.scope === "scan_only" ? "done" : "running",
+      counts: { open_issues: open.length, queued: issueNumbers.length },
+      created_at: Date.now() / 1000,
+      started_at: body.scope === "scan_only" ? 0 : Date.now() / 1000,
+      finished_at: body.scope === "scan_only" ? Date.now() / 1000 : 0,
+    };
+    issueRuns.push(run);
+    return {
+      run,
+      open_issues: open.length,
+      resolve_queued: body.scope === "scan_only" ? 0 : Math.min(1, issueNumbers.length),
+      attachments_downloaded: 0,
+      attachments_failed: 0,
+      changes: [`started run ${run.id}`],
     };
   },
 

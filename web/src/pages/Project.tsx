@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useParams } from "react-router-dom";
 import { ApiError, ago, api, duration, money, repoShort, usePoll } from "../api";
 import { RepoListEditor, RepoUrlInput } from "../components/RepoPicker";
@@ -10,10 +10,10 @@ import {
   SegPicker,
   StateBadge,
 } from "../components/shared";
-import type { AgentConversation, Autonomy, GuessPropensity, HumanTask, Mode, PreflightCheck, PreflightResult, Project, ProjectPatch, Question, ResourceInfo, ScanResult, Task, Workstream, WorkstreamStatus } from "../types";
+import type { AgentConversation, Autonomy, GuessPropensity, HumanTask, Mode, PreflightCheck, PreflightResult, Project, ProjectPatch, Question, ResourceInfo, ScanResult, Task, WorkItem, WorkItemStatus, Workstream } from "../types";
 
 /** Derive the issue's per-issue branch tree URL from its issue URL (`.../issues/42` → `.../tree/hive/issue-42`). */
-function issueBranchUrl(ws: Workstream): string | null {
+function issueBranchUrl(ws: WorkItem): string | null {
   if (!ws.issue_url || ws.issue_number === undefined) return null;
   return ws.issue_url.replace(/\/issues\/\d+.*$/, `/tree/hive/issue-${ws.issue_number}`);
 }
@@ -407,7 +407,7 @@ function GoalBanner({ project, onPatch }: { project: Project; onPatch: (p: Proje
   );
 }
 
-function WorkstreamCard({ ws }: { ws: Workstream }) {
+function WorkstreamCard({ ws }: { ws: WorkItem }) {
   return (
     <article className={`ws-card ws-${ws.status}`}>
       <header>
@@ -457,22 +457,40 @@ function PreflightSummary({ result }: { result: PreflightResult }) {
   );
 }
 
-function ScanBar({ project, onScanned }: { project: Project; onScanned: () => void }) {
-  const [busyAction, setBusyAction] = useState<"preflight" | "scan" | "">("");
+function IssuesToolbar({
+  project,
+  issueStreams,
+  selectedStreamId,
+  onSelectedStream,
+  selectedNumbers,
+  onChanged,
+}: {
+  project: Project;
+  issueStreams: Workstream[];
+  selectedStreamId: string;
+  onSelectedStream: (id: string) => void;
+  selectedNumbers: number[];
+  onChanged: () => void;
+}) {
+  const [busyAction, setBusyAction] = useState<"preflight" | "sync" | "run" | "">("");
   const [result, setResult] = useState<ScanResult | null>(null);
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
   const [error, setError] = useState("");
   const [errorChecks, setErrorChecks] = useState<PreflightCheck[]>([]);
-  const noRepo = !project.spec_repo.trim();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [scope, setScope] = useState<"selected" | "all_open_now" | "scan_only">("selected");
+  const stream = issueStreams.find((w) => w.id === selectedStreamId) ?? issueStreams[0];
+  const noRepo = !stream;
   const busy = busyAction !== "";
 
   const runPreflight = async () => {
+    if (!stream) return;
     setBusyAction("preflight");
     setError("");
     setErrorChecks([]);
     try {
-      setPreflight(await api.issuesPreflight(project.id));
-      onScanned();
+      setPreflight(await api.workstreamPreflight(project.id, stream.id));
+      onChanged();
     } catch (e) {
       setError((e as Error).message || "preflight failed");
       setErrorChecks(checksFromError(e));
@@ -480,15 +498,36 @@ function ScanBar({ project, onScanned }: { project: Project; onScanned: () => vo
     setBusyAction("");
   };
 
-  const scan = async () => {
-    setBusyAction("scan");
+  const sync = async () => {
+    if (!stream) return;
+    setBusyAction("sync");
     setError("");
     setErrorChecks([]);
     try {
-      setResult(await api.scanIssues(project.id));
-      onScanned();
+      setResult(await api.syncIssues(project.id, stream.id));
+      onChanged();
     } catch (e) {
-      setError((e as Error).message || "scan failed");
+      setError((e as Error).message || "sync failed");
+      setErrorChecks(checksFromError(e));
+    }
+    setBusyAction("");
+  };
+
+  const run = async () => {
+    if (!stream) return;
+    setBusyAction("run");
+    setError("");
+    setErrorChecks([]);
+    try {
+      const response = await api.runIssues(project.id, stream.id, {
+        scope,
+        issue_numbers: scope === "selected" ? selectedNumbers : [],
+      });
+      setResult(response);
+      setDrawerOpen(false);
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message || "run failed");
       setErrorChecks(checksFromError(e));
     }
     setBusyAction("");
@@ -497,20 +536,61 @@ function ScanBar({ project, onScanned }: { project: Project; onScanned: () => vo
   return (
     <section className="scan-bar reveal">
       <div className="scan-text">
-        <h2>GitHub issues</h2>
-        <p className="muted">
-          Hive resolves this repo's open issues. Scan to ingest new issues and re-queue clarified or reopened ones.
-        </p>
+        <h2>Issues</h2>
+        <select
+          value={stream?.id ?? ""}
+          onChange={(event) => onSelectedStream(event.target.value)}
+          disabled={issueStreams.length <= 1}
+        >
+          {issueStreams.length === 0 && <option value="">no GitHub issue workstream</option>}
+          {issueStreams.map((w) => (
+            <option value={w.id} key={w.id}>{repoShort(w.repo)}</option>
+          ))}
+        </select>
       </div>
       <div className="scan-actions">
         <div className="scan-buttons">
           <button className="ghost" onClick={runPreflight} disabled={busy || noRepo} title={noRepo ? "set a spec repo first" : undefined}>
             {busyAction === "preflight" ? "checking…" : "preflight"}
           </button>
-          <button onClick={scan} disabled={busy || noRepo} title={noRepo ? "set a spec repo first" : undefined}>
-            {busyAction === "scan" ? "scanning…" : "scan issues"}
+          <button className="ghost" onClick={sync} disabled={busy || noRepo} title={noRepo ? "set a GitHub repo first" : undefined}>
+            {busyAction === "sync" ? "syncing…" : "sync"}
+          </button>
+          <button onClick={() => setDrawerOpen((v) => !v)} disabled={busy || noRepo} title={noRepo ? "set a GitHub repo first" : undefined}>
+            run issues
           </button>
         </div>
+        {drawerOpen && (
+          <div className="issue-run-drawer">
+            <label>
+              <input
+                type="radio"
+                checked={scope === "selected"}
+                onChange={() => setScope("selected")}
+              />
+              selected issues ({selectedNumbers.length})
+            </label>
+            <label>
+              <input
+                type="radio"
+                checked={scope === "all_open_now"}
+                onChange={() => setScope("all_open_now")}
+              />
+              all currently open
+            </label>
+            <label>
+              <input
+                type="radio"
+                checked={scope === "scan_only"}
+                onChange={() => setScope("scan_only")}
+              />
+              scan only
+            </label>
+            <button onClick={run} disabled={busy || (scope === "selected" && selectedNumbers.length === 0)}>
+              {busyAction === "run" ? "starting…" : "start run"}
+            </button>
+          </div>
+        )}
         {error && (
           <div className="scan-error">
             <span className="form-error">{error}</span>
@@ -520,7 +600,7 @@ function ScanBar({ project, onScanned }: { project: Project; onScanned: () => vo
         {preflight && !error && <PreflightSummary result={preflight} />}
         {result && !error && (
           <span className="scan-summary">
-            last scan: {result.open_issues} open · {result.resolve_queued} queued
+            last update: {result.open_issues} open · {result.resolve_queued} queued
             {(result.attachments_downloaded > 0 || result.attachments_failed > 0) && (
               <> · attachments {result.attachments_downloaded} ok / {result.attachments_failed} failed</>
             )}
@@ -538,7 +618,7 @@ function ScanBar({ project, onScanned }: { project: Project; onScanned: () => vo
   );
 }
 
-function IssueCard({ ws }: { ws: Workstream }) {
+function IssueCard({ ws }: { ws: WorkItem }) {
   const [open, setOpen] = useState(false);
   const branch = issueBranchUrl(ws);
   return (
@@ -572,15 +652,15 @@ function IssueCard({ ws }: { ws: Workstream }) {
   );
 }
 
-const ISSUE_GROUPS: { label: string; statuses: WorkstreamStatus[] }[] = [
-  { label: "queued", statuses: ["queued"] },
-  { label: "in progress", statuses: ["resolving", "reviewing"] },
+const ISSUE_GROUPS: { label: string; statuses: WorkItemStatus[] }[] = [
+  { label: "ready", statuses: ["queued"] },
+  { label: "running", statuses: ["resolving", "reviewing"] },
   { label: "needs you", statuses: ["blocked_clarity", "rejected"] },
   { label: "done", statuses: ["done", "cancelled"] },
 ];
 
-function issueSort(group: { statuses: WorkstreamStatus[] }) {
-  return (a: Workstream, b: Workstream) => {
+function issueSort(group: { statuses: WorkItemStatus[] }) {
+  return (a: WorkItem, b: WorkItem) => {
     if (group.statuses.includes("queued")) {
       return (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) ||
         (a.issue_number ?? 0) - (b.issue_number ?? 0) ||
@@ -590,29 +670,101 @@ function issueSort(group: { statuses: WorkstreamStatus[] }) {
   };
 }
 
-function IssuesView({ workstreams }: { workstreams: Workstream[] }) {
-  const issues = workstreams.filter((w) => w.source === "issue");
+function IssuesView({
+  workItems,
+  selectedNumbers,
+  onToggle,
+}: {
+  workItems: WorkItem[];
+  selectedNumbers: number[];
+  onToggle: (issueNumber: number) => void;
+}) {
+  const [filter, setFilter] = useState("ready");
+  const [openIssue, setOpenIssue] = useState<number | null>(null);
+  const issues = workItems.filter((w) => w.source === "issue");
+  const group = ISSUE_GROUPS.find((g) => g.label === filter) ?? ISSUE_GROUPS[0];
+  const items = issues
+    .filter((w) => group.statuses.includes(w.status))
+    .sort(issueSort(group));
   return (
     <section className="issues-view">
-      {issues.length === 0 && <p className="muted">no issues yet — scan to ingest open GitHub issues</p>}
-      {ISSUE_GROUPS.map((group) => {
-        const items = issues
-          .filter((w) => group.statuses.includes(w.status))
-          .sort(issueSort(group));
-        if (items.length === 0) return null;
-        return (
-          <div className="issue-group" key={group.label}>
-            <h3 className="issue-group-title">
-              {group.label} <span className="col-count">{items.length}</span>
-            </h3>
-            <div className="issue-grid">
-              {items.map((w) => (
-                <IssueCard key={w.id} ws={w} />
-              ))}
-            </div>
+      {issues.length === 0 && <p className="muted">no issues yet — sync to ingest open GitHub issues</p>}
+      {issues.length > 0 && (
+        <>
+          <div className="issue-filter">
+            {ISSUE_GROUPS.map((g) => {
+              const count = issues.filter((w) => g.statuses.includes(w.status)).length;
+              return (
+                <button
+                  className={filter === g.label ? "active" : "ghost"}
+                  key={g.label}
+                  onClick={() => setFilter(g.label)}
+                >
+                  {g.label} <span className="col-count">{count}</span>
+                </button>
+              );
+            })}
           </div>
-        );
-      })}
+          <div className="issue-table-wrap">
+            <table className="issue-table">
+              <thead>
+                <tr>
+                  <th aria-label="select" />
+                  <th>issue</th>
+                  <th>state</th>
+                  <th>repo</th>
+                  <th>note</th>
+                  <th>branch</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((w) => {
+                  const checked = selectedNumbers.includes(w.issue_number ?? 0);
+                  const branch = issueBranchUrl(w);
+                  const open = openIssue === w.issue_number;
+                  return (
+                    <Fragment key={w.id}>
+                      <tr>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => w.issue_number && onToggle(w.issue_number)}
+                          />
+                        </td>
+                        <td>
+                          <button className="issue-title" onClick={() => setOpenIssue(open ? null : w.issue_number ?? null)}>
+                            {w.title}
+                          </button>
+                        </td>
+                        <td><span className={`chip chip-iss-${w.status}`}>{w.status.replace(/_/g, " ")}</span></td>
+                        <td>{repoShort(w.repo || "")}</td>
+                        <td>{w.parked_reason || "—"}</td>
+                        <td>
+                          {branch ? (
+                            <a href={branch} target="_blank" rel="noreferrer">branch</a>
+                          ) : (
+                            <span className="muted">—</span>
+                          )}
+                        </td>
+                      </tr>
+                      {open && w.description && (
+                        <tr className="issue-detail-row">
+                          <td />
+                          <td colSpan={5}>
+                            <Markdown className="issue-detail" text={w.description} />
+                            {w.issue_url && <a href={w.issue_url} target="_blank" rel="noreferrer">open on GitHub</a>}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </section>
   );
 }
@@ -900,6 +1052,8 @@ function TaskCard({ task, projectId, onChanged }: { task: Task; projectId: strin
 export default function ProjectPage() {
   const { id = "" } = useParams();
   const [primaryView, setPrimaryView] = useState<"work" | "issues">("work");
+  const [selectedIssueStreamId, setSelectedIssueStreamId] = useState("");
+  const [selectedIssueNumbers, setSelectedIssueNumbers] = useState<number[]>([]);
   const { data, failed, refresh } = usePoll(() => api.project(id), [id]);
   const { data: resources } = usePoll(() => api.resources(), [], 8000);
 
@@ -907,7 +1061,7 @@ export default function ProjectPage() {
     return <div className="page">{failed ? <p className="muted">project unreachable</p> : <p className="muted">loading…</p>}</div>;
   }
 
-  const { project, workstreams, tasks, questions, human_tasks, conversations } = data;
+  const { project, workstreams, work_items, tasks, questions, human_tasks, conversations } = data;
   const intakeConversation =
     conversations.find((c) => c.id === project.intake_conversation_id) ??
     [...conversations].sort((a, b) => b.created_at - a.created_at)[0] ??
@@ -949,8 +1103,12 @@ export default function ProjectPage() {
   };
 
   const configured = Boolean(project.spec_repo.trim());
-  const manualWorkItems = workstreams.filter((w) => (w.source ?? "manual") !== "issue");
-  const issueWorkItems = workstreams.filter((w) => w.source === "issue");
+  const issueStreams = workstreams.filter((w) => w.kind === "github_issues");
+  const activeIssueStream = issueStreams.find((w) => w.id === selectedIssueStreamId) ?? issueStreams[0];
+  const manualWorkItems = work_items.filter((w) => (w.source ?? "manual") !== "issue");
+  const issueWorkItems = work_items.filter((w) =>
+    w.source === "issue" && (!activeIssueStream || !w.workstream_id || w.workstream_id === activeIssueStream.id)
+  );
   const issueNeeds = issueWorkItems.filter((w) => w.status === "blocked_clarity" || w.status === "rejected");
   const inboxCount = openQs.length + openTodos.length + issueNeeds.length;
   const nonIntakeTasks = tasks.filter((t) => !["intake", "probe", "preflight", "resolve", "review"].includes(t.kind));
@@ -961,6 +1119,13 @@ export default function ProjectPage() {
   const trustedScouts = (resources?.resources ?? []).filter((resource) =>
     resource.backend === "codex" || resource.backend === "claude",
   );
+  const toggleIssueSelection = (issueNumber: number) => {
+    setSelectedIssueNumbers((numbers) =>
+      numbers.includes(issueNumber)
+        ? numbers.filter((n) => n !== issueNumber)
+        : [...numbers, issueNumber].sort((a, b) => a - b),
+    );
+  };
 
   const needsYouCol = (
     <section className="col col-inbox">
@@ -1042,11 +1207,25 @@ export default function ProjectPage() {
           <div className={`columns ${primaryView === "issues" ? "columns-issues" : ""}`}>
             {primaryView === "issues" ? (
               <section className="col col-ws col-issues-main">
-                <ScanBar project={project} onScanned={refresh} />
+                <IssuesToolbar
+                  project={project}
+                  issueStreams={issueStreams}
+                  selectedStreamId={activeIssueStream?.id ?? ""}
+                  onSelectedStream={(streamId) => {
+                    setSelectedIssueStreamId(streamId);
+                    setSelectedIssueNumbers([]);
+                  }}
+                  selectedNumbers={selectedIssueNumbers}
+                  onChanged={refresh}
+                />
                 <h2 className="col-title issues-title">
                   issues <span className="col-count">{issueWorkItems.length}</span>
                 </h2>
-                <IssuesView workstreams={workstreams} />
+                <IssuesView
+                  workItems={issueWorkItems}
+                  selectedNumbers={selectedIssueNumbers}
+                  onToggle={toggleIssueSelection}
+                />
               </section>
             ) : (
               <section className="col col-ws">

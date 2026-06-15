@@ -148,8 +148,14 @@ be renamed to `WorkItem`. The hierarchy becomes:
 Project
   Workstream     # iteration goal, GitHub issues for repo X
     WorkItem     # auth-flow chunk, issue #42
-      Task       # one runner execution attempt
+    Task       # one runner execution attempt
 ```
+
+Current implementation waypoint: the new top-level persisted object is named
+`ProjectWorkstream` internally so the existing `workstreams` collection can keep
+serving legacy work-item rows safely. The API already exposes the target shape:
+`workstreams` are the top-level streams, while old per-unit rows are returned as
+`work_items`.
 
 ### WorkItem
 

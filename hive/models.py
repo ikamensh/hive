@@ -152,6 +152,40 @@ class AgentConversation(BaseModel):
     updated_at: float = Field(default_factory=now)
 
 
+class ProjectWorkstreamKind(StrEnum):
+    iteration = "iteration"
+    github_issues = "github_issues"
+
+
+class ProjectWorkstreamStatus(StrEnum):
+    idle = "idle"
+    active = "active"
+    blocked = "blocked"
+    disabled = "disabled"
+
+
+class ProjectWorkstream(BaseModel):
+    """An ongoing channel of project work.
+
+    The current `Workstream` model below is still the smaller work-item record
+    during migration. This model is the target workstream layer from
+    wiki/unified-project-work.md.
+    """
+
+    id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    project_id: str
+    kind: ProjectWorkstreamKind
+    title: str
+    repo: str = ""
+    source_ref: dict = {}
+    status: ProjectWorkstreamStatus = ProjectWorkstreamStatus.idle
+    enabled: bool = True
+    config: dict = {}
+    created_at: float = Field(default_factory=now)
+    updated_at: float = Field(default_factory=now)
+
+
 class WorkstreamStatus(StrEnum):
     active = "active"
     queued = "queued"  # issue solving: ingested, awaiting its turn (strict one-at-a-time)
@@ -178,6 +212,8 @@ class Workstream(BaseModel):
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
     project_id: str
+    workstream_id: str = ""  # target parent ProjectWorkstream id; empty for legacy rows
+    repo: str = ""
     title: str
     description: str = ""
     status: WorkstreamStatus = WorkstreamStatus.active
@@ -186,6 +222,7 @@ class Workstream(BaseModel):
     issue_number: int = 0  # GitHub issue number when source=issue
     issue_url: str = ""
     issue_attachments: list[str] = []  # embedded image URLs from the issue + comments
+    external_ref: dict = {}
     order: int = 0  # planned position in the issue queue (lower = sooner; dormant ordering variant)
     created_at: float = Field(default_factory=now)
 
@@ -262,7 +299,9 @@ class Task(BaseModel):
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
     project_id: str
-    workstream_id: str
+    workstream_id: str  # migration note: still the work-item id for most tasks
+    work_item_id: str = ""
+    run_id: str = ""
     repo: str  # git URL the runner checks out
     branch: str = ""  # non-default branch to check out (PR-mode work and its verify/fix)
     fresh_branch: bool = False  # reset an existing task branch to default before running
@@ -408,6 +447,37 @@ class HumanTask(BaseModel):
     status: HumanTaskStatus = HumanTaskStatus.open
     created_at: float = Field(default_factory=now)
     done_at: float = 0.0
+
+
+class IssueRunStatus(StrEnum):
+    scanning = "scanning"
+    queued = "queued"
+    running = "running"
+    blocked = "blocked"
+    done = "done"
+    cancelled = "cancelled"
+    failed = "failed"
+
+
+class IssueRunScope(StrEnum):
+    selected = "selected"
+    all_open_now = "all_open_now"
+    scan_only = "scan_only"
+
+
+class IssueRun(BaseModel):
+    id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    project_id: str
+    workstream_id: str
+    repo: str
+    scope: IssueRunScope = IssueRunScope.all_open_now
+    issue_numbers: list[int] = []
+    status: IssueRunStatus = IssueRunStatus.queued
+    counts: dict = {}
+    created_at: float = Field(default_factory=now)
+    started_at: float = 0.0
+    finished_at: float = 0.0
 
 
 class Feedback(BaseModel):
