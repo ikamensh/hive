@@ -95,6 +95,11 @@ HUMAN_FIX_PATTERNS = re.compile(
     r"auth|login|credential|api.?key|not authenticated|forbidden|permission|subscription|billing",
     re.IGNORECASE,
 )
+ISSUE_RESULT_MARKER_RE = re.compile(
+    r"^\s*(OUTCOME|REVIEW)\s*:\s*(FIXED|BLOCKED|ACCEPT|REJECT)\s*$",
+    re.IGNORECASE,
+)
+ISSUE_COMMENT_SECTION_LIMIT = 6000
 
 
 def _iso_utc(epoch: float) -> str:
@@ -247,6 +252,55 @@ def _land_resolve(store, task: Task, body: "TaskResult", config: Config) -> None
             log.info("queued review task %s for issue #%s on %s", review.id, ws.issue_number, review.branch)
 
 
+def _agent_report(text: str) -> str:
+    lines = [
+        line.rstrip()
+        for line in text.splitlines()
+        if not ISSUE_RESULT_MARKER_RE.match(line)
+    ]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines).strip()
+
+
+def _comment_section(text: str) -> str:
+    text = text.strip()
+    if len(text) <= ISSUE_COMMENT_SECTION_LIMIT:
+        return text
+    return text[:ISSUE_COMMENT_SECTION_LIMIT].rstrip() + "\n\n[Truncated by Hive.]"
+
+
+def _latest_resolve_report(store, review_task: Task) -> str:
+    tasks = [
+        t
+        for t in store.list(
+            Task,
+            project_id=review_task.project_id,
+            workstream_id=review_task.workstream_id,
+            kind=TaskKind.resolve,
+        )
+        if (
+            t.issue_number == review_task.issue_number
+            and t.verdict == Verdict.accept
+            and t.result_text.strip()
+        )
+    ]
+    return _agent_report(tasks[-1].result_text) if tasks else ""
+
+
+def _issue_resolution_comment(store, review_task: Task, review_text: str, branch: str) -> str:
+    parts = [f"Resolved by Hive — merged `{branch}` into the default branch."]
+    resolve_report = _latest_resolve_report(store, review_task)
+    review_report = _agent_report(review_text)
+    if resolve_report:
+        parts.append(f"### Fix summary\n{_comment_section(resolve_report)}")
+    if review_report:
+        parts.append(f"### Review summary\n{_comment_section(review_report)}")
+    return "\n\n".join(parts)
+
+
 def _land_review(store, task: Task, body: "TaskResult", config: Config) -> None:
     """Issues mode: a review task finished. ACCEPT → merge the branch into the
     default branch and close the issue (Hive, via the GitHub API); REJECT/error →
@@ -276,7 +330,7 @@ def _land_review(store, task: Task, body: "TaskResult", config: Config) -> None:
         resolve_issue_on_github(
             task.repo,
             ws.issue_number,
-            comment=f"Resolved by Hive — merged `{branch}` into the default branch.",
+            comment=_issue_resolution_comment(store, task, body.text, branch),
             token=config.gh_token,
         )
     except Exception as exc:  # merge conflict / API failure: don't lose the work

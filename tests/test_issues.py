@@ -234,7 +234,13 @@ def test_scan_resolve_review_accept_lands(app, monkeypatch):
     _pump(client, store)
     resolve = _poll(client, rid)
     assert resolve["kind"] == "resolve" and resolve["branch"] == "hive/issue-1"
-    _report(client, resolve["id"], "fixed it\nOUTCOME: FIXED")
+    _report(
+        client,
+        resolve["id"],
+        "Found the close comment was hardcoded to the merge notice.\n"
+        "Updated the landing path to include the resolver's summary.\n"
+        "OUTCOME: FIXED",
+    )
 
     ws_id = resolve["workstream_id"]
     assert store.get(Workstream, ws_id).status == WorkstreamStatus.reviewing
@@ -246,11 +252,22 @@ def test_scan_resolve_review_accept_lands(app, monkeypatch):
     merged = {}
     monkeypatch.setattr("hive.api.merge_branch",
                         lambda repo, head, token, message="": merged.setdefault("head", head))
-    monkeypatch.setattr("hive.api.resolve_issue_on_github",
-                        lambda repo, number, comment, token: merged.setdefault("closed", number))
-    _report(client, review["id"], "looks good\nREVIEW: ACCEPT")
+    def close_issue(repo, number, comment, token):
+        merged["closed"] = number
+        merged["comment"] = comment
 
-    assert merged == {"head": "hive/issue-1", "closed": 1}
+    monkeypatch.setattr("hive.api.resolve_issue_on_github", close_issue)
+    _report(client, review["id"], "Verified the comment includes the fix report.\nREVIEW: ACCEPT")
+
+    assert merged["head"] == "hive/issue-1"
+    assert merged["closed"] == 1
+    assert "Resolved by Hive — merged `hive/issue-1`" in merged["comment"]
+    assert "### Fix summary" in merged["comment"]
+    assert "Found the close comment was hardcoded" in merged["comment"]
+    assert "### Review summary" in merged["comment"]
+    assert "Verified the comment includes the fix report." in merged["comment"]
+    assert "OUTCOME:" not in merged["comment"]
+    assert "REVIEW:" not in merged["comment"]
     assert store.get(Workstream, ws_id).status == WorkstreamStatus.done
 
 
