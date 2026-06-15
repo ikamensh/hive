@@ -16,6 +16,7 @@ from hive.issues import (
     ensure_issue_workstream,
     issue_branch,
     LANDING_FAILED_PREFIX,
+    project_workstreams,
     reconcile,
     resolve_issue_on_github,
 )
@@ -27,6 +28,7 @@ from hive.models import (
     IssueRun,
     IssueRunScope,
     IssueRunStatus,
+    ProjectWorkstreamKind,
     Task,
     TaskKind,
     TaskStatus,
@@ -541,6 +543,29 @@ def test_scan_allowed_on_normal_project(app, monkeypatch):
     assert resp.json()["open_issues"] == 1
     ws = store.list(Workstream, project_id=project["id"])[0]
     assert ws.source == WorkstreamSource.issue and ws.issue_number == 9
+
+
+def test_project_workstreams_attach_legacy_work_items():
+    store = MemoryStore()
+    project = store.put(Project(name="p", spec_repo="https://github.com/o/r.git"))
+    manual = store.put(Workstream(project_id=project.id, title="manual"))
+    issue_item = store.put(
+        Workstream(
+            project_id=project.id,
+            title="#1 bug",
+            source=WorkstreamSource.issue,
+            issue_number=1,
+        )
+    )
+
+    streams = project_workstreams(store, project)
+    iteration = next(w for w in streams if w.kind == ProjectWorkstreamKind.iteration)
+    github = next(w for w in streams if w.kind == ProjectWorkstreamKind.github_issues)
+
+    assert store.get(Workstream, manual.id).workstream_id == iteration.id
+    saved_issue = store.get(Workstream, issue_item.id)
+    assert saved_issue.workstream_id == github.id
+    assert saved_issue.repo == project.spec_repo
 
 
 def test_issue_workstream_run_selected_endpoint(app, monkeypatch):

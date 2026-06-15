@@ -335,12 +335,28 @@ def ensure_issue_workstream(store, project: Project, repo: str | None = None) ->
 
 
 def project_workstreams(store, project: Project) -> list[ProjectWorkstream]:
-    ensure_iteration_workstream(store, project)
+    iteration = ensure_iteration_workstream(store, project)
+    issue_stream = None
     if project.spec_repo.strip():
         try:
-            ensure_issue_workstream(store, project)
+            issue_stream = ensure_issue_workstream(store, project)
         except ValueError:
             pass
+    for item in store.list(
+        Workstream,
+        workspace_id=project.workspace_id,
+        project_id=project.id,
+    ):
+        if item.workstream_id:
+            continue
+        if item.source == WorkstreamSource.manual:
+            item.workstream_id = iteration.id
+            store.put(item)
+        elif item.source == WorkstreamSource.issue and issue_stream is not None:
+            if item.repo in ("", issue_stream.repo):
+                item.workstream_id = issue_stream.id
+                item.repo = item.repo or issue_stream.repo
+                store.put(item)
     return store.list(
         ProjectWorkstream,
         workspace_id=project.workspace_id,

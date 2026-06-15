@@ -162,6 +162,7 @@ def test_full_loop(harness):
     assert len(detail["workstreams"]) == 1
     assert detail["workstreams"][0]["kind"] == "iteration"
     assert len(detail["work_items"]) == 1
+    assert detail["work_items"][0]["workstream_id"] == detail["workstreams"][0]["id"]
     assert len(detail["tasks"]) == 1
 
     # 2. runner registers and polls — gets the task after dispatch
@@ -169,6 +170,7 @@ def test_full_loop(harness):
     _pump(client, store)
     task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
     assert task is not None and task["kind"] == "work"
+    assert task["work_item_id"] == detail["work_items"][0]["id"]
 
     # 3. work result → orchestrator queues a verify task
     client.post(

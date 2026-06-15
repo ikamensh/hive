@@ -14,6 +14,7 @@ import logging
 from pathlib import Path
 
 from hive.backends import BACKEND_NAMES
+from hive.issues import ensure_iteration_workstream
 from hive.llm import LoopResult, ToolLoop, ToolSet, build_adapter
 from hive.models import (
     Autonomy,
@@ -78,10 +79,12 @@ class Tools:
     def create_workstream(self, title: str, description: str) -> str:
         """Create a workstream: a coarse direction of work (e.g. 'auth flow')
         touching a mostly-disjoint part of the codebase."""
+        iteration = ensure_iteration_workstream(self.store, self.project)
         ws = self.store.put(
             Workstream(
                 workspace_id=self.project.workspace_id,
                 project_id=self.project.id,
+                workstream_id=iteration.id,
                 title=title,
                 description=description,
             )
@@ -120,6 +123,9 @@ class Tools:
                 "error: GitHub issue work items are owned by the deterministic "
                 "issue pipeline. Use the Issues view to scan/run issues instead."
             )
+        if not ws.repo and repo:
+            ws.repo = repo
+            self.store.put(ws)
         if kind == TaskKind.work and self._unresolved_rejects(workstream_id) >= MAX_FIX_ROUNDS:
             return (
                 f"error: workstream {workstream_id} has {MAX_FIX_ROUNDS} verify rejects with no "
@@ -156,6 +162,7 @@ class Tools:
                 workspace_id=self.project.workspace_id,
                 project_id=self.project.id,
                 workstream_id=workstream_id,
+                work_item_id=workstream_id,
                 repo=repo,
                 branch=branch,
                 kind=TaskKind(kind),
