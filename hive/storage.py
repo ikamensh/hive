@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from hive.blobstore import GcsBlobStore, LocalBlobStore
 from hive.config import Config
 from hive.models import DEFAULT_WORKSPACE_ID, Workspace
 from hive.store import (
     FileStore,
     FirestoreStore,
-    MemoryStore,
     StoreBase,
     _COLLECTIONS,
 )

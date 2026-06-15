@@ -20,8 +20,6 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable, TypeVar
 
-log = logging.getLogger(__name__)
-
 from hive.models import (
     AgentConversation,
     DEFAULT_WORKSPACE_ID,
@@ -42,6 +40,8 @@ from hive.models import (
     Workspace,
     WorkspaceMembership,
 )
+
+log = logging.getLogger(__name__)
 
 M = TypeVar(
     "M",

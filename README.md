@@ -142,6 +142,15 @@ VITE_MOCK=1 npm run dev  # canned fixtures, no backend needed
 npm run build            # tsc --noEmit + vite build → web/dist (served by the control plane)
 ```
 
+### Local checks
+
+CI runs the same gates as pre-commit: Ruff, the backend pytest suite, and the web production build.
+
+```bash
+uv run pre-commit install
+uv run pre-commit run --all-files
+```
+
 ---
 
 ## Configuration
