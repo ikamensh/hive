@@ -6,11 +6,13 @@ export type GuessPropensity = "never" | "rarely" | "sometimes" | "often" | "alwa
 export type ProjectState =
   | "intake"
   | "working"
+  | "needs_attention"
   | "blocked_questions"
   | "blocked_resources"
   | "blocked_budget"
   | "blocked_clarity"
   | "idle_goal_complete"
+  | "idle"
   | "idle_no_workstreams";
 
 export interface Project {

@@ -6,13 +6,15 @@ import { StateBadge } from "../components/shared";
 import type { ProjectDetail } from "../types";
 
 function ProjectRow({ detail, cooldownHint }: { detail: ProjectDetail; cooldownHint?: string }) {
-  const { project, workstreams, work_items, tasks, questions } = detail;
+  const { project, workstreams, work_items, tasks, questions, human_tasks } = detail;
   const open = questions.filter((q) => q.status === "open").length;
+  const openTodos = human_tasks.filter((t) => t.status === "open").length;
   const active = work_items.filter((w) => w.status === "active").length;
   const issueNeeds = work_items.filter((w) => w.source === "issue" && (w.status === "blocked_clarity" || w.status === "rejected")).length;
   const issueRunning = work_items.filter((w) => w.source === "issue" && (w.status === "resolving" || w.status === "reviewing")).length;
   const running = tasks.filter((t) => t.status === "running").length;
   const cost = tasks.reduce((s, t) => s + t.cost_usd, 0);
+  const attentionCount = open + openTodos + issueNeeds;
 
   return (
     <Link to={`/p/${project.id}`} className="project-row">
@@ -25,7 +27,7 @@ function ProjectRow({ detail, cooldownHint }: { detail: ProjectDetail; cooldownH
         )}
         {project.paused && <span className="chip chip-paused">paused</span>}
       </div>
-      <StateBadge state={project.state} questionCount={open} cooldownHint={cooldownHint} />
+      <StateBadge state={project.state} attentionCount={attentionCount} cooldownHint={cooldownHint} />
       <div className="pr-stats">
         <span>
           <b>{active}</b> active work

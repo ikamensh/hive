@@ -33,10 +33,9 @@ lives in the spec repo. Decide and implement the canonical path: who writes
 `iteration.md`, and how hive notices a direct git edit (until GitHub webhooks
 land, an idle project gets no heartbeat).
 
-## Issues mode — selectable scan/run scope
+## Issue solving — selectable run scope
 The 2026-06-14 live validation target was issues #2-#4, but scanning the repo
 also ingested newly-open issue #5 and the deterministic queue started it after
-#4. We cancelled #5 from the UI and left it queued. Decide whether issues mode
-should always process every open issue, or whether the scan/run UI should allow
-an explicit subset or stop-after issue for validation batches and operator
-control.
+#4. We cancelled #5 from the UI and left it queued. Issue runs now support
+selected issues and all-open snapshots; keep validating whether the UI needs
+additional stop-after controls for operator-led validation batches.

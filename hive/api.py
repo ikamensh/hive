@@ -1865,7 +1865,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             project = store.get(Project, task.project_id)
             if project and conversation:
                 if conversation.status == ConversationStatus.done:
-                    project.state = ProjectState.idle_no_workstreams
+                    project.state = ProjectState.idle
                     store.put(project)
                     supervisor.wake(
                         task.project_id,

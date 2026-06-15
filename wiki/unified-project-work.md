@@ -283,9 +283,10 @@ The UI can display the reason text: "needs answers", "2 issue blockers",
 "runner login needed", "goal complete", etc. This is clearer than encoding
 issue-specific terminal states on the project.
 
-During migration, `blocked_clarity` can stay as the attention reason for issue
-blockers, but issue-queue terminal states should live on issue workstreams/runs
-rather than project identities.
+Issue work items still use `blocked_clarity` for their own lifecycle, but the
+project-level state should surface the generic `needs_attention` condition.
+Issue-queue terminal states live on issue workstreams/runs rather than project
+identities.
 
 ## API shape
 
@@ -325,7 +326,7 @@ Backwards compatibility:
 
 ## UI design
 
-Keep the UI lean. Remove the setup-time `work source` toggle; project creation
+Keep the UI lean. Remove the setup-time source-mode toggle; project creation
 always creates a project. Issue solving appears as an action inside the project,
 not as a separate project type or a new app section.
 

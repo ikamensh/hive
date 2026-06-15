@@ -228,11 +228,11 @@ def test_compute_state_issue_items_are_project_attention():
     # a pending resolve/review task whose backend is available → working
     assert compute_state(p, [_ws(p, WorkstreamStatus.resolving)], 0, [_task(p)], {"codex"}) == ProjectState.working
     # open issue, no task in flight → waiting on a human
-    assert compute_state(p, [_ws(p, WorkstreamStatus.blocked_clarity)], 0, [], set()) == ProjectState.blocked_clarity
-    assert compute_state(p, [_ws(p, WorkstreamStatus.rejected)], 0, [], set()) == ProjectState.blocked_clarity
+    assert compute_state(p, [_ws(p, WorkstreamStatus.blocked_clarity)], 0, [], set()) == ProjectState.needs_attention
+    assert compute_state(p, [_ws(p, WorkstreamStatus.rejected)], 0, [], set()) == ProjectState.needs_attention
     # drained issue work does not change the project kind
-    assert compute_state(p, [_ws(p, WorkstreamStatus.done)], 0, [], set()) == ProjectState.idle_no_workstreams
-    assert compute_state(p, [_ws(p, WorkstreamStatus.cancelled)], 0, [], set()) == ProjectState.idle_no_workstreams
+    assert compute_state(p, [_ws(p, WorkstreamStatus.done)], 0, [], set()) == ProjectState.idle
+    assert compute_state(p, [_ws(p, WorkstreamStatus.cancelled)], 0, [], set()) == ProjectState.idle
 
 
 # -- dormant ordered variant -------------------------------------------------

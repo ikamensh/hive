@@ -79,7 +79,7 @@ const projects: Project[] = [
     goal_complete_note: "",
     daily_budget_usd: 0,
     intake_conversation_id: "conv-atlas",
-    state: "blocked_questions",
+    state: "needs_attention",
     created_at: now - 86400 * 6,
   },
   {
@@ -148,7 +148,7 @@ const projects: Project[] = [
     goal_complete_note: "",
     daily_budget_usd: 0,
     intake_conversation_id: "",
-    state: "blocked_clarity",
+    state: "needs_attention",
     created_at: now - 86400 * 3,
   },
 ];
@@ -739,7 +739,7 @@ export const api = {
       goal_complete: false,
       goal_complete_note: "",
       intake_conversation_id: "",
-      state: "idle_no_workstreams",
+      state: "idle",
       created_at: Date.now() / 1000,
     };
     projects.push(p);
@@ -824,7 +824,7 @@ export const api = {
     conversation.transcript.push({ role: "assistant", text: conversation.latest_brief });
     conversation.last_task_id = task.id;
     conversation.updated_at = Date.now() / 1000;
-    if (action === "approve") project.state = "idle_no_workstreams";
+    if (action === "approve") project.state = "idle";
     return structuredClone({ conversation, task });
   },
 

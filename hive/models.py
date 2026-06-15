@@ -81,11 +81,13 @@ class GuessPropensity(StrEnum):
 class ProjectState(StrEnum):
     intake = "intake"  # intake scout is aligning the project before planning
     working = "working"
+    needs_attention = "needs_attention"
     blocked_questions = "blocked_questions"
     blocked_resources = "blocked_resources"
     blocked_budget = "blocked_budget"  # daily soft cap reached; resets at UTC midnight
-    blocked_clarity = "blocked_clarity"  # issue solving: open issues stuck on a human (blocked/rejected)
+    blocked_clarity = "blocked_clarity"
     idle_goal_complete = "idle_goal_complete"
+    idle = "idle"
     idle_no_workstreams = "idle_no_workstreams"
 
 
@@ -104,7 +106,7 @@ class Project(BaseModel):
     goal_complete: bool = False
     goal_complete_note: str = ""
     intake_conversation_id: str = ""
-    state: ProjectState = ProjectState.idle_no_workstreams  # cached by supervisor
+    state: ProjectState = ProjectState.idle  # cached by supervisor
     created_at: float = Field(default_factory=now)
 
 

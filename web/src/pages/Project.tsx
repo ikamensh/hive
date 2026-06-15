@@ -1172,7 +1172,7 @@ export default function ProjectPage() {
           {project.name}
           {configured && <span className="head-repo">{repoShort(project.spec_repo)}</span>}
         </h1>
-        <StateBadge state={project.state} questionCount={openQs.length} />
+        <StateBadge state={project.state} attentionCount={inboxCount} />
       </div>
 
       {needsSetup || needsStart ? (

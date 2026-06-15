@@ -70,7 +70,7 @@ def test_questions_block_only_when_nothing_active():
     p = Project(name="p", spec_repo="x")
     active = Workstream(project_id=p.id, title="a")
     parked = Workstream(project_id=p.id, title="b", status=WorkstreamStatus.parked)
-    assert compute_state(p, [parked], 2, [], set()) == ProjectState.blocked_questions
+    assert compute_state(p, [parked], 2, [], set()) == ProjectState.needs_attention
     # An active workstream means the orchestrator owes a decision: still working.
     assert compute_state(p, [active, parked], 2, [], set()) == ProjectState.working
     # ...unless the daily budget is spent.
@@ -79,7 +79,7 @@ def test_questions_block_only_when_nothing_active():
 
 def test_no_workstreams_is_idle():
     p = Project(name="p", spec_repo="x")
-    assert compute_state(p, [], 0, [], set()) == ProjectState.idle_no_workstreams
+    assert compute_state(p, [], 0, [], set()) == ProjectState.idle
 
 
 def test_supervisor_holds_new_spec_project_in_intake_until_approved():
@@ -99,7 +99,7 @@ def test_supervisor_holds_new_spec_project_in_intake_until_approved():
     )
     project.intake_conversation_id = conversation.id
     store.put(project)
-    assert sup.refresh_state(project) == ProjectState.idle_no_workstreams
+    assert sup.refresh_state(project) == ProjectState.idle
 
 
 def test_dispatch_serializes_per_repo():

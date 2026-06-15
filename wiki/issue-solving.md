@@ -54,7 +54,7 @@ kodo's codex session is **text-only** (`query(prompt: str, ...)`); there is no i
   - `cancelled` — issue closed on GitHub by a human.
   - Re-scan re-queues any still-open issue that isn't `done` and has no live task (`blocked_clarity`/`rejected`/reopened `cancelled`/errored-mid-flight) so a clarified/reopened issue is retried in order.
 - `TaskKind`: `resolve`, `review` (replacing the interim `clarity` task kind). Result markers parsed deterministically (mirroring `parse_verdict`): resolve → `OUTCOME: BLOCKED|FIXED`; review → `REVIEW: ACCEPT|REJECT`.
-- `ProjectState`: `working` when tasks are pending/running, `blocked_clarity` when issue work is waiting on a human, and `idle_no_workstreams` when no active project work remains. Drained issue queues are represented on the issue workstream/run rather than as a project-wide terminal state.
+- `ProjectState`: `working` when tasks are pending/running, `needs_attention` when issue work is waiting on a human and nothing else can progress, and `idle` when no active project work remains. Drained issue queues are represented on the issue workstream/run rather than as a project-wide terminal state.
 
 ## Who does what on GitHub
 
