@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from test_api_e2e import ScriptedOrchestrator, _pump, _register_usable_runner
 
 from hive.cli import (
+    UVICORN_GRACEFUL_SHUTDOWN_S,
     build_parser,
     detect_config,
     load_stored_config,
@@ -198,6 +199,28 @@ def test_stored_config_can_enable_runner_autostart(monkeypatch):
     notes = prepare_run_env(env, {"HIVE_AUTOSTART_RUNNER": "true"})
     assert env["HIVE_AUTOSTART_RUNNER"] == "true"
     assert any("local runner autostart: enabled" in n for n in notes)
+
+
+def test_run_control_plane_caps_graceful_shutdown(monkeypatch, tmp_path, capsys):
+    import uvicorn
+
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    _fake_gh(monkeypatch, "")
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+    monkeypatch.setattr("hive.cli.load_stored_config", lambda: {})
+    monkeypatch.setenv("HIVE_DATA_DIR", str(tmp_path))
+
+    from hive.cli import main
+
+    main(["run", "--host", "127.0.0.1", "--port", "8765"])
+
+    assert calls
+    assert calls[0][1]["timeout_graceful_shutdown"] == UVICORN_GRACEFUL_SHUTDOWN_S
+    assert "hive control plane" in capsys.readouterr().out
 
 
 def test_config_command_set_show_unset(tmp_path, monkeypatch, capsys):
