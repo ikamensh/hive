@@ -10,7 +10,7 @@ The point isn't just "an agent writes code." It's the loop around it: hive decom
 
 ## Quickstart: run hive on your laptop
 
-This runs the whole system — control plane + a runner — on one machine. Without `HIVE_GCP_PROJECT`, projects persist as JSON under `HIVE_DATA_DIR/store` (default `/tmp/hive-data/store`). Perfect for a first interaction.
+This runs the control-plane process and a runner on one machine, but runtime state still lives in managed services: Firestore for documents and GCS for blobs. Local file persistence is only for tests and one-time migration of old data.
 
 ### 0. Prerequisites
 
@@ -18,6 +18,7 @@ This runs the whole system — control plane + a runner — on one machine. With
 - **At least one agent CLI installed and logged in** — `claude`, `cursor`, `codex`, or `gemini-cli`. This is what actually writes the code.
 - **An orchestrator API key** — `OPENAI_API_KEY` *or* `GEMINI_API_KEY`. This is the "brain" that plans and decides (separate from the agent CLIs above).
 - **`gh` logged in** (`gh auth login`) — hive pushes commits/PRs using your GitHub credentials.
+- **GCP application credentials** (`gcloud auth application-default login`) with access to the Firestore project and GCS bucket.
 - **A GitHub repo to point at** — the project's *spec home* (holds `mission.md` / `iteration.md`). For a quick test, any repo you can push to works; hive will write the goal into it.
 
 ### 1. Clone and set up the environment
@@ -33,6 +34,7 @@ uv sync          # creates .venv (Python 3.13, pinned in .python-version) and in
 ### 2. Start the control plane
 
 ```bash
+uv run hive doctor storage
 uv run hive run
 ```
 
@@ -41,11 +43,14 @@ uv run hive run
 ```
   github: token from `gh auth token`
   orchestrator: OPENAI_API_KEY from environment (provider=auto)
-  store: local files (/tmp/hive-data/store; set HIVE_GCP_PROJECT for Firestore)
+  store: Firestore (hive-ikamen, from stored config)
+  blobs: GCS (hive-ikamen-blobs, from stored config)
+  workspace: default (ikamen)
+  public url: http://127.0.0.1:8000
 hive control plane → http://127.0.0.1:8000
 ```
 
-Without `HIVE_GCP_PROJECT` it uses a local file store — projects survive restarts under `HIVE_DATA_DIR`. Leave it running. (Flags: `--host`, `--port`, `--reload`.)
+If `HIVE_GCP_PROJECT` or `HIVE_GCS_BUCKET` is missing, `hive run` refuses to start and prints the exact variables to set. Leave it running. (Flags: `--host`, `--port`, `--reload`.)
 
 **Giving hive its own tokens.** Autodetected tokens (the `gh` token, `OPENAI_API_KEY`/`GEMINI_API_KEY` from your shell) are just the starting point. To have hive use *separate* keys — e.g. so its spend is billed/tracked on their own account — store them in hive's own config (`~/.config/hive/config.env`, `chmod 600`); stored values take precedence over the ambient environment on `hive run`:
 
@@ -164,19 +169,22 @@ The iteration goal is always set *through hive* (`hive iterate` / the UI), which
 - `OPENAI_API_KEY` uses OpenAI's API; `HIVE_OPENAI_BASE_URL` can point at an OpenAI-compatible endpoint. `GEMINI_API_KEY` uses Gemini.
 - In `auto`, an explicit model prefix picks the provider; otherwise OpenAI is used when `OPENAI_API_KEY` exists, then Gemini.
 
-**Persisting state across restarts.** Local runs write JSON to `HIVE_DATA_DIR/store` (default `/tmp/hive-data/store`) and blobs to `HIVE_DATA_DIR/blobs`. Set a stable data dir:
+**Persisting state across restarts.** Runtime state requires Firestore and GCS:
 
 ```bash
-HIVE_DATA_DIR=~/.hive-data uv run hive run
+HIVE_GCP_PROJECT=<gcp-project> HIVE_GCS_BUCKET=<bucket> uv run hive run
 ```
 
-For cloud persistence (or to migrate local data), set Firestore + optional GCS:
+For a legacy local file store, migrate it explicitly while control planes are stopped:
 
 ```bash
-HIVE_GCP_PROJECT=<gcp-project> HIVE_GCS_BUCKET=<bucket> HIVE_DATA_DIR=~/.hive-data uv run hive run
+uv run hive migrate-local-state \
+  --data-dir ~/.hive-data \
+  --gcp-project <gcp-project> \
+  --gcs-bucket <bucket>
 ```
 
-The Resources page shows the active store and can export local files to GCP (`POST /api/storage/export`). After export, restart with `HIVE_GCP_PROJECT` to use Firestore.
+The Settings page shows whether the active runtime is fully managed. Firestore without GCS is not a supported runtime mode.
 
 A leader lease in Firestore (`settings/leader_lease`) makes a *second* control plane on the same database refuse to start — so if a deployed instance owns that project, stop it first.
 

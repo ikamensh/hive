@@ -38,9 +38,10 @@ const emptyOverview: Overview = {
 };
 
 function storageLabel(storage: StorageInfo): string {
-  if (storage.backend === "firestore") return "persistence: cloud store";
-  if (storage.backend === "file") return "persistence: local files";
-  return "persistence: in-memory";
+  if (storage.fully_managed) return "persistence: managed";
+  if (storage.backend === "firestore") return "persistence: mixed storage";
+  if (storage.backend === "file") return "persistence: legacy local";
+  return "persistence: test memory";
 }
 
 function AccountMenu({

@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 from hive.config_file import (
     CONFIG_KEYS,
@@ -61,6 +62,17 @@ def build_parser() -> argparse.ArgumentParser:
     cunset.add_argument("key", choices=sorted(CONFIG_KEYS))
     cimp = csub.add_parser("import", help="seed stored config from `gh` + current environment")
     cimp.add_argument("--force", action="store_true", help="overwrite keys already stored")
+
+    p = sub.add_parser("doctor", help="run local preflight checks")
+    dsub = p.add_subparsers(dest="doctor_command", required=True)
+    dsub.add_parser("storage", help="check Firestore/GCS managed state access")
+
+    p = sub.add_parser("migrate-local-state", help="copy a legacy local store to Firestore/GCS")
+    p.add_argument("--data-dir", default=os.environ.get("HIVE_DATA_DIR", "/tmp/hive-data"))
+    p.add_argument("--gcp-project", required=True)
+    p.add_argument("--gcs-bucket", required=True)
+    p.add_argument("--workspace-id", default="")
+    p.add_argument("--no-verify", action="store_true", help="skip readback verification")
 
     p = sub.add_parser("projects", help="list projects")
 
@@ -212,10 +224,19 @@ def prepare_run_env(env: dict[str, str], stored: dict[str, str]) -> list[str]:
             f"store: Firestore ({env['HIVE_GCP_PROJECT']}, from {src('HIVE_GCP_PROJECT')})"
         )
     else:
-        data_dir = env.get("HIVE_DATA_DIR", "/tmp/hive-data")
-        notes.append(
-            f"store: local files ({data_dir}/store; set HIVE_GCP_PROJECT for Firestore)"
-        )
+        notes.append("store: MISSING HIVE_GCP_PROJECT (Firestore is required)")
+
+    if env.get("HIVE_GCS_BUCKET"):
+        notes.append(f"blobs: GCS ({env['HIVE_GCS_BUCKET']}, from {src('HIVE_GCS_BUCKET')})")
+    else:
+        notes.append("blobs: MISSING HIVE_GCS_BUCKET (GCS is required)")
+
+    notes.append(
+        f"workspace: {env.get('HIVE_WORKSPACE_ID', 'default')} "
+        f"({env.get('HIVE_WORKSPACE_NAME', 'ikamen')})"
+    )
+    if env.get("HIVE_PUBLIC_URL"):
+        notes.append(f"public url: {env['HIVE_PUBLIC_URL']}")
 
     auth_mode = env.get("HIVE_AUTH_MODE", "dev")
     if auth_mode == "github":
@@ -272,14 +293,31 @@ def _run_config(args: argparse.Namespace) -> None:
         raise AssertionError(f"unhandled config command {action}")
 
 
+def _managed_state_missing(env: dict[str, str]) -> list[str]:
+    return [key for key in ("HIVE_GCP_PROJECT", "HIVE_GCS_BUCKET") if not env.get(key, "").strip()]
+
+
 def _run_control_plane(args: argparse.Namespace) -> None:
     import uvicorn
 
     from hive.local_runner import local_control_plane_url
 
+    os.environ.setdefault("HIVE_PUBLIC_URL", local_control_plane_url(args.host, args.port))
     for line in prepare_run_env(os.environ, load_stored_config()):
         print(f"  {line}")
-    os.environ.setdefault("HIVE_PUBLIC_URL", local_control_plane_url(args.host, args.port))
+    if missing := _managed_state_missing(os.environ):
+        print(
+            "\nHive requires managed state.\n"
+            f"Missing: {', '.join(missing)}\n\n"
+            "Set:\n"
+            "  HIVE_GCP_PROJECT=<gcp-project>\n"
+            "  HIVE_GCS_BUCKET=<gcs-bucket>\n\n"
+            "Then run:\n"
+            "  gcloud auth application-default login\n"
+            "  uv run hive run",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     print(f"hive control plane → http://{args.host}:{args.port}\n")
     uvicorn.run(
         "hive.api:production_app",
@@ -289,6 +327,43 @@ def _run_control_plane(args: argparse.Namespace) -> None:
         reload=args.reload,
         timeout_graceful_shutdown=UVICORN_GRACEFUL_SHUTDOWN_S,
     )
+
+
+def _run_doctor(args: argparse.Namespace) -> None:
+    from hive.config import Config
+    from hive.storage import managed_state_doctor
+
+    prepare_run_env(os.environ, load_stored_config())
+    if args.doctor_command == "storage":
+        result = managed_state_doctor(Config.from_env())
+    else:
+        raise AssertionError(f"unhandled doctor command {args.doctor_command}")
+    print(json.dumps(result, indent=2))
+    if not result.get("ok"):
+        raise SystemExit(1)
+
+
+def _run_migrate_local_state(args: argparse.Namespace) -> None:
+    from hive.blobstore import LocalBlobStore
+    from hive.storage import migrate_local_state
+    from hive.store import FileStore
+
+    data_dir = Path(args.data_dir).expanduser()
+    stored = load_stored_config()
+    workspace_id = (
+        args.workspace_id
+        or stored.get("HIVE_WORKSPACE_ID")
+        or os.environ.get("HIVE_WORKSPACE_ID", "default")
+    )
+    result = migrate_local_state(
+        FileStore(data_dir / "store"),
+        LocalBlobStore(data_dir / "blobs"),
+        gcp_project=args.gcp_project,
+        gcs_bucket=args.gcs_bucket,
+        workspace_id=workspace_id,
+        verify=not args.no_verify,
+    )
+    print(json.dumps(result, indent=2))
 
 
 def run(args: argparse.Namespace, client) -> dict | list:
@@ -427,6 +502,12 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "config":
         _run_config(args)
+        return
+    if args.command == "doctor":
+        _run_doctor(args)
+        return
+    if args.command == "migrate-local-state":
+        _run_migrate_local_state(args)
         return
     auth = os.environ.get("HIVE_BASIC_AUTH", "")
     client = httpx.Client(

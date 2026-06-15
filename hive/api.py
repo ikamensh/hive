@@ -93,8 +93,7 @@ from hive.models import (
     parse_verdict,
 )
 from hive.specrepo import SpecRepo
-from hive.storage import export_to_gcp, storage_info
-from hive.store import FileStore
+from hive.storage import storage_info
 from hive.supervisor import Supervisor
 
 log = logging.getLogger("hive.api")
@@ -219,11 +218,6 @@ class ResourcePatch(BaseModel):
 
 class LocalRunnerPatch(BaseModel):
     autostart: bool
-
-
-class StorageExport(BaseModel):
-    gcp_project: str
-    gcs_bucket: str = ""
 
 
 def _ensure_probe_repo(data_dir: Path) -> Path:
@@ -1665,27 +1659,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     @app.get("/api/storage")
     def get_storage(ctx: AuthContext = Depends(current)):
         return _storage_payload()
-
-    @app.post("/api/storage/export")
-    def export_storage(body: StorageExport, ctx: AuthContext = Depends(current)):
-        if not isinstance(store, FileStore):
-            raise HTTPException(409, "export is only available from the local file store")
-        if not body.gcp_project.strip():
-            raise HTTPException(400, "gcp_project is required")
-        from hive.blobstore import LocalBlobStore
-
-        if blobs is None or not isinstance(blobs, LocalBlobStore):
-            raise HTTPException(409, "blob export requires a local blob store")
-        try:
-            return export_to_gcp(
-                store,
-                blobs,
-                gcp_project=body.gcp_project.strip(),
-                gcs_bucket=body.gcs_bucket.strip(),
-            )
-        except Exception as exc:
-            log.exception("storage export failed")
-            raise HTTPException(503, f"export failed: {exc}") from exc
 
     # ---- runner protocol -------------------------------------------------------
 

@@ -17,7 +17,6 @@ import type {
   Question,
   ResourcesPayload,
   ScanResult,
-  StorageExportResult,
   StorageInfo,
   Subscription,
   Task,
@@ -175,11 +174,6 @@ const realApi = {
   validateGithubRepo: (ref: string) =>
     http<GithubRepo>(`/api/github/repos/validate?ref=${encodeURIComponent(ref)}`),
   storage: () => http<StorageInfo>("/api/storage"),
-  exportStorage: (body: { gcp_project: string; gcs_bucket?: string }) =>
-    http<StorageExportResult>("/api/storage/export", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
 };
 
 export const api: typeof realApi = import.meta.env.VITE_MOCK === "1" ? (mockApi as typeof realApi) : realApi;

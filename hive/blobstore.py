@@ -18,6 +18,9 @@ class LocalBlobStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
 
+    def delete(self, name: str) -> None:
+        (self.root / name).unlink(missing_ok=True)
+
 
 class GcsBlobStore:
     def __init__(self, bucket: str) -> None:
@@ -31,3 +34,6 @@ class GcsBlobStore:
 
     def put(self, name: str, data: bytes) -> None:
         self.bucket.blob(name).upload_from_string(data)
+
+    def delete(self, name: str) -> None:
+        self.bucket.blob(name).delete()

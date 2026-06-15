@@ -170,7 +170,8 @@ def test_prepare_run_env_extracts_gh_token(monkeypatch):
     assert env["HIVE_GH_TOKEN"] == "ghp_abc"
     assert any("gh auth token" in n for n in notes)
     assert any("OPENAI_API_KEY from environment" in n for n in notes)
-    assert any("local files" in n for n in notes)
+    assert any("MISSING HIVE_GCP_PROJECT" in n for n in notes)
+    assert any("MISSING HIVE_GCS_BUCKET" in n for n in notes)
 
 
 def test_prepare_run_env_no_gh_no_key(monkeypatch):
@@ -186,12 +187,23 @@ def test_stored_config_overrides_ambient_env(monkeypatch):
     # gh would offer a token, but the stored value must win (separate hive key).
     _fake_gh(monkeypatch, "from-gh")
     env = {"OPENAI_API_KEY": "shell-key", "HIVE_GH_TOKEN": "shell-gh"}
-    stored = {"OPENAI_API_KEY": "hive-key", "HIVE_GH_TOKEN": "hive-gh", "HIVE_GCP_PROJECT": "proj"}
+    stored = {
+        "OPENAI_API_KEY": "hive-key",
+        "HIVE_GH_TOKEN": "hive-gh",
+        "HIVE_GCP_PROJECT": "proj",
+        "HIVE_GCS_BUCKET": "bucket",
+        "HIVE_WORKSPACE_ID": "team",
+        "HIVE_WORKSPACE_NAME": "Team",
+        "HIVE_PUBLIC_URL": "https://hive.example",
+    }
     notes = prepare_run_env(env, stored)
     assert env["OPENAI_API_KEY"] == "hive-key"
     assert env["HIVE_GH_TOKEN"] == "hive-gh"
     assert any("OPENAI_API_KEY from stored config" in n for n in notes)
     assert any("Firestore (proj, from stored config)" in n for n in notes)
+    assert any("GCS (bucket, from stored config)" in n for n in notes)
+    assert any("workspace: team (Team)" in n for n in notes)
+    assert any("public url: https://hive.example" in n for n in notes)
 
 
 def test_stored_config_can_enable_runner_autostart(monkeypatch):
@@ -200,6 +212,23 @@ def test_stored_config_can_enable_runner_autostart(monkeypatch):
     notes = prepare_run_env(env, {"HIVE_AUTOSTART_RUNNER": "true"})
     assert env["HIVE_AUTOSTART_RUNNER"] == "true"
     assert any("local runner autostart: enabled" in n for n in notes)
+
+
+def test_run_control_plane_requires_managed_state(monkeypatch, tmp_path, capsys):
+    import uvicorn
+
+    _fake_gh(monkeypatch, "")
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
+    monkeypatch.setattr("hive.cli.load_stored_config", lambda: {})
+    monkeypatch.setenv("HIVE_DATA_DIR", str(tmp_path))
+
+    from hive.cli import main
+
+    with pytest.raises(SystemExit) as exc:
+        main(["run", "--host", "127.0.0.1", "--port", "8765"])
+
+    assert exc.value.code == 2
+    assert "Hive requires managed state" in capsys.readouterr().err
 
 
 def test_run_control_plane_caps_graceful_shutdown(monkeypatch, tmp_path, capsys):
@@ -214,6 +243,8 @@ def test_run_control_plane_caps_graceful_shutdown(monkeypatch, tmp_path, capsys)
     monkeypatch.setattr(uvicorn, "run", fake_run)
     monkeypatch.setattr("hive.cli.load_stored_config", lambda: {})
     monkeypatch.setenv("HIVE_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("HIVE_GCP_PROJECT", "proj")
+    monkeypatch.setenv("HIVE_GCS_BUCKET", "bucket")
 
     from hive.cli import main
 
@@ -222,6 +253,71 @@ def test_run_control_plane_caps_graceful_shutdown(monkeypatch, tmp_path, capsys)
     assert calls
     assert calls[0][1]["timeout_graceful_shutdown"] == UVICORN_GRACEFUL_SHUTDOWN_S
     assert "hive control plane" in capsys.readouterr().out
+
+
+def test_doctor_storage_uses_managed_state_config(monkeypatch, capsys):
+    monkeypatch.setenv("HIVE_GCP_PROJECT", "proj")
+    monkeypatch.setenv("HIVE_GCS_BUCKET", "bucket")
+    monkeypatch.setenv("HIVE_RUNNER_TOKEN", "runner")
+    monkeypatch.setattr("hive.cli.load_stored_config", lambda: {})
+    monkeypatch.setattr(
+        "hive.storage.managed_state_doctor",
+        lambda config: {
+            "ok": True,
+            "gcp_project": config.gcp_project,
+            "gcs_bucket": config.gcs_bucket,
+            "workspace_id": config.workspace_id,
+            "checks": [],
+            "leader": None,
+        },
+    )
+
+    from hive.cli import main
+
+    main(["doctor", "storage"])
+
+    shown = __import__("json").loads(capsys.readouterr().out)
+    assert shown["ok"] is True
+    assert shown["gcp_project"] == "proj"
+    assert shown["gcs_bucket"] == "bucket"
+
+
+def test_migrate_local_state_command(monkeypatch, tmp_path, capsys):
+    calls = []
+
+    def fake_migrate(store, blobs, **kwargs):
+        calls.append((store.root, blobs.root, kwargs))
+        return {"ok": True, "documents": {}, "blobs": 0, "verified": kwargs["verify"]}
+
+    monkeypatch.setattr("hive.storage.migrate_local_state", fake_migrate)
+    monkeypatch.setattr("hive.cli.load_stored_config", lambda: {})
+
+    from hive.cli import main
+
+    main([
+        "migrate-local-state",
+        "--data-dir",
+        str(tmp_path),
+        "--gcp-project",
+        "proj",
+        "--gcs-bucket",
+        "bucket",
+        "--no-verify",
+    ])
+
+    assert calls == [
+        (
+            tmp_path / "store",
+            tmp_path / "blobs",
+            {
+                "gcp_project": "proj",
+                "gcs_bucket": "bucket",
+                "workspace_id": "default",
+                "verify": False,
+            },
+        )
+    ]
+    assert __import__("json").loads(capsys.readouterr().out)["verified"] is False
 
 
 def test_config_command_set_show_unset(tmp_path, monkeypatch, capsys):

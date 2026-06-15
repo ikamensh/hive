@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from hive.config import Config
 from hive.models import Machine, Project
-from hive.store import MemoryStore
+from hive.store import FileStore, MemoryStore
 from hive.supervisor import Supervisor
 
 
@@ -60,12 +60,23 @@ def test_dev_auth_bootstraps_user_workspace_and_machine():
     assert [m.name for m in machines] == ["control-test"]
 
 
-def test_dev_auth_concurrent_file_store(tmp_path, monkeypatch):
-    """Local launch uses FileStore; the SPA polls /api/auth/me on every page."""
-    monkeypatch.setenv("HIVE_DATA_DIR", str(tmp_path))
-    from hive.api import production_app
+def test_dev_auth_concurrent_file_store(tmp_path):
+    """FileStore remains available for tests; production runtime uses managed state."""
+    from hive.api import create_app
 
-    client = TestClient(production_app())
+    store = FileStore(tmp_path / "store")
+    config = Config(
+        gcp_project="",
+        gcs_bucket="",
+        gh_token="",
+        gemini_api_key="",
+        orch_model="",
+        runner_token="t",
+        data_dir=tmp_path,
+        machine_name="control-test",
+    )
+    supervisor = Supervisor(store, lambda p, e: None, machine_name=config.machine_name)
+    client = TestClient(create_app(store, supervisor, config))
 
     def poll_auth():
         response = client.get("/api/auth/me")

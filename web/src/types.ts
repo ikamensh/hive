@@ -218,14 +218,7 @@ export interface StorageInfo {
   gcs_bucket?: string | null;
   counts: Record<string, number>;
   export_available: boolean;
-}
-
-export interface StorageExportResult {
-  gcp_project: string;
-  gcs_bucket?: string | null;
-  documents: Record<string, number>;
-  blobs: number;
-  message: string;
+  fully_managed: boolean;
 }
 
 export interface RunnerInfo {

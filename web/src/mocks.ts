@@ -718,7 +718,8 @@ export const api = {
       blob_path: "/tmp/hive-data/blobs",
       gcs_bucket: null,
       counts: { projects: projects.length },
-      export_available: true,
+      export_available: false,
+      fully_managed: false,
     },
   }),
   logout: async (): Promise<void> => {},
@@ -1152,15 +1153,8 @@ export const api = {
     blob_path: "/tmp/hive-data/blobs",
     gcs_bucket: null,
     counts: { projects: projects.length },
-    export_available: true,
-  }),
-
-  exportStorage: async () => ({
-    gcp_project: "hive-ikamen",
-    gcs_bucket: null,
-    documents: { projects: projects.length },
-    blobs: 0,
-    message: "Exported to Firestore project 'hive-ikamen'. Restart with HIVE_GCP_PROJECT='hive-ikamen' to use the cloud store.",
+    export_available: false,
+    fully_managed: false,
   }),
 };
 
