@@ -205,6 +205,13 @@ def test_compute_state_issues_mode():
     assert compute_state(p, [_ws(p, WorkstreamStatus.cancelled)], 0, [], set()) == ProjectState.idle_no_open_issues
 
 
+def test_compute_state_normal_project_surfaces_issue_blockers():
+    p = Project(name="p", spec_repo="x")
+    assert compute_state(p, [_ws(p, WorkstreamStatus.blocked_clarity)], 0, [], set()) == ProjectState.blocked_clarity
+    assert compute_state(p, [_ws(p, WorkstreamStatus.rejected)], 0, [], set()) == ProjectState.blocked_clarity
+    assert compute_state(p, [_ws(p, WorkstreamStatus.done)], 0, [], set()) == ProjectState.idle_no_workstreams
+
+
 # -- dormant ordered variant -------------------------------------------------
 
 
@@ -255,7 +262,7 @@ def app(tmp_path):
 def _issues_project_via_api(client):
     pid = client.post("/api/projects", json={"name": "iss"}).json()["id"]
     client.patch(f"/api/projects/{pid}",
-                 json={"spec_repo": "https://github.com/o/r.git", "work_source": "issues"})
+                 json={"spec_repo": "https://github.com/o/r.git"})
     return pid
 
 
@@ -500,11 +507,19 @@ def test_scan_downloads_attachments_and_serves_to_runner(app, monkeypatch):
     assert got.status_code == 200 and got.content == b"PNGBYTES"
 
 
-def test_scan_rejected_when_not_issues_mode(app):
-    client, _ = app
+def test_scan_allowed_on_normal_project(app, monkeypatch):
+    client, store = app
     project = client.post("/api/projects", json={"name": "spec"}).json()
     client.patch(f"/api/projects/{project['id']}", json={"spec_repo": "https://github.com/o/r.git"})
-    assert client.post(f"/api/projects/{project['id']}/scan-issues").status_code == 400
+    _pass_preflight(monkeypatch)
+    monkeypatch.setattr("hive.api.fetch_open_issues_full", lambda repo, token: [issue(9, "normal project bug")])
+
+    resp = client.post(f"/api/projects/{project['id']}/scan-issues")
+
+    assert resp.status_code == 200
+    assert resp.json()["open_issues"] == 1
+    ws = store.list(Workstream, project_id=project["id"])[0]
+    assert ws.source == WorkstreamSource.issue and ws.issue_number == 9
 
 
 # -- preflight ---------------------------------------------------------------
@@ -525,11 +540,7 @@ def test_preflight_checks(monkeypatch):
                  orch_model="", runner_token="x", data_dir=".")
     store = MemoryStore()
 
-    spec = store.put(Project(name="s", spec_repo="https://github.com/o/r.git"))
-    by_name = {c.name: c for c in preflight_checks(store, cfg, spec)}
-    assert not by_name["issues_mode"].ok  # spec mode → hard fail
-
-    project = issues_project(store)
+    project = store.put(Project(name="s", spec_repo="https://github.com/o/r.git"))
     _usable_codex(store, project)
     monkeypatch.setattr("hive.preflight.repo_permissions",
                         lambda repo, token: {"full_name": "o/r", "push": True, "has_issues": True, "default_branch": "main"})

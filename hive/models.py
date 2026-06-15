@@ -94,10 +94,10 @@ class ProjectState(StrEnum):
     blocked_questions = "blocked_questions"
     blocked_resources = "blocked_resources"
     blocked_budget = "blocked_budget"  # daily soft cap reached; resets at UTC midnight
-    blocked_clarity = "blocked_clarity"  # issues mode: open issues stuck on a human (blocked/rejected)
+    blocked_clarity = "blocked_clarity"  # issue solving: open issues stuck on a human (blocked/rejected)
     idle_goal_complete = "idle_goal_complete"
     idle_no_workstreams = "idle_no_workstreams"
-    idle_no_open_issues = "idle_no_open_issues"  # issues mode: queue drained
+    idle_no_open_issues = "idle_no_open_issues"  # issue solving: queue drained
 
 
 class Project(BaseModel):
@@ -154,7 +154,7 @@ class AgentConversation(BaseModel):
 
 class WorkstreamStatus(StrEnum):
     active = "active"
-    queued = "queued"  # issues mode: ingested, awaiting its turn (strict one-at-a-time)
+    queued = "queued"  # issue solving: ingested, awaiting its turn (strict one-at-a-time)
     parked = "parked"
     done = "done"
     # issues-mode per-issue pipeline (see wiki/issues-mode.md):
@@ -203,9 +203,9 @@ class TaskKind(StrEnum):
     verify = "verify"
     probe = "probe"
     intake = "intake"
-    resolve = "resolve"  # issues mode: one codex session clarifies then (if clear) fixes
-    review = "review"  # issues mode: fresh agent reviews the fix, may fix on the spot
-    preflight = "preflight"  # issues mode: runner self-check (git push + gh auth) before a big run
+    resolve = "resolve"  # issue solving: one codex session clarifies then (if clear) fixes
+    review = "review"  # issue solving: fresh agent reviews the fix, may fix on the spot
+    preflight = "preflight"  # issue solving: runner self-check (git push + gh auth) before a big run
 
 
 class Verdict(StrEnum):
@@ -271,9 +271,9 @@ class Task(BaseModel):
     conversation_id: str = ""
     conversation_turn: str = ""  # intake: initial | message | proceed | finalize
     session_handle: str = ""  # runner resumes this backend session when possible
-    issue_number: int = 0  # issues mode: the issue this task resolves/reviews
-    issue_doc: str = ""  # issues mode: full issue markdown (title+body+comments) → .hive ISSUE.md
-    issue_attachments: list[str] = []  # issues mode: image filenames the runner fetches from the control plane
+    issue_number: int = 0  # issue solving: the issue this task resolves/reviews
+    issue_doc: str = ""  # issue solving: full issue markdown (title+body+comments) -> .hive ISSUE.md
+    issue_attachments: list[str] = []  # issue solving: image filenames the runner fetches from the control plane
     backend: str = "cursor"  # kodo backend name: claude | cursor | codex | gemini-cli
     model: str = ""  # backend default when empty
     status: TaskStatus = TaskStatus.pending

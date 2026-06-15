@@ -22,7 +22,7 @@ import httpx
 
 from hive.github_repos import _GH_HEADERS, parse_repo_ref
 from hive.issues import RESOLVE_BACKEND
-from hive.models import Resource, Runner, Task, TaskKind, WorkSource
+from hive.models import Resource, Runner, Task, TaskKind
 
 
 @dataclass
@@ -63,11 +63,6 @@ def codex_runner_usable(store, workspace_id: str, backend: str = RESOLVE_BACKEND
 
 def preflight_checks(store, config, project) -> list[Check]:
     checks: list[Check] = []
-    is_issues = project.work_source == WorkSource.issues
-    checks.append(
-        Check("issues_mode", is_issues, f"work_source={project.work_source}"
-              + ("" if is_issues else " (set it to 'issues')"))
-    )
     has_repo = bool(project.spec_repo.strip())
     checks.append(Check("spec_repo_set", has_repo, project.spec_repo or "no spec_repo configured"))
     token = config.gh_token

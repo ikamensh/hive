@@ -346,7 +346,7 @@ def _git(args: list[str], cwd: Path, timeout: float = 120.0) -> subprocess.Compl
 
 
 def run_preflight(project_dir: Path) -> dict:
-    """Runner self-check for issues mode: prove this host can actually do the
+    """Runner self-check for issue solving: prove this host can actually do the
     agent-facing GitHub work — push a branch to the repo and use `gh` — so a
     misconfigured runner is caught before a big run instead of mid-fix. Pushes a
     throwaway branch and deletes it; runs `gh auth status`. Leaves no trace."""

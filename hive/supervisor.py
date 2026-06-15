@@ -32,6 +32,7 @@ from hive.models import (
     TaskStatus,
     WorkSource,
     Workstream,
+    WorkstreamSource,
     WorkstreamStatus,
 )
 
@@ -83,11 +84,21 @@ def compute_state(
         ):
             return ProjectState.blocked_clarity
         return ProjectState.idle_no_open_issues
-    active = [w for w in workstreams if w.status == WorkstreamStatus.active]
+    active = [
+        w
+        for w in workstreams
+        if w.source != WorkstreamSource.issue and w.status == WorkstreamStatus.active
+    ]
     if open_question_count and not active:
         return ProjectState.blocked_questions
     if active:
         return ProjectState.blocked_budget if over_budget else ProjectState.working
+    if any(
+        w.source == WorkstreamSource.issue
+        and w.status in (WorkstreamStatus.blocked_clarity, WorkstreamStatus.rejected)
+        for w in workstreams
+    ):
+        return ProjectState.blocked_clarity
     if open_question_count:
         return ProjectState.blocked_questions
     return ProjectState.idle_no_workstreams

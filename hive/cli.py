@@ -105,10 +105,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--spec-repo", help="spec home git URL")
     p.add_argument("--work-source", choices=["spec", "issues"], help="where work comes from")
 
-    p = sub.add_parser("scan", help="issues mode: scan the spec repo's open GitHub issues and queue fixes")
+    p = sub.add_parser("scan", help="scan the project's open GitHub issues and queue fixes")
     p.add_argument("project_id")
 
-    p = sub.add_parser("preflight", help="issues mode: check run preconditions (token, perms, runner push/gh auth)")
+    p = sub.add_parser("preflight", help="check issue-solving preconditions (token, perms, runner push/gh auth)")
     p.add_argument("project_id")
 
     p = sub.add_parser("iterate", help="start the next iteration with a note")

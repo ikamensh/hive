@@ -1,5 +1,7 @@
 # Issues mode
 
+Current implementation note: this page documents the existing project-level `Project.work_source=issues` pipeline. The target product model is "one project with triggerable issue-solving workstreams"; see `wiki/unified-project-work.md` for the redesign.
+
 A project work source where Hive resolves a repo's open GitHub issues instead of decomposing a human-written iteration goal. Selected per project via `Project.work_source` (`spec` | `issues`). Spec mode is unchanged; issues mode swaps *where work comes from* and runs a simpler, mostly-deterministic per-issue pipeline.
 
 **Principle: one issue, one warm session, independent review, nothing bad lands.** Each issue is clarified and fixed in a single agent session (context stays warm), reviewed by a fresh independent agent that may fix on the spot, and only merged on accept. Rejected or unclear work never reaches the default branch and always leaves a GitHub comment explaining why.
@@ -81,7 +83,7 @@ Image attachments are downloaded **on the control plane** (authed with `gh_token
 
 A real run depends on things the happy-path code can't see; `hive/preflight.py` turns them into checks so misconfiguration surfaces up front, not as a half-finished pipeline. `hive preflight <project>` (→ `POST /api/projects/{id}/issues-preflight`) reports:
 
-- **Control-plane checks** (one GitHub GET): `issues_mode`, `spec_repo_set`, `gh_token_present`, `repo_write_access` (the token's `permissions.push` — needed for merge-on-accept + issue close), and the soft `issues_enabled` / `codex_runner_usable`.
+- **Control-plane checks** (one GitHub GET): `spec_repo_set`, `gh_token_present`, `repo_write_access` (the token's `permissions.push` — needed for merge-on-accept + issue close), and the soft `issues_enabled` / `codex_runner_usable`.
 - **Runner self-check** (`TaskKind.preflight`, run by `runner.run_preflight` on the codex runner against the real repo): pushes a throwaway branch and deletes it (proves `git push` auth) and runs `gh auth status` (proves the agent can comment). These are the agent-facing risks the control plane can't verify itself.
 
 `scan-issues` re-runs the control-plane checks and refuses (409) if a hard one fails. The scan response also reports `attachments_downloaded` / `attachments_failed` so image-fetch problems are visible on the run itself.

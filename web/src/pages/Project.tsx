@@ -9,9 +9,8 @@ import {
   MODE_OPTIONS,
   SegPicker,
   StateBadge,
-  WORK_SOURCE_OPTIONS,
 } from "../components/shared";
-import type { AgentConversation, Autonomy, GuessPropensity, HumanTask, Mode, PreflightCheck, PreflightResult, Project, ProjectPatch, Question, ResourceInfo, ScanResult, Task, WorkSource, Workstream, WorkstreamStatus } from "../types";
+import type { AgentConversation, Autonomy, GuessPropensity, HumanTask, Mode, PreflightCheck, PreflightResult, Project, ProjectPatch, Question, ResourceInfo, ScanResult, Task, Workstream, WorkstreamStatus } from "../types";
 
 /** Derive the issue's per-issue branch tree URL from its issue URL (`.../issues/42` → `.../tree/hive/issue-42`). */
 function issueBranchUrl(ws: Workstream): string | null {
@@ -24,7 +23,6 @@ function buildSetupPatch(fields: {
   memberRepos: string[];
   mode: Mode;
   autonomy: Autonomy;
-  workSource: WorkSource;
   guess: GuessPropensity;
   dailyBudget: string;
 }): ProjectPatch {
@@ -34,7 +32,6 @@ function buildSetupPatch(fields: {
     member_repos: fields.memberRepos.map((s) => s.trim()).filter(Boolean),
     mode: fields.mode,
     autonomy: fields.autonomy,
-    work_source: fields.workSource,
     guess_propensity: fields.guess,
     daily_budget_usd: Number.isFinite(budget) && budget >= 0 ? budget : 0,
   };
@@ -97,7 +94,6 @@ function ProjectSetup({
   const [intakeMessage, setIntakeMessage] = useState("");
   const [mode, setMode] = useState<Mode>(project.mode);
   const [autonomy, setAutonomy] = useState<Autonomy>(project.autonomy);
-  const [workSource, setWorkSource] = useState<WorkSource>(project.work_source);
   const [guess, setGuess] = useState<GuessPropensity>(project.guess_propensity);
   const [dailyBudget, setDailyBudget] = useState(
     project.daily_budget_usd > 0 ? String(project.daily_budget_usd) : "",
@@ -105,9 +101,8 @@ function ProjectSetup({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const fields = { specRepo, memberRepos, mode, autonomy, workSource, guess, dailyBudget };
+  const fields = { specRepo, memberRepos, mode, autonomy, guess, dailyBudget };
   const draft = !project.spec_repo.trim();
-  const issuesSetup = workSource === "issues";
   const intakeRunning = conversation?.status === "running" || conversation?.status === "finalizing";
   const intakeDone = conversation?.status === "done";
   const intakeReady = intakeBriefReady(conversation?.latest_brief ?? "");
@@ -132,13 +127,9 @@ function ProjectSetup({
     setBusy(true);
     setError("");
     try {
-      if (issuesSetup) {
-        await onSave(buildSetupPatch(fields));
-      } else {
-        await onStartIntake(buildSetupPatch(fields));
-      }
+      await onStartIntake(buildSetupPatch(fields));
     } catch (e) {
-      setError((e as Error).message || (issuesSetup ? "save failed" : "intake failed to start"));
+      setError((e as Error).message || "intake failed to start");
     }
     setBusy(false);
   };
@@ -170,11 +161,9 @@ function ProjectSetup({
   return (
     <section className="setup-panel reveal">
       <header className="setup-head">
-        <h2>{issuesSetup ? "Configure issues mode" : intakeDone ? "Intake complete" : draft ? "Configure intake" : "Project intake"}</h2>
+        <h2>{intakeDone ? "Intake complete" : draft ? "Configure intake" : "Project intake"}</h2>
         <p className="muted">
-          {issuesSetup
-            ? "Choose the GitHub repo whose issues Hive should resolve, then save and scan."
-            : draft
+          {draft
             ? "Choose a repo, or create one for this project, then start the scout."
             : "The scout aligns mission, next iteration, and assumptions before planning starts."}
         </p>
@@ -205,10 +194,6 @@ function ProjectSetup({
         )}
         <div className="dial-grid">
           <label>
-            work source
-            <SegPicker value={workSource} options={WORK_SOURCE_OPTIONS} onChange={setWorkSource} />
-          </label>
-          <label>
             mode
             <SegPicker value={mode} options={MODE_OPTIONS} onChange={setMode} />
           </label>
@@ -217,12 +202,10 @@ function ProjectSetup({
             <SegPicker value={autonomy} options={AUTONOMY_OPTIONS} onChange={setAutonomy} />
           </label>
         </div>
-        {!issuesSetup && (
-          <label>
-            guess propensity
-            <GuessSlider value={guess} onChange={setGuess} />
-          </label>
-        )}
+        <label>
+          guess propensity
+          <GuessSlider value={guess} onChange={setGuess} />
+        </label>
         <label>
           daily budget (USD, 0 = no cap)
           <input
@@ -234,23 +217,21 @@ function ProjectSetup({
             placeholder="0"
           />
         </label>
-        {!issuesSetup && (
-          <div className="trusted-scouts">
-            <span className="field-label">trusted scouts</span>
-            <div>
-              {trustedScouts.length === 0 && <span className="chip chip-failed">unavailable</span>}
-              {trustedScouts.map((resource) => (
-                <span
-                  className={`chip ${resource.available ? "chip-open" : "chip-failed"}`}
-                  key={resource.id}
-                  title={resource.disabled_reason || resource.last_exhaustion_text || resource.last_probe_text}
-                >
-                  {resource.backend === "codex" ? "codex" : "claude"} · {scoutStateLabel(resource)}
-                </span>
-              ))}
-            </div>
+        <div className="trusted-scouts">
+          <span className="field-label">trusted scouts</span>
+          <div>
+            {trustedScouts.length === 0 && <span className="chip chip-failed">unavailable</span>}
+            {trustedScouts.map((resource) => (
+              <span
+                className={`chip ${resource.available ? "chip-open" : "chip-failed"}`}
+                key={resource.id}
+                title={resource.disabled_reason || resource.last_exhaustion_text || resource.last_probe_text}
+              >
+                {resource.backend === "codex" ? "codex" : "claude"} · {scoutStateLabel(resource)}
+              </span>
+            ))}
           </div>
-        )}
+        </div>
         {error && <p className="form-error">{error}</p>}
         {conversation && (
           <div className={`intake-brief intake-${conversation.status}`}>
@@ -289,9 +270,9 @@ function ProjectSetup({
           </button>
           <button
             type="submit"
-            disabled={busy || !specRepo.trim() || (!issuesSetup && (intakeRunning || intakeDone || Boolean(conversation)))}
+            disabled={busy || !specRepo.trim() || intakeRunning || intakeDone || Boolean(conversation)}
           >
-            {busy ? (issuesSetup ? "saving…" : "starting…") : issuesSetup ? "save issues project" : conversation ? "intake started" : "start intake"}
+            {busy ? "starting…" : conversation ? "intake started" : "start intake"}
           </button>
         </div>
       </form>
@@ -367,14 +348,6 @@ function TogglesBar({ project, onPatch }: { project: Project; onPatch: (p: Proje
           value={project.autonomy}
           options={AUTONOMY_OPTIONS}
           onChange={(autonomy) => onPatch({ autonomy })}
-        />
-      </div>
-      <div className="toggle-cell">
-        <span className="toggle-label">work source</span>
-        <SegPicker
-          value={project.work_source}
-          options={WORK_SOURCE_OPTIONS}
-          onChange={(work_source) => onPatch({ work_source })}
         />
       </div>
       <div className="toggle-cell grow">
@@ -926,6 +899,7 @@ function TaskCard({ task, projectId, onChanged }: { task: Task; projectId: strin
 
 export default function ProjectPage() {
   const { id = "" } = useParams();
+  const [primaryView, setPrimaryView] = useState<"work" | "issues">("work");
   const { data, failed, refresh } = usePoll(() => api.project(id), [id]);
   const { data: resources } = usePoll(() => api.resources(), [], 8000);
 
@@ -941,10 +915,8 @@ export default function ProjectPage() {
   const openQs = questions.filter((q) => q.status === "open").sort((a, b) => b.created_at - a.created_at);
   const answeredQs = questions.filter((q) => q.status === "answered").sort((a, b) => b.answered_at - a.answered_at);
   const openTodos = human_tasks.filter((t) => t.status === "open").sort((a, b) => b.created_at - a.created_at);
-  const inboxCount = openQs.length + openTodos.length;
   const sortedTasks = [...tasks].sort((a, b) => b.created_at - a.created_at);
   const wsOrder: Record<string, number> = { active: 0, parked: 1, done: 2 };
-  const sortedWs = [...workstreams].sort((a, b) => (wsOrder[a.status] ?? 9) - (wsOrder[b.status] ?? 9));
 
   const patch = async (p: ProjectPatch) => {
     await api.patchProject(id, p);
@@ -977,21 +949,28 @@ export default function ProjectPage() {
   };
 
   const configured = Boolean(project.spec_repo.trim());
-  const issuesMode = project.work_source === "issues";
-  const nonIntakeTasks = tasks.filter((t) => t.kind !== "intake" && t.kind !== "probe");
+  const manualWorkItems = workstreams.filter((w) => (w.source ?? "manual") !== "issue");
+  const issueWorkItems = workstreams.filter((w) => w.source === "issue");
+  const issueNeeds = issueWorkItems.filter((w) => w.status === "blocked_clarity" || w.status === "rejected");
+  const inboxCount = openQs.length + openTodos.length + issueNeeds.length;
+  const nonIntakeTasks = tasks.filter((t) => !["intake", "probe", "preflight", "resolve", "review"].includes(t.kind));
   const intakeDone = intakeConversation?.status === "done";
-  const needsSetup = !issuesMode && (!configured || (workstreams.length === 0 && nonIntakeTasks.length === 0 && !intakeDone));
+  const hasProjectWork = manualWorkItems.length > 0 || issueWorkItems.length > 0 || nonIntakeTasks.length > 0;
+  const needsSetup = !configured || (!hasProjectWork && !intakeDone);
   const needsStart = false;
   const trustedScouts = (resources?.resources ?? []).filter((resource) =>
     resource.backend === "codex" || resource.backend === "claude",
   );
 
-  const inboxCol = (
+  const needsYouCol = (
     <section className="col col-inbox">
       <h2 className="col-title">
-        inbox <span className="col-count">{inboxCount}</span>
+        needs you <span className="col-count">{inboxCount}</span>
       </h2>
-      {inboxCount === 0 && <p className="muted">no open questions or todos — the hive is unblocked</p>}
+      {inboxCount === 0 && <p className="muted">nothing needs you — the hive is unblocked</p>}
+      {issueNeeds.map((w) => (
+        <IssueCard key={w.id} ws={w} />
+      ))}
       {openTodos.map((t) => (
         <HumanTaskCard key={t.id} task={t} onDone={refresh} />
       ))}
@@ -1045,35 +1024,46 @@ export default function ProjectPage() {
         <>
           {project.goal_complete && <GoalBanner project={project} onPatch={patch} />}
           {configured && !needsStart && <TogglesBar project={project} onPatch={patch} />}
-          {configured && issuesMode && <ScanBar project={project} onScanned={refresh} />}
           {configured && !needsStart && <ProjectSettings project={project} onPatch={patch} />}
 
-          {issuesMode ? (
-            <>
-              <h2 className="col-title issues-title">
-                issues <span className="col-count">{workstreams.filter((w) => w.source === "issue").length}</span>
-              </h2>
-              <IssuesView workstreams={workstreams} />
-              <div className="columns columns-issues">
-                {inboxCol}
-                {activityCol}
-              </div>
-            </>
-          ) : (
-            <div className="columns">
-              <section className="col col-ws">
-                <h2 className="col-title">
-                  workstreams <span className="col-count">{workstreams.length}</span>
-                </h2>
-                {sortedWs.length === 0 && <p className="muted">none yet — the supervisor will plan some</p>}
-                {sortedWs.map((w) => (
-                  <WorkstreamCard key={w.id} ws={w} />
-                ))}
-              </section>
-              {inboxCol}
-              {activityCol}
+          {configured && !needsStart && (
+            <div className="project-primary-switch">
+              <SegPicker
+                value={primaryView}
+                options={[
+                  { value: "work", label: "work" },
+                  { value: "issues", label: "issues" },
+                ]}
+                onChange={setPrimaryView}
+              />
             </div>
           )}
+
+          <div className={`columns ${primaryView === "issues" ? "columns-issues" : ""}`}>
+            {primaryView === "issues" ? (
+              <section className="col col-ws col-issues-main">
+                <ScanBar project={project} onScanned={refresh} />
+                <h2 className="col-title issues-title">
+                  issues <span className="col-count">{issueWorkItems.length}</span>
+                </h2>
+                <IssuesView workstreams={workstreams} />
+              </section>
+            ) : (
+              <section className="col col-ws">
+                <h2 className="col-title">
+                  work items <span className="col-count">{manualWorkItems.length}</span>
+                </h2>
+                {manualWorkItems.length === 0 && <p className="muted">none yet — the supervisor will plan some</p>}
+                {[...manualWorkItems]
+                  .sort((a, b) => (wsOrder[a.status] ?? 9) - (wsOrder[b.status] ?? 9))
+                  .map((w) => (
+                    <WorkstreamCard key={w.id} ws={w} />
+                  ))}
+              </section>
+            )}
+            {needsYouCol}
+            {activityCol}
+          </div>
         </>
       )}
     </div>

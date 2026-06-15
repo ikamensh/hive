@@ -372,7 +372,7 @@ def _sync_landing_failure_human_task(store, task: HumanTask, config: Config) -> 
     if not match or not task.project_id:
         return
     project = store.get(Project, task.project_id)
-    if not project or project.work_source != WorkSource.issues or not project.spec_repo:
+    if not project or not project.spec_repo:
         return
     issue_number = int(match.group(1))
     try:
@@ -859,8 +859,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return [p.model_dump() for p in store.list(Project, workspace_id=ctx.workspace_id)]
 
     def intake_is_done(project: Project) -> bool:
-        if project.work_source != WorkSource.spec:
-            return True
         if not project.intake_conversation_id:
             return False
         conversation = store.get(AgentConversation, project.intake_conversation_id)
@@ -889,8 +887,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     @app.post("/api/projects/{project_id}/intake/start")
     def start_intake(project_id: str, ctx: AuthContext = Depends(current)):
         project = require_project(project_id, ctx)
-        if project.work_source != WorkSource.spec:
-            raise HTTPException(400, "intake is only for spec-mode projects")
         if project.autonomy != Autonomy.direct_push:
             raise HTTPException(400, "intake currently supports direct_push projects only")
         if not project.spec_repo.strip():
@@ -986,12 +982,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @app.post("/api/projects/{project_id}/scan-issues")
     def scan_issues(project_id: str, ctx: AuthContext = Depends(current)):
-        """Issues mode: pull the spec repo's open GitHub issues (with comments and
-        embedded images), reconcile them into issue-workstreams, and queue a codex
+        """Pull the spec repo's open GitHub issues (with comments and embedded
+        images), reconcile them into issue work items, and queue a codex
         resolve task per actionable issue. Human-triggered — no automatic re-scan."""
         project = require_project(project_id, ctx)
-        if project.work_source != WorkSource.issues:
-            raise HTTPException(400, "project is not in issues mode")
         if not project.spec_repo.strip():
             raise HTTPException(400, "spec_repo must be set before scanning")
         hard_failed = [c for c in preflight_checks(store, config, project) if c.hard and not c.ok]
@@ -1027,10 +1021,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @app.post("/api/projects/{project_id}/issues-preflight")
     def issues_preflight(project_id: str, ctx: AuthContext = Depends(current)):
-        """Check the preconditions an issues-mode run depends on, before launching
-        one. Returns the control-plane checks and, if they pass and a codex runner
-        is online, queues a runner self-check (push + gh auth) whose task id the
-        caller can poll for the agent-facing verdict."""
+        """Check the preconditions an issue-solving run depends on. Returns the
+        control-plane checks and, if they pass and a codex runner is online,
+        queues a runner self-check (push + gh auth) whose task id the caller can
+        poll for the agent-facing verdict."""
         project = require_project(project_id, ctx)
         checks = preflight_checks(store, config, project)
         hard_ok = all(c.ok for c in checks if c.hard)
@@ -1089,8 +1083,8 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if updates.get("work_source") == WorkSource.issues and project.spec_repo.strip():
             supervisor.wake(
                 project_id,
-                "Switched to issues mode: scan the spec repo's open GitHub issues, plan a "
-                "resolution order (order_issues), and work them one at a time.",
+                "Issue solving is available on this project: scan the spec repo's open "
+                "GitHub issues from the Issues view when you want Hive to resolve them.",
             )
         if note is not None:
             project.goal_complete = False
@@ -1694,6 +1688,9 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             project = store.get(Project, task.project_id)
             if project:
                 advance_issues(store, project, backend=config.issue_backend, model=config.issue_model)
+
+        if task.kind in (TaskKind.resolve, TaskKind.review, TaskKind.preflight):
+            return {"ok": True}
 
         outcome = "cancelled" if body.cancelled else ("failed" if body.is_error else "finished")
         verdict_note = (

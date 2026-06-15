@@ -58,7 +58,7 @@ const mockGithubRepos: GithubRepo[] = [
     ssh_url: "git@github.com:acme/beacon.git",
     clone_url: "https://github.com/acme/beacon.git",
     private: false,
-    description: "Beacon — issues-mode demo repo",
+    description: "Beacon — issue-solving demo repo",
   },
 ];
 
@@ -794,7 +794,6 @@ export const api = {
   issuesPreflight: async (): Promise<PreflightResult> => ({
     ok: true,
     checks: [
-      { name: "issues_mode", ok: true, detail: "work_source=issues", hard: true },
       { name: "spec_repo_set", ok: true, detail: "git@github.com:acme/beacon.git", hard: true },
       { name: "gh_token_present", ok: true, detail: "control-plane GitHub token present", hard: true },
       { name: "repo_write_access", ok: true, detail: "token can push/merge to acme/beacon", hard: true },
@@ -806,7 +805,6 @@ export const api = {
   scanIssues: async (id: string): Promise<ScanResult> => {
     const project = projects.find((p) => p.id === id);
     if (!project) throw new Error("not found");
-    if (project.work_source !== "issues") throw new Error("project is not in issues mode");
     if (!project.spec_repo.trim()) throw new Error("spec_repo required");
     const open = workstreams.filter(
       (w) => w.project_id === id && w.source === "issue" && w.status !== "done" && w.status !== "cancelled",

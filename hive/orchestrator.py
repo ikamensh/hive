@@ -131,6 +131,11 @@ class Tools:
         ws = self.store.get(Workstream, workstream_id)
         if not ws:
             return f"error: no workstream {workstream_id}"
+        if ws.source == WorkstreamSource.issue and self.project.work_source != WorkSource.issues:
+            return (
+                "error: GitHub issue work items are owned by the deterministic "
+                "issue pipeline. Use the Issues view to scan/run issues instead."
+            )
         if (
             self.project.work_source == WorkSource.issues
             and ws.status != WorkstreamStatus.active
@@ -260,6 +265,11 @@ class Tools:
         ws = self.store.get(Workstream, workstream_id)
         if not ws:
             return f"error: no workstream {workstream_id}"
+        if ws.source == WorkstreamSource.issue:
+            return (
+                "error: GitHub issue work items are owned by the deterministic "
+                "issue pipeline; do not complete them from the build orchestrator."
+            )
         ws.status = WorkstreamStatus.done
         self.store.put(ws)
         self.actions.append(f"completed workstream {workstream_id}")
@@ -362,9 +372,13 @@ class Tools:
             for t in self.store.list(Task, project_id=self.project.id)
             if t.status in (TaskStatus.pending, TaskStatus.running)
         ]
-        active = self.store.list(
-            Workstream, project_id=self.project.id, status=WorkstreamStatus.active
-        )
+        active = [
+            w
+            for w in self.store.list(
+                Workstream, project_id=self.project.id, status=WorkstreamStatus.active
+            )
+            if w.source != WorkstreamSource.issue
+        ]
         open_questions = self.store.open_questions(self.project.id)
         if unfinished or active or open_questions:
             return (
@@ -374,7 +388,7 @@ class Tools:
         # The quality gate is real, not advisory: a workstream counts as built
         # only if its most recent task is a verify that ACCEPTed.
         for ws in self.store.list(Workstream, project_id=self.project.id):
-            if ws.status != WorkstreamStatus.done:
+            if ws.source == WorkstreamSource.issue or ws.status != WorkstreamStatus.done:
                 continue
             ws_tasks = self.store.list(Task, project_id=self.project.id, workstream_id=ws.id)
             last = ws_tasks[-1] if ws_tasks else None
@@ -392,7 +406,8 @@ class Tools:
     # -- context -------------------------------------------------------------
 
     def snapshot(self) -> str:
-        workstreams = self.store.list(Workstream, project_id=self.project.id)
+        all_workstreams = self.store.list(Workstream, project_id=self.project.id)
+        workstreams = list(all_workstreams)
         issues_mode = self.project.work_source == WorkSource.issues
         if issues_mode:
             # Resolved/cancelled issues accumulate forever; keep the queue (live
@@ -406,6 +421,9 @@ class Tools:
                 (w for w in workstreams if w.status not in rank), key=lambda w: w.order
             )
             workstreams = live + terminal[-5:]
+        else:
+            workstreams = [w for w in workstreams if w.source != WorkstreamSource.issue]
+        issue_items = [w for w in all_workstreams if w.source == WorkstreamSource.issue]
         ws_lines = []
         for ws in workstreams:
             desc = ws.description[:200] + ("…" if len(ws.description) > 200 else "")
@@ -413,6 +431,12 @@ class Tools:
             if ws.parked_reason:
                 line += f" (parked: {ws.parked_reason})"
             ws_lines.append(line)
+        issue_lines = []
+        for ws in sorted(issue_items, key=lambda w: (w.order, w.issue_number))[-20:]:
+            line = f"- [{ws.status}] issue #{ws.issue_number} {ws.id} '{ws.title}'"
+            if ws.parked_reason:
+                line += f" (note: {ws.parked_reason})"
+            issue_lines.append(line)
         task_lines = []
         for t in self.store.list(Task, project_id=self.project.id, limit=15):
             line = f"- [{t.status}] {t.kind} task {t.id} ws={t.workstream_id} repo={t.repo} backend={t.backend}"
@@ -480,6 +504,9 @@ class Tools:
                 "",
                 "ISSUE QUEUE (resolve top-down, one at a time):" if issues_mode else "WORKSTREAMS:",
                 *(ws_lines or ["(none yet)"]),
+                "",
+                "GITHUB ISSUE WORK ITEMS (deterministic pipeline, read-only to planner):",
+                *(issue_lines or ["(none)"]),
                 "",
                 "RECENT TASKS:",
                 *(task_lines or ["(none)"]),
