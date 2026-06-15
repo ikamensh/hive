@@ -1,5 +1,5 @@
 """Issue solving: resolve a repo's open GitHub issues with a deterministic
-per-issue pipeline (see wiki/issues-mode.md).
+per-issue pipeline (see wiki/issue-solving.md).
 
 Two concerns, kept separate so the store logic is testable without network:
 - GitHub I/O (`fetch_open_issues_full`, `merge_branch`, `resolve_issue_on_github`)

@@ -2,7 +2,6 @@
 
 export type Mode = "build" | "maintain";
 export type Autonomy = "pr" | "direct_push";
-export type WorkSource = "spec" | "issues";
 export type GuessPropensity = "never" | "rarely" | "sometimes" | "often" | "always";
 export type ProjectState =
   | "intake"
@@ -12,8 +11,7 @@ export type ProjectState =
   | "blocked_budget"
   | "blocked_clarity"
   | "idle_goal_complete"
-  | "idle_no_workstreams"
-  | "idle_no_open_issues";
+  | "idle_no_workstreams";
 
 export interface Project {
   id: string;
@@ -23,7 +21,6 @@ export interface Project {
   member_repos: string[];
   mode: Mode;
   autonomy: Autonomy;
-  work_source: WorkSource;
   guess_propensity: GuessPropensity;
   prod_deploys: boolean;
   paused: boolean;
@@ -333,7 +330,6 @@ export interface ProjectPatch {
   spec_repo?: string;
   mode?: Mode;
   autonomy?: Autonomy;
-  work_source?: WorkSource;
   guess_propensity?: GuessPropensity;
   prod_deploys?: boolean;
   paused?: boolean;

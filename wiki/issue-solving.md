@@ -1,14 +1,14 @@
-# Issues mode
+# GitHub Issue Solving
 
-Current implementation note: this page documents the existing project-level `Project.work_source=issues` pipeline. The target product model is "one project with triggerable issue-solving workstreams"; see `wiki/unified-project-work.md` for the redesign.
+Current implementation note: this page documents the deterministic GitHub issue pipeline. The product model is "one project with triggerable issue-solving workstreams"; see `wiki/unified-project-work.md` for the broader project design.
 
-A project work source where Hive resolves a repo's open GitHub issues instead of decomposing a human-written iteration goal. Selected per project via `Project.work_source` (`spec` | `issues`). Spec mode is unchanged; issues mode swaps *where work comes from* and runs a simpler, mostly-deterministic per-issue pipeline.
+Issue solving is a project workstream/run: Hive resolves a repo's open GitHub issues without replacing normal project planning and maintenance. It swaps *where a run gets work items from* and runs a simpler, mostly-deterministic per-issue pipeline.
 
 **Principle: one issue, one warm session, independent review, nothing bad lands.** Each issue is clarified and fixed in a single agent session (context stays warm), reviewed by a fresh independent agent that may fix on the spot, and only merged on accept. Rejected or unclear work never reaches the default branch and always leaves a GitHub comment explaining why.
 
 ## The loop (deterministic; no orchestrator LLM in the path)
 
-Driven by the human scan + the task-result state machine — not the planner. The orchestrator's ordering/solve tooling (`order_issues`, `resolve_issue`, `prompts/orchestrator_issues.md`) is kept in the tree, dormant, for a future ordered variant; it is not on the active path.
+Driven by the human scan + the task-result state machine — not the planner.
 
 1. **Scan** (human-clicked from the UI or `POST /api/projects/{id}/scan-issues`; no automatic polling). For each open issue fetch **title, body, all comment text, and embedded image attachments**. Reconcile into one issue-workstream per issue (ingest new as `queued`, cancel externally-closed, re-queue previously-blocked/rejected). Then **strictly one issue at a time** (`advance_issues`): promote the lowest-numbered queued issue and create its **resolve task**; the next issue starts only once this one lands or parks.
 2. **Resolve task** — configured issue backend (default `codex`) with `HIVE_ISSUE_MODEL` optional; if unset the backend chooses its current default. One session, on a per-issue branch `hive/issue-<number>`:
@@ -20,13 +20,13 @@ Driven by the human scan + the task-result state machine — not the planner. Th
 4. **Land** (Hive, deterministic, no PR workflow):
    - **ACCEPT** → merge `hive/issue-<number>` into the default branch via the GitHub **merges API** (`POST /repos/{owner}/{repo}/merges`, no PR object), then close the issue with a summary comment. The close step is idempotent: if GitHub already reports the issue closed (for example because a merged commit auto-closed it), Hive treats that as success. The branch is **kept** (review/debug history).
    - **REJECT** → leave the default branch untouched; the reviewer's comment already explains the failure. Branch kept.
-   - **Landing failure** → create a `HumanTask` and do **not** advance to the next queued issue until the landing failure is resolved. The UI's human-task "mark done" action verifies the GitHub issue is closed and marks the issue-workstream `done`.
+   - **Landing failure** → create an operator todo (currently `HumanTask` in code) and do **not** advance to the next queued issue until the landing failure is resolved. The UI's todo completion verifies the GitHub issue is closed and marks the issue-workstream `done`.
 
 No ordering: issues are processed independently. Per-repo serialization still holds (one task per repo at a time), so for a single spec repo the pipeline runs issue-by-issue in practice.
 
 ## Running an agent: the workspace
 
-A task's only inputs are a repo checkout and a text instruction string (`hive/runner.py: execute` → `kodo` `CodexSession` → `Agent.run(instructions, project_dir)`). Issues mode enriches the checkout:
+A task's only inputs are a repo checkout and a text instruction string (`hive/runner.py: execute` -> `kodo` `CodexSession` -> `Agent.run(instructions, project_dir)`). Issue solving enriches the checkout:
 
 - Repo checked out to the per-issue branch.
 - Resolve retries are intentionally fresh: if `origin/hive/issue-<n>` already exists, the runner preserves it as `hive/issue-<n>-previous-<timestamp>`, resets `hive/issue-<n>` from the latest default branch, and force-with-lease pushes that reset before the agent starts. Local dirty checkout state is reset/cleaned before branch switching. This keeps retries from building on stale rejected attempts while preserving the old branch for debugging.
@@ -38,8 +38,10 @@ kodo's codex session is **text-only** (`query(prompt: str, ...)`); there is no i
 
 ## Data model
 
-- `Project.work_source: WorkSource` = `spec` | `issues` (done).
-- `Workstream` (issue-workstream): `source=issue`, `issue_number`, `issue_url`, `branch = hive/issue-<n>`, `order` (= issue number; lowest goes first).
+- `Project` has no source/mode field. Issue solving is activated by creating/scanning a GitHub issue workstream/run inside the project.
+- `Workstream` legacy rows become issue work items in API responses: `source=issue`, `issue_number`, `issue_url`, `branch = hive/issue-<n>`, `order` (= issue number; lowest goes first).
+- `ProjectWorkstream kind=github_issues` owns the GitHub source, preflight state, run policy, and run history.
+- `IssueRun` snapshots the issues selected for one run, so a scan/run can be audited even if GitHub changes afterward.
 - **Strict per-issue sequencing** (`advance_issues`): at most one issue is in flight (`resolving`/`reviewing`) at a time. When none is, the lowest-`order` `queued` issue is promoted to `resolving` and its resolve task queued; called after every scan and every landing. This means each issue branches from a default branch that already includes prior landed fixes — issues that touch the same files can't conflict on the second merge.
 - `Task.fresh_branch` is set on resolve tasks (not review tasks) so retries reset the active issue branch from default while preserving previous attempts under timestamped branch names.
 - Issue-workstream lifecycle (status):
@@ -52,7 +54,7 @@ kodo's codex session is **text-only** (`query(prompt: str, ...)`); there is no i
   - `cancelled` — issue closed on GitHub by a human.
   - Re-scan re-queues any still-open issue that isn't `done` and has no live task (`blocked_clarity`/`rejected`/reopened `cancelled`/errored-mid-flight) so a clarified/reopened issue is retried in order.
 - `TaskKind`: `resolve`, `review` (replacing the interim `clarity` task kind). Result markers parsed deterministically (mirroring `parse_verdict`): resolve → `OUTCOME: BLOCKED|FIXED`; review → `REVIEW: ACCEPT|REJECT`.
-- `ProjectState`: `working` (a task pending/running), `blocked_clarity` (open issues remain but all are `blocked_clarity`/`rejected` — waiting on the human), `idle_no_open_issues` (queue drained).
+- `ProjectState`: `working` when tasks are pending/running, `blocked_clarity` when issue work is waiting on a human, and `idle_no_workstreams` when no active project work remains. Drained issue queues are represented on the issue workstream/run rather than as a project-wide terminal state.
 
 ## Who does what on GitHub
 
@@ -65,16 +67,16 @@ Backend pipeline is built and unit/e2e-tested (`tests/test_issues.py`):
 1. ✅ `fetch_open_issues_full` (issues + comments + embedded image URLs); runner `prepare_issue_workspace` materializes `.hive/issue-<n>/` (ISSUE.md + downloaded attachments, git-excluded).
 2. ✅ `resolve` task kind + `prompts/resolve.md` (clarify→fix, codex `gpt-5.5`, branch `hive/issue-<n>`); `parse_resolve` (`OUTCOME: FIXED|BLOCKED`).
 3. ✅ `review` task kind + `prompts/review.md` (fresh codex `gpt-5.5`, fix-on-spot, rejection comment); `parse_review` (`REVIEW: ACCEPT|REJECT`).
-4. ✅ Deterministic state machine in `api.task_result` (`_land_resolve`/`_land_review`): resolve→review chaining, `merge_branch` (merges API) + idempotent `resolve_issue_on_github` on accept, escalate and stop advancement on unresolved landing failure; `compute_state` + supervisor skip the planner for issues projects.
-5. ✅ Strict per-issue sequencing (`advance_issues`): one issue through resolve→review→land before the next starts. Resolve retries get a fresh branch from current default while preserving the old attempt. Interim batch `clarity` task removed (folded into resolve); the spec-mode ordering code (`activate_next`, `order_issues`, `resolve_issue`, `orchestrator_issues.md`) kept dormant.
+4. ✅ Deterministic state machine in `api.task_result` (`_land_resolve`/`_land_review`): resolve->review chaining, `merge_branch` (merges API) + idempotent `resolve_issue_on_github` on accept, escalate and stop advancement on unresolved landing failure. Issue task completion advances the issue queue directly instead of waking the planner.
+5. ✅ Strict per-issue sequencing (`advance_issues`): one issue through resolve->review->land before the next starts. Resolve retries get a fresh branch from current default while preserving the old attempt. Interim batch `clarity` task removed (folded into resolve).
 
 6. ✅ Preflight gate (`hive/preflight.py`): control-plane checks + a runner self-check (push + gh auth); `scan-issues` is gated on the hard checks.
-7. ✅ UI pass: `work_source` toggle, preflight + Scan buttons, structured preflight/scan errors, issue list grouped by lifecycle state with links to issue + branch, task cancel button, and human-task completion for accepted-but-not-yet-marked-done issue lands (`web/`).
+7. ✅ UI pass: issue-solving workstream controls, preflight + Scan buttons, structured preflight/scan errors, issue list grouped by lifecycle state with links to issue + branch, task cancel button, and human-task completion for accepted-but-not-yet-marked-done issue lands (`web/`).
 
 ## Live validation notes (2026-06-14)
 
 - Ran the issues project fully from the UI against `ikamensh/hive`; issues #2, #3, and #4 reached `done` and are closed upstream as `COMPLETED`.
-- A new upstream issue #5 appeared during the scan. Because the validation target was #2-#4, its auto-start was cancelled from the UI and it remains queued for a later intentional run. Product decision to revisit: whether issue-mode scan should offer a selected subset/run boundary or always process every open issue.
+- A new upstream issue #5 appeared during the scan. Because the validation target was #2-#4, its auto-start was cancelled from the UI and it remains queued for a later intentional run. Product decision to revisit: whether an issue-solving run should offer a selected subset/run boundary or always process every open issue.
 - Issue #4 exposed GitHub close idempotency: the fix had landed and GitHub reported the issue closed, but Hive treated the close PATCH's 422 as a failed land. The close helper now verifies closed state after a failed close, and the landing human-task path can mark the matching workstream done from the UI.
 
 Image attachments are downloaded **on the control plane** (authed with `gh_token`) at scan and served to the runner, so the worker needs no GitHub creds; `attachments_failed` in the scan result flags any that didn't resolve.

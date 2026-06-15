@@ -65,16 +65,6 @@ class Mode(StrEnum):
     maintain = "maintain"
 
 
-class WorkSource(StrEnum):
-    """Where a project's work comes from. `spec` = the human sets an iteration
-    goal that the orchestrator decomposes into workstreams (the default flow).
-    `issues` = the orchestrator works the spec repo's open GitHub issues, one
-    at a time, in a planned sequence."""
-
-    spec = "spec"
-    issues = "issues"
-
-
 class Autonomy(StrEnum):
     pr = "pr"
     direct_push = "direct_push"
@@ -89,7 +79,7 @@ class GuessPropensity(StrEnum):
 
 
 class ProjectState(StrEnum):
-    intake = "intake"  # spec mode: intake scout is aligning the project before planning
+    intake = "intake"  # intake scout is aligning the project before planning
     working = "working"
     blocked_questions = "blocked_questions"
     blocked_resources = "blocked_resources"
@@ -97,7 +87,6 @@ class ProjectState(StrEnum):
     blocked_clarity = "blocked_clarity"  # issue solving: open issues stuck on a human (blocked/rejected)
     idle_goal_complete = "idle_goal_complete"
     idle_no_workstreams = "idle_no_workstreams"
-    idle_no_open_issues = "idle_no_open_issues"  # issue solving: queue drained
 
 
 class Project(BaseModel):
@@ -107,7 +96,6 @@ class Project(BaseModel):
     spec_repo: str = ""  # git URL of the spec home; empty = draft (not yet configured)
     member_repos: list[str] = []  # git URLs; spec_repo included if it holds code
     mode: Mode = Mode.build
-    work_source: WorkSource = WorkSource.spec
     autonomy: Autonomy = Autonomy.direct_push
     guess_propensity: GuessPropensity = GuessPropensity.sometimes
     prod_deploys: bool = False
@@ -191,7 +179,7 @@ class WorkstreamStatus(StrEnum):
     queued = "queued"  # issue solving: ingested, awaiting its turn (strict one-at-a-time)
     parked = "parked"
     done = "done"
-    # issues-mode per-issue pipeline (see wiki/issues-mode.md):
+    # issue-solving per-issue pipeline (see wiki/issue-solving.md):
     resolving = "resolving"  # resolve task (clarify→fix) in flight
     blocked_clarity = "blocked_clarity"  # resolve returned BLOCKED; agent commented on the issue
     reviewing = "reviewing"  # review task in flight
@@ -205,7 +193,7 @@ ISSUE_BLOCKED = (WorkstreamStatus.blocked_clarity, WorkstreamStatus.rejected)
 
 class WorkstreamSource(StrEnum):
     manual = "manual"  # decomposed from the iteration goal by the orchestrator
-    issue = "issue"  # ingested from a GitHub issue (issues mode)
+    issue = "issue"  # ingested from a GitHub issue
 
 
 class Workstream(BaseModel):

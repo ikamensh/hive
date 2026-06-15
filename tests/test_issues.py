@@ -1,8 +1,9 @@
-"""Issues mode: human-scanned ingestion and the deterministic per-issue pipeline
-(resolve → review → land). The store pieces (reconcile, task setup, state) are
-tested directly; the scan endpoint + resolve/review chaining + merge-on-accept
-are exercised end-to-end through the API with GitHub mocked. The dormant ordered
-variant (activate_next, orchestrator solve tools) keeps a couple of tests too."""
+"""Issue solving: human-scanned ingestion and deterministic resolve/review/land.
+
+The store pieces (reconcile, task setup, state) are tested directly; the scan
+endpoint plus resolve/review chaining and merge-on-accept are exercised
+end-to-end through the API with GitHub mocked.
+"""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -30,7 +31,6 @@ from hive.models import (
     TaskKind,
     TaskStatus,
     Verdict,
-    WorkSource,
     Workstream,
     WorkstreamSource,
     WorkstreamStatus,
@@ -55,7 +55,7 @@ def issue(number, title="t", body="b", attachments=None):
 
 def issues_project(store) -> Project:
     return store.put(
-        Project(name="p", spec_repo="https://github.com/o/r.git", work_source=WorkSource.issues)
+        Project(name="p", spec_repo="https://github.com/o/r.git")
     )
 
 
@@ -223,23 +223,16 @@ def _task(p, backend="codex"):
                 kind=TaskKind.resolve, backend=backend)
 
 
-def test_compute_state_issues_mode():
-    p = Project(name="p", spec_repo="x", work_source=WorkSource.issues)
+def test_compute_state_issue_items_are_project_attention():
+    p = Project(name="p", spec_repo="x")
     # a pending resolve/review task whose backend is available → working
     assert compute_state(p, [_ws(p, WorkstreamStatus.resolving)], 0, [_task(p)], {"codex"}) == ProjectState.working
     # open issue, no task in flight → waiting on a human
     assert compute_state(p, [_ws(p, WorkstreamStatus.blocked_clarity)], 0, [], set()) == ProjectState.blocked_clarity
     assert compute_state(p, [_ws(p, WorkstreamStatus.rejected)], 0, [], set()) == ProjectState.blocked_clarity
-    # drained queue
-    assert compute_state(p, [_ws(p, WorkstreamStatus.done)], 0, [], set()) == ProjectState.idle_no_open_issues
-    assert compute_state(p, [_ws(p, WorkstreamStatus.cancelled)], 0, [], set()) == ProjectState.idle_no_open_issues
-
-
-def test_compute_state_normal_project_surfaces_issue_blockers():
-    p = Project(name="p", spec_repo="x")
-    assert compute_state(p, [_ws(p, WorkstreamStatus.blocked_clarity)], 0, [], set()) == ProjectState.blocked_clarity
-    assert compute_state(p, [_ws(p, WorkstreamStatus.rejected)], 0, [], set()) == ProjectState.blocked_clarity
+    # drained issue work does not change the project kind
     assert compute_state(p, [_ws(p, WorkstreamStatus.done)], 0, [], set()) == ProjectState.idle_no_workstreams
+    assert compute_state(p, [_ws(p, WorkstreamStatus.cancelled)], 0, [], set()) == ProjectState.idle_no_workstreams
 
 
 # -- dormant ordered variant -------------------------------------------------
@@ -262,17 +255,15 @@ def test_create_task_rejected_for_non_active_issue():
     reconcile(store, project, [issue(1)])  # status resolving, not active
     ws = store.list(Workstream, project_id=project.id)[0]
     out = Tools(store, project, spec=None).create_task(ws.id, "r", "do it", backend="cursor")
-    assert "one issue at a time" in out
+    assert "deterministic issue pipeline" in out
     assert not store.list(Task, project_id=project.id)
 
 
-def test_tool_surface_differs_by_work_source():
+def test_planner_tool_surface_is_single_project_surface():
     store = MemoryStore()
-    issues = {f.__name__ for f in Tools(store, issues_project(store), spec=None).functions()}
-    spec = {f.__name__ for f in Tools(store, store.put(Project(name="s", spec_repo="x")), spec=None).functions()}
-    assert {"order_issues", "resolve_issue"} <= issues
-    assert {"create_workstream", "complete_workstream", "mark_goal_complete"}.isdisjoint(issues)
-    assert {"create_workstream", "complete_workstream", "mark_goal_complete"} <= spec
+    tools = {f.__name__ for f in Tools(store, issues_project(store), spec=None).functions()}
+    assert {"create_workstream", "complete_workstream", "mark_goal_complete"} <= tools
+    assert {"order_issues", "resolve_issue"}.isdisjoint(tools)
 
 
 # -- end to end: scan → resolve → review → land ------------------------------

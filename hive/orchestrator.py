@@ -14,7 +14,6 @@ import logging
 from pathlib import Path
 
 from hive.backends import BACKEND_NAMES
-from hive.issues import activate_next, resolve_issue_on_github
 from hive.llm import LoopResult, ToolLoop, ToolSet, build_adapter
 from hive.models import (
     Autonomy,
@@ -31,7 +30,6 @@ from hive.models import (
     TaskKind,
     TaskStatus,
     Verdict,
-    WorkSource,
     Workstream,
     WorkstreamSource,
     WorkstreamStatus,
@@ -63,20 +61,6 @@ class Tools:
         self.actions: list[str] = []
 
     def functions(self) -> list:
-        if self.project.work_source == WorkSource.issues:
-            # Issue-workstreams are ingested, not invented; the queue drains
-            # itself, so create_workstream/complete_workstream/mark_goal_complete
-            # are replaced by order_issues + resolve_issue.
-            return [
-                self.create_task,
-                self.ask_user,
-                self.park_workstream,
-                self.reactivate_workstream,
-                self.order_issues,
-                self.resolve_issue,
-                self.commit_to_spec,
-                self.create_human_task,
-            ]
         return [
             self.create_workstream,
             self.create_task,
@@ -131,19 +115,10 @@ class Tools:
         ws = self.store.get(Workstream, workstream_id)
         if not ws:
             return f"error: no workstream {workstream_id}"
-        if ws.source == WorkstreamSource.issue and self.project.work_source != WorkSource.issues:
+        if ws.source == WorkstreamSource.issue:
             return (
                 "error: GitHub issue work items are owned by the deterministic "
                 "issue pipeline. Use the Issues view to scan/run issues instead."
-            )
-        if (
-            self.project.work_source == WorkSource.issues
-            and ws.status != WorkstreamStatus.active
-        ):
-            return (
-                f"error: issues mode resolves one issue at a time. Workstream "
-                f"{workstream_id} is {ws.status}, not active — only the active issue "
-                "may receive tasks."
             )
         if kind == TaskKind.work and self._unresolved_rejects(workstream_id) >= MAX_FIX_ROUNDS:
             return (
@@ -275,60 +250,6 @@ class Tools:
         self.actions.append(f"completed workstream {workstream_id}")
         return "done"
 
-    def order_issues(self, ordered_ids_json: str) -> str:
-        """Issues mode: set the order in which queued issues are resolved.
-        ordered_ids_json is a JSON array of issue-workstream ids in the sequence
-        they should be handled — dependencies and foundational work first, e.g.
-        ["ab12...", "cd34..."]. Lower position = sooner. Only affects queued
-        issues; the active one keeps going. Set this once you've reasoned about
-        dependencies; the lowest-order queued issue is activated automatically."""
-        ids = json.loads(ordered_ids_json)
-        if not isinstance(ids, list):
-            return "error: ordered_ids_json must be a JSON array of workstream ids"
-        ranked = 0
-        for position, ws_id in enumerate(ids):
-            ws = self.store.get(Workstream, ws_id)
-            if ws and ws.source == WorkstreamSource.issue:
-                ws.order = position
-                self.store.put(ws)
-                ranked += 1
-        activate_next(self.store, self.project)
-        self.actions.append(f"ordered {ranked} issues")
-        return f"ordered {ranked} issues; lowest-order queued issue is now active"
-
-    def resolve_issue(self, workstream_id: str, comment: str) -> str:
-        """Issues mode: declare the active issue resolved — its change is built
-        and an independent verify task ACCEPTed it. In direct_push autonomy this
-        comments the summary on the GitHub issue and closes it; in PR autonomy
-        the merged PR's `Fixes #N` closes it, so only the workstream is marked
-        done. The next queued issue is then activated automatically. Use this
-        instead of complete_workstream. comment is a short markdown summary of
-        what changed (also posted to the issue in direct_push mode)."""
-        ws = self.store.get(Workstream, workstream_id)
-        if not ws or ws.source != WorkstreamSource.issue:
-            return f"error: {workstream_id} is not an issue workstream"
-        tasks = self.store.list(Task, project_id=self.project.id, workstream_id=workstream_id)
-        last = tasks[-1] if tasks else None
-        if last is None or last.kind != TaskKind.verify or last.verdict != Verdict.accept:
-            return (
-                "rejected: resolve an issue only after an independent verify task ACCEPTs it. "
-                "Queue a verify task and get an ACCEPT first."
-            )
-        if self.project.autonomy == Autonomy.direct_push:
-            resolve_issue_on_github(
-                self.project.spec_repo, ws.issue_number, comment, self.gh_token
-            )
-        ws.status = WorkstreamStatus.done
-        self.store.put(ws)
-        self.actions.append(f"resolved issue #{ws.issue_number}")
-        nxt = activate_next(self.store, self.project)
-        if nxt:
-            return (
-                f"resolved issue #{ws.issue_number}; activated next issue "
-                f"#{nxt.issue_number} (ws={nxt.id}) — queue its first work task now"
-            )
-        return f"resolved issue #{ws.issue_number}; no more queued issues — queue is drained"
-
     def commit_to_spec(self, files_json: str, message: str) -> str:
         """Write files to the project's spec repo and push. files_json is a
         JSON object mapping relative path -> full file content, e.g.
@@ -408,21 +329,7 @@ class Tools:
     def snapshot(self) -> str:
         all_workstreams = self.store.list(Workstream, project_id=self.project.id)
         workstreams = list(all_workstreams)
-        issues_mode = self.project.work_source == WorkSource.issues
-        if issues_mode:
-            # Resolved/cancelled issues accumulate forever; keep the queue (live
-            # ones) in full and only the last few terminal ones for context.
-            rank = {WorkstreamStatus.active: 0, WorkstreamStatus.parked: 1, WorkstreamStatus.queued: 2}
-            live = sorted(
-                (w for w in workstreams if w.status in rank),
-                key=lambda w: (rank[w.status], w.order),
-            )
-            terminal = sorted(
-                (w for w in workstreams if w.status not in rank), key=lambda w: w.order
-            )
-            workstreams = live + terminal[-5:]
-        else:
-            workstreams = [w for w in workstreams if w.source != WorkstreamSource.issue]
+        workstreams = [w for w in workstreams if w.source != WorkstreamSource.issue]
         issue_items = [w for w in all_workstreams if w.source == WorkstreamSource.issue]
         ws_lines = []
         for ws in workstreams:
@@ -496,13 +403,13 @@ class Tools:
         p = self.project
         return "\n".join(
             [
-                f"PROJECT {p.name} | mode={p.mode} work_source={p.work_source} "
+                f"PROJECT {p.name} | mode={p.mode} "
                 f"autonomy={p.autonomy} guess_propensity={p.guess_propensity} "
                 f"goal_complete={p.goal_complete}",
                 f"member repos: {', '.join(p.member_repos) or '(none)'}",
                 f"spec repo: {p.spec_repo}",
                 "",
-                "ISSUE QUEUE (resolve top-down, one at a time):" if issues_mode else "WORKSTREAMS:",
+                "WORK ITEMS:",
                 *(ws_lines or ["(none yet)"]),
                 "",
                 "GITHUB ISSUE WORK ITEMS (deterministic pipeline, read-only to planner):",
@@ -555,12 +462,6 @@ class Orchestrator:
             spec = None
 
         tools = Tools(self.store, project, spec, self.config.gh_token)
-        if project.work_source == WorkSource.issues:
-            # Issues are ingested only on an explicit human scan; here we just
-            # promote the next cleared issue if nothing is being solved.
-            nxt = activate_next(self.store, project)
-            if nxt:
-                events = events + [f"activated issue #{nxt.issue_number} (ws={nxt.id})"]
         event_text = "\n".join(f"- {e}" for e in events)
         user_msg = (
             f"EVENTS:\n{event_text}\n\nSTATE SNAPSHOT:\n{tools.snapshot()}"
@@ -609,8 +510,7 @@ class Orchestrator:
         )
 
     def _system_prompt(self, project: Project) -> str:
-        name = "orchestrator_issues" if project.work_source == WorkSource.issues else "orchestrator"
-        base_prompt, _version = load_prompt(name)
+        base_prompt, _version = load_prompt("orchestrator")
         org_context = self.store.get_org_context(project.workspace_id)
         return base_prompt + (f"\n\nORG CONTEXT:\n{org_context}" if org_context else "")
 

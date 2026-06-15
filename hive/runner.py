@@ -227,7 +227,7 @@ def checkout(repo_url: str, branch: str = "", fresh_branch: bool = False) -> Pat
     With no branch, resets to the origin default (work that lands on main).
     With a branch, checks out that branch — existing on origin (verify/fix of
     PR-mode work) or freshly created off the default (the first PR-mode work
-    task, which then pushes it). For issues-mode resolve retries, `fresh_branch`
+    task, which then pushes it). For issue-solving resolve retries, `fresh_branch`
     means an existing issue branch is first backed up and reset to the current
     default branch so the new attempt does not build on stale rejected work."""
     checkout_url, auth_overlay = _checkout_plan(repo_url)
@@ -384,7 +384,7 @@ def run_preflight(project_dir: Path) -> dict:
 
 
 def prepare_issue_workspace(project_dir: Path, task: dict, headers: dict, auth) -> None:
-    """Issues mode: materialize the issue context into the checkout under
+    """Issue solving: materialize the issue context into the checkout under
     `.hive/issue-<n>/` (ISSUE.md + attachments), git-excluded so the agent never
     commits it. Attachments are pulled from the control plane (which downloaded
     them from GitHub at scan time with repo credentials), so the runner needs no

@@ -1,5 +1,5 @@
 import { marked } from "marked";
-import type { Autonomy, GuessPropensity, Mode, ProjectState, WorkSource } from "../types";
+import type { Autonomy, GuessPropensity, Mode, ProjectState } from "../types";
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -21,7 +21,6 @@ const STATE_META: Record<ProjectState, { label: string; cls: string }> = {
   blocked_clarity: { label: "needs clarity", cls: "questions" },
   idle_goal_complete: { label: "goal complete", cls: "idle" },
   idle_no_workstreams: { label: "idle", cls: "idle" },
-  idle_no_open_issues: { label: "no open issues", cls: "idle" },
 };
 
 export function StateBadge({
@@ -80,11 +79,6 @@ export const MODE_OPTIONS: { value: Mode; label: string }[] = [
 export const AUTONOMY_OPTIONS: { value: Autonomy; label: string }[] = [
   { value: "pr", label: "via PR" },
   { value: "direct_push", label: "direct push" },
-];
-
-export const WORK_SOURCE_OPTIONS: { value: WorkSource; label: string }[] = [
-  { value: "spec", label: "spec" },
-  { value: "issues", label: "issues" },
 ];
 
 export const GUESS_LEVELS: GuessPropensity[] = ["never", "rarely", "sometimes", "often", "always"];

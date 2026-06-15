@@ -30,7 +30,6 @@ from hive.models import (
     Task,
     TaskKind,
     TaskStatus,
-    WorkSource,
     Workstream,
     WorkstreamSource,
     WorkstreamStatus,
@@ -73,17 +72,6 @@ def compute_state(
         if any(t.backend in available_backends for t in pending):
             return ProjectState.working
         return ProjectState.blocked_resources
-    if project.work_source == WorkSource.issues:
-        # Deterministic per-issue pipeline: with no pending/running task (handled
-        # above), any non-terminal issue is waiting on a human — blocked at the
-        # clarify step, rejected at review, or stalled after an errored task that
-        # the next scan will retry. A drained queue is idle.
-        if any(
-            w.status not in (WorkstreamStatus.done, WorkstreamStatus.cancelled)
-            for w in workstreams
-        ):
-            return ProjectState.blocked_clarity
-        return ProjectState.idle_no_open_issues
     active = [
         w
         for w in workstreams
@@ -178,35 +166,34 @@ class Supervisor:
         return project.daily_budget_usd > 0 and self.spend_today(project.id) >= project.daily_budget_usd
 
     def refresh_state(self, project: Project) -> ProjectState:
-        if project.work_source == WorkSource.spec:
-            conversation = self.store.get(AgentConversation, project.intake_conversation_id)
-            if conversation and conversation.status == ConversationStatus.done:
-                pass
-            elif conversation and conversation.status in (
-                ConversationStatus.open,
-                ConversationStatus.running,
-                ConversationStatus.finalizing,
-            ):
+        conversation = self.store.get(AgentConversation, project.intake_conversation_id)
+        if conversation and conversation.status == ConversationStatus.done:
+            pass
+        elif conversation and conversation.status in (
+            ConversationStatus.open,
+            ConversationStatus.running,
+            ConversationStatus.finalizing,
+        ):
+            if project.state != ProjectState.intake:
+                project.state = ProjectState.intake
+                self.store.put(project)
+            return ProjectState.intake
+        elif not project.goal_complete:
+            workstreams = self.store.list(
+                Workstream, workspace_id=self.workspace_id, project_id=project.id
+            )
+            tasks = [
+                t
+                for t in self.store.list(
+                    Task, workspace_id=self.workspace_id, project_id=project.id
+                )
+                if t.kind not in (TaskKind.intake, TaskKind.probe)
+            ]
+            if not workstreams and not tasks:
                 if project.state != ProjectState.intake:
                     project.state = ProjectState.intake
                     self.store.put(project)
                 return ProjectState.intake
-            elif not project.goal_complete:
-                workstreams = self.store.list(
-                    Workstream, workspace_id=self.workspace_id, project_id=project.id
-                )
-                tasks = [
-                    t
-                    for t in self.store.list(
-                        Task, workspace_id=self.workspace_id, project_id=project.id
-                    )
-                    if t.kind not in (TaskKind.intake, TaskKind.probe)
-                ]
-                if not workstreams and not tasks:
-                    if project.state != ProjectState.intake:
-                        project.state = ProjectState.intake
-                        self.store.put(project)
-                    return ProjectState.intake
         workstreams = self.store.list(
             Workstream, workspace_id=self.workspace_id, project_id=project.id
         )
@@ -322,12 +309,6 @@ class Supervisor:
                 continue
             self.dispatch(project)
             state = self.refresh_state(project)
-            if project.work_source == WorkSource.issues:
-                # Issues mode is a deterministic pipeline (scan + task_result state
-                # machine); the LLM planner is not in the path. Dispatch the queued
-                # resolve/review tasks and drop any events — no orchestrator wake.
-                self._events.pop(project.id, None)
-                continue
             if state == ProjectState.intake:
                 # Intake is a runner-backed scout conversation. It can dispatch
                 # tasks above, but it is not the build orchestrator's turn yet.

@@ -84,7 +84,6 @@ from hive.models import (
     TaskKind,
     TaskStatus,
     Verdict,
-    WorkSource,
     Workstream,
     WorkstreamSource,
     WorkstreamStatus,
@@ -130,7 +129,6 @@ class ProjectStart(BaseModel):
 class ProjectPatch(BaseModel):
     spec_repo: str | None = None
     mode: Mode | None = None
-    work_source: WorkSource | None = None
     autonomy: Autonomy | None = None
     guess_propensity: GuessPropensity | None = None
     prod_deploys: bool | None = None
@@ -243,9 +241,12 @@ def _set_ws_status(store, ws_id: str, status: WorkstreamStatus, reason: str) -> 
 
 
 def _land_resolve(store, task: Task, body: "TaskResult", config: Config) -> None:
-    """Issues mode: a resolve task finished. FIXED → reviewing (queue the review);
-    BLOCKED/unparseable → blocked_clarity (the agent commented on the issue); an
-    execution error leaves it resolving so the next scan retries."""
+    """Issue solving: a resolve task finished.
+
+    FIXED -> reviewing (queue the review); BLOCKED/unparseable ->
+    blocked_clarity (the agent commented on the issue); an execution error
+    leaves it resolving so the next scan retries.
+    """
     if body.is_error:
         log.warning("resolve task %s (issue #%s) errored; leaving 'resolving' for re-scan retry: %s",
                     task.id, task.issue_number, body.text[:300])
@@ -329,9 +330,12 @@ def _issue_resolution_comment(store, review_task: Task, review_text: str, branch
 
 
 def _land_review(store, task: Task, body: "TaskResult", config: Config) -> None:
-    """Issues mode: a review task finished. ACCEPT → merge the branch into the
-    default branch and close the issue (Hive, via the GitHub API); REJECT/error →
-    rejected (the agent commented). Landing failures escalate to a human."""
+    """Issue solving: a review task finished.
+
+    ACCEPT -> merge the branch into the default branch and close the issue
+    (Hive, via the GitHub API); REJECT/error -> rejected (the agent commented).
+    Landing failures escalate to a human.
+    """
     ws = store.get(Workstream, task.workstream_id)
     if ws is None or ws.status != WorkstreamStatus.reviewing:
         return
@@ -1286,12 +1290,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 raise HTTPException(400, "cannot clear spec_repo after work has started")
         for key, value in updates.items():
             setattr(project, key, value)
-        if updates.get("work_source") == WorkSource.issues and project.spec_repo.strip():
-            supervisor.wake(
-                project_id,
-                "Issue solving is available on this project: scan the spec repo's open "
-                "GitHub issues from the Issues view when you want Hive to resolve them.",
-            )
         if note is not None:
             project.goal_complete = False
             project.goal_complete_note = ""

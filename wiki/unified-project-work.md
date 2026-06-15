@@ -31,7 +31,7 @@ Target hierarchy:
 Workspace
   Project
     Workstream       # ongoing channel of project work
-      WorkItem       # durable unit of desired work
+      work item      # durable unit of desired work
         Task         # one runner execution attempt
 ```
 
@@ -49,11 +49,11 @@ Supporting concepts:
 - **Workstream** — an ongoing channel of project work with a source, executor,
   repo scope, status, and policy. Examples: "iteration goal" and "GitHub issues
   for `ikamensh/hive`".
-- **WorkItem** — one durable unit inside a workstream. Examples: an
+- **Work item** — one durable unit inside a workstream. Examples: an
   orchestrator-created build chunk like "auth flow", or GitHub issue #42.
 - **Task** — one execution attempt assigned to a runner. It has exact
   instructions, backend/model, repo/branch, status, cost, result text, and
-  trace. A work item may have many tasks: implement, verify, fix, resolve,
+  trace. One work item may have many tasks: implement, verify, fix, resolve,
   review. Failed or rejected tasks do not replace the work item; they are its
   execution history.
 - **Run** — a bounded user-triggered batch on a workstream. For issue solving,
@@ -71,12 +71,11 @@ Supporting concepts:
 - **Needs you** — the UI attention queue: open questions, human todos, blocked
   issue work items, and landing failures.
 
-Names to change from the current code:
+Names to change from the current code in this design:
 
 | Current name | Target name | Why |
 | --- | --- | --- |
-| `Project.work_source` | remove | Projects should not be mutually exclusive source modes. |
-| Current `Workstream` | `WorkItem` | It is a unit of desired work, not the ongoing stream above a source. |
+| project source-mode field | removed | Projects should not be mutually exclusive source modes. |
 | `HumanTask` | `HumanTodo` | It is an operator action, not an agent execution. |
 
 Optional later renames if they still feel clearer after the workstream refactor:
@@ -90,7 +89,7 @@ Optional later renames if they still feel clearer after the workstream refactor:
 
 ### Project
 
-`Project` stops carrying `work_source`. It remains the top-level object:
+`Project` stops carrying a source-mode field. It remains the top-level object:
 
 - `name`
 - `spec_repo`
@@ -141,14 +140,15 @@ Every project gets exactly one `iteration` workstream. A project can have zero
 or more `github_issues` workstreams, usually one per member repo.
 
 Implementation naming note: the current code already uses `Workstream` for the
-smaller unit an orchestrator works on. In this design, that smaller unit should
-be renamed to `WorkItem`. The hierarchy becomes:
+smaller unit an orchestrator works on. Do not force a broad rename yet. The
+product language can use lowercase "work item" for a GitHub issue or planner
+chunk while the persisted models settle. The hierarchy is:
 
 ```text
 Project
   Workstream     # iteration goal, GitHub issues for repo X
-    WorkItem     # auth-flow chunk, issue #42
-    Task       # one runner execution attempt
+    work item    # auth-flow chunk, issue #42
+      Task       # one runner execution attempt
 ```
 
 Current implementation waypoint: the new top-level persisted object is named
@@ -157,20 +157,19 @@ serving legacy work-item rows safely. The API already exposes the target shape:
 `workstreams` are the top-level streams, while old per-unit rows are returned as
 `work_items`.
 
-### WorkItem
+### Work Items
 
-Rename the current smaller `Workstream` model to `WorkItem` and make workstream
-ownership explicit:
+Make workstream ownership explicit for the current smaller rows:
 
 ```python
 workstream_id: str = ""
 repo: str = ""
-source: WorkItemSource = manual | github_issue
+source: WorkstreamSource = manual | issue
 external_ref: dict = {}  # issue number, URL, labels, attachment names
 ```
 
 The existing issue-specific fields can be migrated gradually or kept as cached
-columns for now. The important invariant is that every GitHub issue work item
+columns for now. The important invariant is that every GitHub issue row
 belongs to a GitHub issues workstream and a concrete repo.
 
 ### IssueRun
@@ -212,11 +211,12 @@ later are synced into the workstream, but they do not join that run unless the
 user starts another run. Continuous/watch mode can be added later as a different
 run policy.
 
-`Task` should eventually carry `workstream_id`, `work_item_id`, and `run_id`.
-During migration, the existing `Task.workstream_id` keeps its current
-work-item meaning until it can be renamed. Issue `resolve`, `review`, and
-`preflight` tasks set all three fields. Iteration `work` and `verify` tasks set
-the iteration workstream and work item, and leave `run_id` empty.
+`Task` should eventually distinguish the parent workstream, the durable item
+being executed, and the optional run. During migration, the existing
+`Task.workstream_id` keeps its current smaller-row meaning and `work_item_id`
+acts as a bridge for issue-run wiring. Issue `resolve`, `review`, and
+`preflight` tasks set the bridge fields. Iteration `work` and `verify` tasks
+keep the existing shape until the data model can be simplified without churn.
 
 ## Issue workstream behavior
 
@@ -246,9 +246,8 @@ The existing functions move from project-wide to workstream/run-aware:
 - `advance_issues(store, project, workstream, run)`
 - `create_review_task(..., workstream_id, run_id)`
 
-`scan-issues` should stop requiring `project.work_source == issues`. It should
-be replaced by workstream/run endpoints, with old routes kept briefly as
-compatibility wrappers.
+`scan-issues` no longer requires a project source mode. It is a
+compatibility wrapper over the workstream/run endpoints.
 
 ## Interaction with iteration work
 
@@ -282,11 +281,11 @@ Long term, project state should be computed from facts plus attention counts:
 
 The UI can display the reason text: "needs answers", "2 issue blockers",
 "runner login needed", "goal complete", etc. This is clearer than encoding
-issue-specific terminal states like `idle_no_open_issues` on the project.
+issue-specific terminal states on the project.
 
-During migration, the current enum can stay, but `blocked_clarity` and
-`idle_no_open_issues` should become issue workstream statuses/counts rather
-than project identities.
+During migration, `blocked_clarity` can stay as the attention reason for issue
+blockers, but issue-queue terminal states should live on issue workstreams/runs
+rather than project identities.
 
 ## API shape
 
@@ -318,8 +317,8 @@ POST /api/issue-runs/{run_id}/cancel
 
 Backwards compatibility:
 
-- `PATCH project.work_source` becomes a no-op or maps `issues` to "ensure an
-  issue workstream exists for `spec_repo`".
+- Older clients that still send the legacy source-mode field are ignored by the patch
+  model; issue workstreams are created from repo context instead.
 - `POST /scan-issues` maps to "create or find issue workstream for `spec_repo`,
   run all_open_now".
 - `POST /issues-preflight` maps to the issue workstream preflight.
@@ -485,21 +484,21 @@ the vocabulary, but the default should be manual runs.
 ## Migration
 
 1. Create an iteration workstream for every project.
-2. Rename the current smaller `Workstream` records to `WorkItem` records.
-3. For each `project.work_source == issues`, create a GitHub issues workstream
-   for `project.spec_repo`.
+2. Attach the current smaller `Workstream` rows to their parent workstream.
+3. For each legacy project that had issue work items, create a GitHub issues
+   workstream for `project.spec_repo`.
 4. Attach existing issue work items and resolve/review/preflight tasks to that
    workstream. If no run record exists, create a synthetic historical run.
 5. Keep current issue statuses, but compute project state from all workstreams.
 6. Remove the UI work-source picker.
-7. After compatibility routes have no callers, delete `WorkSource`,
-   issue-specific project states, and the dormant issue orchestrator tools.
+7. After compatibility routes have no callers, delete remaining issue-specific
+   project states and stale issue-solving docs.
 
 ## Test plan
 
 - Unit: workstream creation, migration from old issue projects, preflight
-  without `work_source`, issue run scoping, and one-active-issue-per-workstream
-  invariant.
+  independent of project mode, issue run scoping, and
+  one-active-issue-per-workstream invariant.
 - API: create project, add issue workstream, sync, run selected issues, cancel
   run, retry blocked issue after a GitHub comment.
 - Supervisor: issue tasks and iteration tasks share repo serialization and
@@ -511,11 +510,11 @@ the vocabulary, but the default should be manual runs.
 
 ## Recommended implementation order
 
-1. Add target `Workstream`, `WorkItem`, `IssueRun`, `workstream_id`,
-   `work_item_id`, and `run_id` while keeping existing fields and routes.
+1. Add the parent workstream layer, `IssueRun`, and bridge fields while keeping
+   existing fields and routes.
 2. Move issue preflight/reconcile/advance to workstream-aware functions.
-3. Replace setup `work_source` with issue workstreams in the API and UI.
+3. Replace setup/source mode with issue workstreams in the API and UI.
 4. Rework project state computation to aggregate workstreams.
 5. Add run scoping and selected-issue UI.
-6. Delete compatibility code and stale issue-mode docs once existing data is
+6. Delete compatibility code and stale issue-solving docs once existing data is
    migrated.
