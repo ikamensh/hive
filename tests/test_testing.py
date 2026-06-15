@@ -17,7 +17,7 @@ from hive.models import (
 )
 from hive.store import MemoryStore
 from hive.supervisor import Supervisor
-from hive.testing import ensure_testing_workstream, reconcile_stories
+from hive.testing import ensure_testing_workstream, file_or_update_finding_issue, reconcile_stories
 from tests.test_api_e2e import RUNNER_HEADERS, _pump, _register_usable_runner
 
 
@@ -196,6 +196,42 @@ def test_artifact_upload_roundtrip(tmp_path):
         content=b"x",
         headers=RUNNER_HEADERS,
     ).status_code in {400, 404}
+
+
+def test_file_testing_issue_creates_custom_labels(monkeypatch):
+    calls = []
+
+    class Response:
+        def __init__(self, status_code, payload=None):
+            self.status_code = status_code
+            self._payload = payload or {}
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise AssertionError(f"unexpected status {self.status_code}")
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, json, headers, timeout):
+        calls.append((url, json))
+        if url.endswith("/labels"):
+            return Response(201)
+        if url.endswith("/issues"):
+            return Response(201, {"number": 12, "html_url": "https://github.com/acme/hive/issues/12"})
+        raise AssertionError(url)
+
+    monkeypatch.setattr("hive.testing.httpx.post", fake_post)
+    story = Story(project_id="p", workstream_id="w", repo="https://github.com/acme/hive", key="login")
+    finding = Finding(project_id="p", workstream_id="w", repo=story.repo, episode_id="e", story_key=story.key, summary="Login fails")
+
+    number, url = file_or_update_finding_issue(story.repo, finding, story, "token")
+
+    assert number == 12
+    assert url.endswith("/12")
+    assert [body["name"] for request_url, body in calls if request_url.endswith("/labels")] == ["hive-test"]
+    issue_body = next(body for request_url, body in calls if request_url.endswith("/issues"))
+    assert issue_body["labels"] == ["hive-test", "bug"]
 
 
 def _start_episode_to_sweep(client, store, pid, rid, stream_id):

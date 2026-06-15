@@ -736,6 +736,27 @@ def _issue_body(finding: Finding, story: Story) -> str:
     return "\n".join(parts)
 
 
+LABEL_DEFS = {
+    "hive-test": ("5b8def", "Filed by Hive's testing workstream"),
+    "ux": ("c5def5", "User experience issue found by Hive testing"),
+}
+
+
+def _ensure_issue_labels(owner_repo: str, labels: list[str], headers: dict) -> None:
+    for label in labels:
+        if label not in LABEL_DEFS:
+            continue
+        color, description = LABEL_DEFS[label]
+        response = httpx.post(
+            f"https://api.github.com/repos/{owner_repo}/labels",
+            json={"name": label, "color": color, "description": description},
+            headers=headers,
+            timeout=30.0,
+        )
+        if response.status_code not in (201, 422):
+            response.raise_for_status()
+
+
 def file_or_update_finding_issue(repo_ref: str, finding: Finding, story: Story, token: str) -> tuple[int, str]:
     owner_repo = parse_repo_ref(repo_ref)
     labels = ["hive-test", "bug" if finding.kind == FindingKind.bug else "ux"]
@@ -751,12 +772,20 @@ def file_or_update_finding_issue(repo_ref: str, finding: Finding, story: Story, 
         )
         response.raise_for_status()
         return finding.issue_number, finding.issue_url
+    _ensure_issue_labels(owner_repo, labels, headers)
     response = httpx.post(
         f"https://api.github.com/repos/{owner_repo}/issues",
         json={"title": title, "body": body, "labels": labels},
         headers=headers,
         timeout=30.0,
     )
+    if response.status_code == 422:
+        response = httpx.post(
+            f"https://api.github.com/repos/{owner_repo}/issues",
+            json={"title": title, "body": body},
+            headers=headers,
+            timeout=30.0,
+        )
     response.raise_for_status()
     payload = response.json()
     return int(payload["number"]), str(payload.get("html_url") or "")
