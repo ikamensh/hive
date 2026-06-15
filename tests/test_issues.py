@@ -569,6 +569,39 @@ def test_issue_workstream_run_selected_endpoint(app, monkeypatch):
     assert task.issue_number == 2 and task.run_id == resp["run"]["id"]
 
 
+def test_cancel_issue_run_cancels_pending_run_task(app, monkeypatch):
+    client, store = app
+    project = client.post("/api/projects", json={"name": "spec"}).json()
+    client.patch(f"/api/projects/{project['id']}", json={"spec_repo": "https://github.com/o/r.git"})
+    _pass_preflight(monkeypatch)
+    monkeypatch.setattr(
+        "hive.api.fetch_open_issues_full",
+        lambda repo, token: [issue(1, "first"), issue(2, "second")],
+    )
+
+    detail = client.get(f"/api/projects/{project['id']}").json()
+    stream = next(w for w in detail["workstreams"] if w["kind"] == "github_issues")
+    run = client.post(
+        f"/api/projects/{project['id']}/workstreams/{stream['id']}/issue-runs",
+        json={"scope": "selected", "issue_numbers": [1, 2]},
+    ).json()["run"]
+
+    task = store.list(Task, project_id=project["id"])[0]
+    assert task.status == TaskStatus.pending and task.run_id == run["id"]
+
+    cancelled = client.post(f"/api/issue-runs/{run['id']}/cancel").json()
+
+    assert cancelled["status"] == IssueRunStatus.cancelled
+    assert cancelled["counts"]["cancelled_tasks"] == 1
+    assert store.get(Task, task.id).status == TaskStatus.cancelled
+    assert store.get(Workstream, task.workstream_id).status == WorkstreamStatus.queued
+
+    project_model = store.get(Project, project["id"])
+    cancelled_run = store.get(IssueRun, run["id"])
+    assert advance_issues(store, project_model, run=cancelled_run) == 0
+    assert len(store.list(Task, project_id=project["id"])) == 1
+
+
 # -- preflight ---------------------------------------------------------------
 
 

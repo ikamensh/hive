@@ -551,6 +551,8 @@ def advance_issues(
     and queue its resolve task. Returns 1 if it started an issue, else 0.
     Idempotent — call after every scan and every issue-task landing so the next
     issue branches from a default branch that already has the prior fixes."""
+    if run and run.status == IssueRunStatus.cancelled:
+        return 0
     if run and run.scope == IssueRunScope.scan_only:
         refresh_issue_run(store, project, run)
         return 0

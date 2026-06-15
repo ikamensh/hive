@@ -5,6 +5,7 @@ import type {
   HumanTask,
   GithubRepo,
   IntakeMessage,
+  IssueRun,
   IssueRunResult,
   Project,
   ProjectCreate,
@@ -123,6 +124,7 @@ const realApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  cancelIssueRun: (id: string) => http<IssueRun>(`/api/issue-runs/${id}/cancel`, { method: "POST" }),
   answerQuestion: (id: string, answer: string) =>
     http<Question>(`/api/questions/${id}/answer`, { method: "POST", body: JSON.stringify({ answer }) }),
   feedback: async (project_id: string, target_id: string, verdict: "up" | "down", comment: string) => {

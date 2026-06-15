@@ -959,6 +959,15 @@ export const api = {
     };
   },
 
+  cancelIssueRun: async (id: string): Promise<IssueRun> => {
+    const run = issueRuns.find((r) => r.id === id);
+    if (!run) throw new Error("not found");
+    run.status = "cancelled";
+    run.finished_at = Date.now() / 1000;
+    run.counts = { ...run.counts, cancelled_tasks: 0 };
+    return structuredClone(run);
+  },
+
   answerQuestion: async (id: string, answer: string): Promise<Question> => {
     const q = questions.find((x) => x.id === id)!;
     q.status = "answered";

@@ -1241,6 +1241,39 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             "changes": notes,
         }
 
+    @app.post("/api/issue-runs/{run_id}/cancel")
+    def cancel_issue_run(run_id: str, ctx: AuthContext = Depends(current)):
+        run = store.get(IssueRun, run_id)
+        if not run or run.workspace_id != ctx.workspace_id:
+            raise HTTPException(404)
+        project = require_project(run.project_id, ctx)
+        cancelled_tasks = 0
+        for task in store.list(
+            Task,
+            workspace_id=ctx.workspace_id,
+            project_id=run.project_id,
+            run_id=run.id,
+        ):
+            if task.status != TaskStatus.pending:
+                continue
+            task.status = TaskStatus.cancelled
+            task.result_text = "Cancelled by operator when the issue run was cancelled."
+            task.finished_at = time.time()
+            store.put(task)
+            if task.kind in (TaskKind.resolve, TaskKind.review):
+                _cancel_issue_work(store, task)
+            cancelled_tasks += 1
+
+        run = refresh_issue_run(store, project, run)
+
+        def mark(saved: IssueRun) -> None:
+            saved.status = IssueRunStatus.cancelled
+            saved.finished_at = saved.finished_at or time.time()
+            saved.counts = {**saved.counts, "cancelled_tasks": cancelled_tasks}
+
+        run = store.update(IssueRun, run.id, mark) or run
+        return run.model_dump()
+
     @app.get("/api/projects/{project_id}")
     def get_project(project_id: str, ctx: AuthContext = Depends(current)):
         project = require_project(project_id, ctx)
