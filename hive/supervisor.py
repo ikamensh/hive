@@ -39,6 +39,7 @@ log = logging.getLogger("hive.supervisor")
 
 RUNNER_OFFLINE_TASK_FAIL_S = 300.0
 LEASE_TTL_S = 60.0  # renewed every tick (15s); a dead leader is superseded within a minute
+PARALLEL_REPO_TASKS = (TaskKind.test_sweep, TaskKind.test_reproduce, TaskKind.test_judge)
 
 
 def utc_day_start() -> float:
@@ -49,6 +50,19 @@ def utc_day_start() -> float:
     return midnight.timestamp()
 
 
+def _capacity_key(backend: str, capabilities: list[str]) -> str:
+    caps = ",".join(sorted(capabilities))
+    return f"{backend}|{caps}" if caps else backend
+
+
+def _task_capacity_key(task: Task) -> str:
+    return _capacity_key(task.backend, task.required_capabilities)
+
+
+def _serializes_repo(task: Task) -> bool:
+    return task.kind not in PARALLEL_REPO_TASKS
+
+
 def compute_state(
     project: Project,
     workstreams: list[Workstream],
@@ -56,6 +70,7 @@ def compute_state(
     tasks: list[Task],
     available_backends: set[str],
     over_budget: bool = False,
+    available_capacity: set[str] | None = None,
 ) -> ProjectState:
     if project.goal_complete:
         return ProjectState.idle_goal_complete
@@ -66,10 +81,11 @@ def compute_state(
     if pending:
         if over_budget:
             return ProjectState.blocked_budget
+        capacity = available_capacity if available_capacity is not None else available_backends
         # Backend-aware: a pending task only counts as progressable if some
         # online runner offers its backend with available quota. Otherwise the
         # project is genuinely stuck on resources, not silently "working".
-        if any(t.backend in available_backends for t in pending):
+        if any(_task_capacity_key(t) in capacity for t in pending):
             return ProjectState.working
         return ProjectState.blocked_resources
     active = [
@@ -144,6 +160,23 @@ class Supervisor:
             if res.available() and res.runner_id in online
         }
 
+    def available_capacity(self) -> set[str]:
+        """Backend+capability combinations an online runner can execute."""
+        online = {
+            r.id for r in self.store.list(Runner, workspace_id=self.workspace_id) if r.online()
+        }
+        capacity: set[str] = set()
+        for res in self.store.list(Resource, workspace_id=self.workspace_id):
+            if not res.available() or res.runner_id not in online:
+                continue
+            capacity.add(_capacity_key(res.backend, []))
+            for capability in ("browser", "docker"):
+                if res.supports([capability]):
+                    capacity.add(_capacity_key(res.backend, [capability]))
+            if res.supports(["browser", "docker"]):
+                capacity.add(_capacity_key(res.backend, ["browser", "docker"]))
+        return capacity
+
     def spend_today(self, project_id: str) -> float:
         start = utc_day_start()
         tasks = sum(
@@ -215,6 +248,7 @@ class Supervisor:
             tasks,
             self.available_backends(),
             self.over_budget(project),
+            self.available_capacity(),
         )
         if state != project.state:
             project.state = state
@@ -222,11 +256,16 @@ class Supervisor:
         return state
 
     def dispatch(self, project: Project) -> int:
-        """Assign pending tasks to runners. One task per repo at a time."""
+        """Assign pending tasks to runners. Mutating tasks serialize per repo;
+        test sweeps/confirmations are isolated by their own environments."""
         if self.over_budget(project):
             return 0  # daily soft cap reached; no new spend until UTC midnight
         tasks = self.store.list(Task, workspace_id=self.workspace_id, project_id=project.id)
-        busy_repos = {t.repo for t in tasks if t.status == TaskStatus.running}
+        busy_repos = {
+            t.repo
+            for t in tasks
+            if t.status == TaskStatus.running and _serializes_repo(t)
+        }
         runners = [r for r in self.store.list(Runner, workspace_id=self.workspace_id) if r.online()]
         resources = {
             (r.runner_id, r.backend): r
@@ -235,12 +274,20 @@ class Supervisor:
         }
         dispatched = 0
         for task in tasks:
-            if task.status != TaskStatus.pending or task.repo in busy_repos:
+            if task.status != TaskStatus.pending:
+                continue
+            if _serializes_repo(task) and task.repo in busy_repos:
                 continue
             for runner in runners:
-                if task.backend in runner.backends and (runner.id, task.backend) in resources:
+                resource = resources.get((runner.id, task.backend))
+                if (
+                    task.backend in runner.backends
+                    and resource is not None
+                    and resource.supports(task.required_capabilities)
+                ):
                     if self._claim(task.id, runner):
-                        busy_repos.add(task.repo)
+                        if _serializes_repo(task):
+                            busy_repos.add(task.repo)
                         dispatched += 1
                         log.info("dispatched task %s to runner %s", task.id, runner.name)
                     break  # this task is decided (claimed, or taken by someone else)

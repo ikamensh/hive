@@ -736,6 +736,13 @@ textarea:focus {
   color: #7fb8e8;
   border-color: #7fb8e833;
 }
+.chip-kind-test_refresh,
+.chip-kind-test_sweep,
+.chip-kind-test_reproduce,
+.chip-kind-test_judge {
+  color: var(--amber);
+  border-color: #f0b35033;
+}
 
 /* ---- modal ------------------------------------------------------------------- */
 
@@ -1351,6 +1358,11 @@ textarea:focus {
 .issue-run-drawer input {
   width: auto;
 }
+.issue-run-drawer .small-number {
+  width: 46px;
+  min-width: 46px;
+  padding: 5px 7px;
+}
 .scan-error,
 .preflight-summary {
   max-width: 520px;
@@ -1639,6 +1651,70 @@ textarea:focus {
 }
 .chip-iss-cancelled {
   color: var(--ink-faint);
+}
+.chip-story-failing,
+.chip-story-blocked,
+.chip-find-confirmed {
+  color: var(--red);
+  border-color: #f0786133;
+}
+.chip-story-stale,
+.chip-story-untested,
+.chip-find-suspected,
+.chip-find-constrained {
+  color: var(--amber);
+  border-color: #f0b35033;
+}
+.chip-story-passing {
+  color: var(--green);
+  border-color: #5fd6a433;
+}
+.chip-story-archived,
+.chip-find-rejected,
+.chip-find-duplicate {
+  color: var(--ink-faint);
+}
+.story-table td small {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+.story-table th:nth-child(2),
+.story-table td:nth-child(2) {
+  width: 34%;
+}
+.story-table th:nth-child(3),
+.story-table td:nth-child(3) {
+  width: 96px;
+}
+.story-table th:nth-child(4),
+.story-table td:nth-child(4) {
+  width: 76px;
+}
+.story-table th:nth-child(5),
+.story-table td:nth-child(5) {
+  width: 82px;
+}
+.story-table th:nth-child(6),
+.story-table td:nth-child(6) {
+  width: 60px;
+}
+.test-episode-line {
+  margin: 8px 0 10px;
+}
+.story-findings {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.story-findings p {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink-dim);
 }
 
 /* inbox */

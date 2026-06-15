@@ -57,11 +57,28 @@ from hive.preflight import (
     create_preflight_task,
     preflight_checks,
 )
+from hive.testing import (
+    artifact_key,
+    close_story_issue,
+    ensure_testing_workstream,
+    file_or_update_finding_issue,
+    finish_refresh,
+    persist_sweep_findings,
+    queue_confirm_task,
+    queue_refresh_task,
+    reconcile_stories,
+    refresh_episode_counts,
+    safe_artifact_name,
+    start_episode,
+    result_payload as test_payload,
+)
 from hive.models import (
     AgentConversation,
     Autonomy,
     ConversationStatus,
     Feedback,
+    Finding,
+    FindingStatus,
     GuessPropensity,
     HumanTask,
     HumanTaskStatus,
@@ -80,14 +97,24 @@ from hive.models import (
     Resource,
     ResourceUsability,
     Runner,
+    Story,
+    StoryFidelity,
+    StoryStatus,
     Subscription,
     Task,
     TaskKind,
     TaskStatus,
+    TestEpisode,
+    TestEpisodeScope,
+    TestEpisodeStatus,
     Verdict,
     Workstream,
     WorkstreamSource,
     WorkstreamStatus,
+    parse_test_refresh,
+    parse_test_repro,
+    parse_test_sweep,
+    parse_test_ux,
     parse_resolve,
     parse_review,
     parse_verdict,
@@ -111,6 +138,12 @@ ISSUE_RESULT_MARKER_RE = re.compile(
     re.IGNORECASE,
 )
 ISSUE_COMMENT_SECTION_LIMIT = 6000
+TEST_TASK_KINDS = (
+    TaskKind.test_refresh,
+    TaskKind.test_sweep,
+    TaskKind.test_reproduce,
+    TaskKind.test_judge,
+)
 
 
 def _iso_utc(epoch: float) -> str:
@@ -166,6 +199,23 @@ class IssueRunCreate(BaseModel):
     model: str = ""
 
 
+class TestRefreshCreate(BaseModel):
+    backend: str = ""
+    model: str = ""
+
+
+class TestEpisodeCreate(BaseModel):
+    scope: TestEpisodeScope = TestEpisodeScope.priority
+    story_keys: list[str] = []
+    max_stories: int = 0
+    refresh_backend: str = ""
+    refresh_model: str = ""
+    sweep_backend: str = ""
+    sweep_model: str = ""
+    confirm_backend: str = ""
+    confirm_model: str = ""
+
+
 class AnswerBody(BaseModel):
     answer: str
 
@@ -197,6 +247,7 @@ class RunnerRegister(BaseModel):
     machine_kind: str = ""
     boot: bool = False  # true on daemon startup (vs periodic heartbeat)
     discoveries: list[BackendDiscoveryInput] = []
+    capabilities: list[str] = []
     auto_probe: bool = False
 
 
@@ -587,6 +638,234 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         else:
             run = refresh_issue_run(store, project, run)
         return run, notes, open_count, queued, downloaded, failed
+
+    def require_testing_workstream(workstream: ProjectWorkstream) -> None:
+        if workstream.kind != ProjectWorkstreamKind.testing:
+            raise HTTPException(400, "workstream is not a testing workstream")
+        require_enabled_workstream(workstream)
+
+    def fail_test_episode(episode: TestEpisode | None, reason: str) -> None:
+        if not episode:
+            return
+
+        def mark(saved: TestEpisode) -> None:
+            saved.status = TestEpisodeStatus.failed
+            saved.finished_at = saved.finished_at or time.time()
+            saved.counts = {**saved.counts, "failure": reason[:500]}
+
+        store.update(TestEpisode, episode.id, mark)
+
+    def handle_test_refresh_result(task: Task, body: TaskResult) -> None:
+        project = store.get(Project, task.project_id)
+        workstream = store.get(ProjectWorkstream, task.workstream_id)
+        episode = store.get(TestEpisode, task.run_id) if task.run_id else None
+        if not project or not workstream:
+            return
+        if body.cancelled:
+            if episode:
+                def cancel(saved: TestEpisode) -> None:
+                    saved.status = TestEpisodeStatus.cancelled
+                    saved.finished_at = time.time()
+
+                store.update(
+                    TestEpisode,
+                    episode.id,
+                    cancel,
+                )
+            return
+        if body.is_error or not parse_test_refresh(body.text):
+            fail_test_episode(episode, "test refresh failed or omitted REFRESH: DONE")
+            return
+        try:
+            spec = SpecRepo(
+                project.spec_repo,
+                Path(config.data_dir or "/tmp/hive-data") / "specs",
+                config.gh_token,
+            )
+            spec.sync()
+            if episode:
+                finish_refresh(store, project, workstream, episode, spec.path)
+            else:
+                reconcile_stories(store, project, workstream, spec.path)
+        except Exception as exc:
+            log.exception("test refresh finalization failed for task %s", task.id)
+            fail_test_episode(episode, f"{type(exc).__name__}: {exc}")
+            escalate(
+                store,
+                f"Repair testing refresh for {project.name}",
+                instructions=(
+                    "Hive's test-refresh task finished, but the control plane could not "
+                    "sync/reconcile `acceptance/` afterward.\n\n"
+                    f"Task: `{task.id}`\n\nError:\n\n```\n{type(exc).__name__}: {str(exc)[:1500]}\n```"
+                ),
+                project_id=project.id,
+                workspace_id=project.workspace_id,
+            )
+
+    def handle_test_sweep_result(task: Task, body: TaskResult) -> None:
+        project = store.get(Project, task.project_id)
+        story = store.get(Story, task.work_item_id or task.workstream_id)
+        episode = store.get(TestEpisode, task.run_id) if task.run_id else None
+        if not project or not story:
+            return
+        if body.cancelled:
+            if episode:
+                refresh_episode_counts(store, project, episode)
+            return
+        if body.is_error:
+            story.status = StoryStatus.blocked
+            story.last_episode_id = task.run_id
+            story.last_result_task_id = task.id
+            story.updated_at = time.time()
+            store.put(story)
+            if episode:
+                refresh_episode_counts(store, project, episode)
+            return
+        payload = test_payload(body.text)
+        outcome = parse_test_sweep(body.text)
+        if outcome == "pass":
+            closed = False
+            if story.open_issue_number:
+                try:
+                    close_story_issue(
+                        story.repo,
+                        story,
+                        config.gh_token,
+                        f"Hive re-tested story `{story.key}` in episode `{task.run_id}` and it passed.",
+                    )
+                    closed = True
+                except Exception as exc:
+                    log.warning("could not close green story issue #%s: %s", story.open_issue_number, exc)
+                    escalate(
+                        store,
+                        f"Close testing issue #{story.open_issue_number} failed",
+                        instructions=(
+                            f"Story `{story.key}` passed in task `{task.id}`, but Hive could not "
+                            f"close issue #{story.open_issue_number} automatically.\n\n{exc}"
+                        ),
+                        project_id=project.id,
+                        workspace_id=project.workspace_id,
+                    )
+            story.status = StoryStatus.passing
+            story.last_tested_baseline = story.spec_baseline
+            story.last_fidelity = (
+                StoryFidelity.docker if payload.get("fidelity") == "docker" else StoryFidelity.local
+            )
+            story.last_episode_id = task.run_id
+            story.last_result_task_id = task.id
+            story.last_tested_at = task.finished_at or time.time()
+            if closed:
+                story.open_issue_number = 0
+                story.open_issue_url = ""
+            story.updated_at = time.time()
+            store.put(story)
+        elif outcome == "findings":
+            findings = persist_sweep_findings(
+                store, project, story, task, episode or TestEpisode(project_id=project.id, workstream_id=story.workstream_id, repo=story.repo), payload
+            )
+            story.status = StoryStatus.failing
+            story.last_episode_id = task.run_id
+            story.last_result_task_id = task.id
+            story.last_tested_at = task.finished_at or time.time()
+            story.last_fidelity = (
+                StoryFidelity.docker if payload.get("fidelity") == "docker" else StoryFidelity.local
+            )
+            story.updated_at = time.time()
+            store.put(story)
+            if episode:
+                for finding in findings:
+                    queue_confirm_task(store, project, story, finding, episode)
+        else:
+            story.status = StoryStatus.blocked
+            story.last_episode_id = task.run_id
+            story.last_result_task_id = task.id
+            story.updated_at = time.time()
+            store.put(story)
+        if episode:
+            refresh_episode_counts(store, project, episode)
+
+    def confirm_test_finding(project: Project, story: Story, finding: Finding, episode: TestEpisode | None) -> None:
+        try:
+            number, url = file_or_update_finding_issue(story.repo or finding.repo, finding, story, config.gh_token)
+        except Exception as exc:
+            log.exception("filing testing issue failed for finding %s", finding.id)
+            fail_test_episode(episode, f"file GitHub issue failed: {type(exc).__name__}: {exc}")
+            escalate(
+                store,
+                f"File testing issue failed for {story.key}",
+                instructions=(
+                    f"Hive confirmed a testing finding but could not file/update the GitHub issue.\n\n"
+                    f"Story: `{story.key}`\nFinding: `{finding.summary}`\n\n"
+                    f"Error:\n\n```\n{type(exc).__name__}: {str(exc)[:1500]}\n```"
+                ),
+                project_id=project.id,
+                workspace_id=project.workspace_id,
+            )
+            return
+        finding.issue_number = number
+        finding.issue_url = url
+        finding.status = FindingStatus.confirmed
+        finding.updated_at = time.time()
+        store.put(finding)
+        story.status = StoryStatus.failing
+        story.open_issue_number = number
+        story.open_issue_url = url
+        story.updated_at = time.time()
+        store.put(story)
+
+    def handle_test_confirm_result(task: Task, body: TaskResult) -> None:
+        project = store.get(Project, task.project_id)
+        finding = store.get(Finding, task.workstream_id)
+        story = store.get(Story, task.work_item_id)
+        episode = store.get(TestEpisode, task.run_id) if task.run_id else None
+        if not project or not finding or not story:
+            return
+        if body.cancelled:
+            if episode:
+                refresh_episode_counts(store, project, episode)
+            return
+        if body.is_error:
+            finding.status = FindingStatus.rejected
+            finding.detail = (finding.detail + "\n\nConfirmation task errored:\n" + body.text).strip()
+            finding.updated_at = time.time()
+            store.put(finding)
+            if episode:
+                refresh_episode_counts(store, project, episode)
+            return
+        if task.kind == TaskKind.test_reproduce:
+            outcome = parse_test_repro(body.text)
+            if outcome == "confirmed":
+                confirm_test_finding(project, story, finding, episode)
+            else:
+                finding.status = FindingStatus.rejected
+                finding.updated_at = time.time()
+                store.put(finding)
+        elif task.kind == TaskKind.test_judge:
+            outcome = parse_test_ux(body.text)
+            if outcome == "improvable":
+                confirm_test_finding(project, story, finding, episode)
+            elif outcome == "constrained":
+                finding.status = FindingStatus.constrained
+                finding.updated_at = time.time()
+                store.put(finding)
+                note = body.text.strip()
+                story.known_limitations = list(dict.fromkeys([*story.known_limitations, note[:1000]]))
+                story.updated_at = time.time()
+                store.put(story)
+            else:
+                finding.status = FindingStatus.rejected
+                finding.updated_at = time.time()
+                store.put(finding)
+        if episode:
+            refresh_episode_counts(store, project, episode)
+
+    def handle_test_task_result(task: Task, body: TaskResult) -> None:
+        if task.kind == TaskKind.test_refresh:
+            handle_test_refresh_result(task, body)
+        elif task.kind == TaskKind.test_sweep:
+            handle_test_sweep_result(task, body)
+        elif task.kind in (TaskKind.test_reproduce, TaskKind.test_judge):
+            handle_test_confirm_result(task, body)
 
     def can_write_spec_repo(project: Project) -> bool:
         """Avoid slow surprise network attempts in throwaway/local runs.
@@ -1180,12 +1459,14 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         ctx: AuthContext = Depends(current),
     ):
         project = require_project(project_id, ctx)
-        if body.kind != ProjectWorkstreamKind.github_issues:
-            raise HTTPException(400, "only GitHub issue workstreams can be created manually")
         repo = body.repo.strip() or project.spec_repo
         if not repo.strip():
             raise HTTPException(400, "repo is required")
-        return ensure_issue_workstream(store, project, repo=repo).model_dump()
+        if body.kind == ProjectWorkstreamKind.github_issues:
+            return ensure_issue_workstream(store, project, repo=repo).model_dump()
+        if body.kind == ProjectWorkstreamKind.testing:
+            return ensure_testing_workstream(store, project, repo=repo).model_dump()
+        raise HTTPException(400, "only GitHub issue and testing workstreams can be created manually")
 
     @app.patch("/api/projects/{project_id}/workstreams/{workstream_id}")
     def patch_project_workstream(
@@ -1312,6 +1593,81 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         run = store.update(IssueRun, run.id, mark) or run
         return run.model_dump()
 
+    @app.post("/api/projects/{project_id}/workstreams/{workstream_id}/test-refresh")
+    def refresh_testing_workstream(
+        project_id: str,
+        workstream_id: str,
+        body: TestRefreshCreate = TestRefreshCreate(),
+        ctx: AuthContext = Depends(current),
+    ):
+        project = require_project(project_id, ctx)
+        workstream = require_project_workstream(project, workstream_id, ctx)
+        require_testing_workstream(workstream)
+        task = queue_refresh_task(
+            store,
+            project,
+            workstream,
+            backend=body.backend or config.test_refresh_backend,
+            model=body.model or config.test_refresh_model,
+        )
+        return {"task": task.model_dump()}
+
+    @app.post("/api/projects/{project_id}/workstreams/{workstream_id}/test-episodes")
+    def create_test_episode(
+        project_id: str,
+        workstream_id: str,
+        body: TestEpisodeCreate,
+        ctx: AuthContext = Depends(current),
+    ):
+        project = require_project(project_id, ctx)
+        workstream = require_project_workstream(project, workstream_id, ctx)
+        require_testing_workstream(workstream)
+        if body.scope == TestEpisodeScope.selected and not body.story_keys:
+            raise HTTPException(400, "select at least one story")
+        episode, task = start_episode(
+            store,
+            project,
+            workstream,
+            scope=body.scope,
+            selected_story_keys=body.story_keys,
+            max_stories=body.max_stories,
+            refresh_backend=body.refresh_backend or config.test_refresh_backend,
+            refresh_model=body.refresh_model or config.test_refresh_model,
+            sweep_backend=body.sweep_backend or config.test_sweep_backend,
+            sweep_model=body.sweep_model or config.test_sweep_model,
+            confirm_backend=body.confirm_backend or config.test_confirm_backend,
+            confirm_model=body.confirm_model or config.test_confirm_model,
+        )
+        return {"episode": episode.model_dump(), "refresh_task": task.model_dump()}
+
+    @app.post("/api/test-episodes/{episode_id}/cancel")
+    def cancel_test_episode(episode_id: str, ctx: AuthContext = Depends(current)):
+        episode = store.get(TestEpisode, episode_id)
+        if not episode or episode.workspace_id != ctx.workspace_id:
+            raise HTTPException(404)
+        cancelled_tasks = 0
+        for task in store.list(
+            Task,
+            workspace_id=ctx.workspace_id,
+            project_id=episode.project_id,
+            run_id=episode.id,
+        ):
+            if task.status != TaskStatus.pending:
+                continue
+            task.status = TaskStatus.cancelled
+            task.result_text = "Cancelled by operator when the testing episode was cancelled."
+            task.finished_at = time.time()
+            store.put(task)
+            cancelled_tasks += 1
+
+        def mark(saved: TestEpisode) -> None:
+            saved.status = TestEpisodeStatus.cancelled
+            saved.finished_at = saved.finished_at or time.time()
+            saved.counts = {**saved.counts, "cancelled_tasks": cancelled_tasks}
+
+        episode = store.update(TestEpisode, episode.id, mark) or episode
+        return episode.model_dump()
+
     @app.get("/api/projects/{project_id}")
     def get_project(project_id: str, ctx: AuthContext = Depends(current)):
         project = require_project(project_id, ctx)
@@ -1349,6 +1705,18 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             "issue_runs": [
                 r.model_dump()
                 for r in store.list(IssueRun, workspace_id=ctx.workspace_id, project_id=project_id)
+            ],
+            "stories": [
+                s.model_dump()
+                for s in store.list(Story, workspace_id=ctx.workspace_id, project_id=project_id)
+            ],
+            "findings": [
+                f.model_dump()
+                for f in store.list(Finding, workspace_id=ctx.workspace_id, project_id=project_id)
+            ],
+            "test_episodes": [
+                e.model_dump()
+                for e in store.list(TestEpisode, workspace_id=ctx.workspace_id, project_id=project_id)
             ],
             "spend_today": supervisor.spend_today(project_id),
         }
@@ -1474,6 +1842,29 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         store.put(task)
         return {"ok": True}
 
+    @app.post("/api/tasks/{task_id}/artifacts/{name:path}")
+    async def upload_artifact(
+        task_id: str,
+        name: str,
+        request: Request,
+        workspace_id: str = Depends(runner_auth),
+    ):
+        task = store.get(Task, task_id)
+        if not task or task.workspace_id != workspace_id:
+            raise HTTPException(404)
+        if blobs is None:
+            raise HTTPException(503, "no blob store configured")
+        try:
+            clean = safe_artifact_name(name)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        key = artifact_key(workspace_id, task_id, clean)
+        blobs.put(key, await request.body())
+        if clean not in task.artifact_blobs:
+            task.artifact_blobs.append(clean)
+            store.put(task)
+        return {"ok": True, "name": clean}
+
     @app.get("/api/tasks/{task_id}/attachments/{name}")
     def get_attachment(task_id: str, name: str, workspace_id: str = Depends(runner_auth)):
         """Runner-auth: serve an issue's image (downloaded on the control plane at
@@ -1483,6 +1874,22 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if not task or task.workspace_id != workspace_id or blobs is None:
             raise HTTPException(404)
         data = blobs.get(attachment_key(workspace_id, task.project_id, task.issue_number, name))
+        if data is None:
+            raise HTTPException(404)
+        return Response(data, media_type="application/octet-stream")
+
+    @app.get("/api/tasks/{task_id}/artifacts/{name:path}")
+    def get_artifact(task_id: str, name: str, ctx: AuthContext = Depends(current)):
+        task = store.get(Task, task_id)
+        if not task or task.workspace_id != ctx.workspace_id or blobs is None:
+            raise HTTPException(404)
+        try:
+            clean = safe_artifact_name(name)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if clean not in task.artifact_blobs:
+            raise HTTPException(404)
+        data = blobs.get(artifact_key(ctx.workspace_id, task_id, clean))
         if data is None:
             raise HTTPException(404)
         return Response(data, media_type="application/octet-stream")
@@ -1688,6 +2095,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         runner.workspace_id = workspace_id
         runner.machine_id = machine.id
         runner.backends = body.backends
+        runner.capabilities = sorted(set(body.capabilities))
         runner.last_seen = time.time()
         store.put(runner)
 
@@ -1738,6 +2146,19 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             resource.cli_path = discovery.path
             resource.cli_version = discovery.version
 
+        def apply_capabilities(resource: Resource) -> None:
+            caps = set(body.capabilities)
+            resource.browser_status = (
+                ResourceUsability.usable if "browser" in caps else ResourceUsability.unknown
+            )
+            resource.browser_probe_at = time.time() if "browser" in caps else resource.browser_probe_at
+            resource.browser_probe_text = "Runner advertised browser capability." if "browser" in caps else resource.browser_probe_text
+            resource.docker_status = (
+                ResourceUsability.usable if "docker" in caps else ResourceUsability.unknown
+            )
+            resource.docker_probe_at = time.time() if "docker" in caps else resource.docker_probe_at
+            resource.docker_probe_text = "Runner advertised docker capability." if "docker" in caps else resource.docker_probe_text
+
         for backend in body.backends:
             resource = (
                 resources_by_pair.get((machine.id, backend))
@@ -1754,6 +2175,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             resource.runner_id = runner.id
             if discovery := discovery_by_name.get(backend):
                 apply_discovery(resource, discovery)
+            apply_capabilities(resource)
             store.put(resource)
             resources_by_pair[(machine.id, backend)] = resource
             if body.auto_probe and resource.enabled and resource.usability_status == ResourceUsability.unknown:
@@ -1819,6 +2241,26 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                     task.verdict = parse_resolve(body.text)
                 elif task.kind == TaskKind.review:
                     task.verdict = parse_review(body.text)
+                elif task.kind == TaskKind.test_refresh:
+                    task.verdict = Verdict.accept if parse_test_refresh(body.text) else Verdict.none
+                elif task.kind == TaskKind.test_sweep:
+                    task.verdict = (
+                        Verdict.accept
+                        if parse_test_sweep(body.text) == "pass"
+                        else Verdict.reject
+                    )
+                elif task.kind == TaskKind.test_reproduce:
+                    task.verdict = (
+                        Verdict.accept
+                        if parse_test_repro(body.text) == "confirmed"
+                        else Verdict.reject
+                    )
+                elif task.kind == TaskKind.test_judge:
+                    task.verdict = (
+                        Verdict.accept
+                        if parse_test_ux(body.text) == "improvable"
+                        else Verdict.reject
+                    )
             task.result_text = body.text
             task.is_error = body.is_error
             task.cost_usd = body.cost_usd
@@ -1958,6 +2400,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 )
 
         if task.kind in (TaskKind.resolve, TaskKind.review, TaskKind.preflight):
+            return {"ok": True}
+
+        if task.kind in TEST_TASK_KINDS:
+            handle_test_task_result(task, body)
             return {"ok": True}
 
         outcome = "cancelled" if body.cancelled else ("failed" if body.is_error else "finished")

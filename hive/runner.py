@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -72,6 +73,25 @@ def detect_backends() -> list[str]:
 def discovery_payload() -> tuple[list[str], list[dict]]:
     discoveries = discover_backends()
     return detected_backend_names(discoveries), [asdict(d) for d in discoveries]
+
+
+def detect_capabilities() -> list[str]:
+    capabilities = []
+    if shutil.which("docker"):
+        try:
+            docker = subprocess.run(["docker", "info"], capture_output=True, text=True, timeout=10)
+            if docker.returncode == 0:
+                capabilities.append("docker")
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("playwright") is not None:
+            capabilities.append("browser")
+    except Exception:
+        pass
+    return capabilities
 
 
 def _github_repo(repo_url: str) -> str:
@@ -427,6 +447,23 @@ def _upload_trace(task_id: str, log_file, headers: dict, auth) -> None:
         log.warning("trace upload failed for %s: %s", task_id, exc)
 
 
+def _upload_artifacts(task_id: str, project_dir: Path, headers: dict, auth) -> list[str]:
+    root = project_dir / ".hive" / "artifacts"
+    if not root.is_dir():
+        return []
+    client = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=60.0, auth=auth)
+    uploaded: list[str] = []
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        name = path.relative_to(root).as_posix()
+        try:
+            response = client.post(f"/api/tasks/{task_id}/artifacts/{name}", content=path.read_bytes())
+            response.raise_for_status()
+            uploaded.append(name)
+        except (httpx.HTTPError, OSError) as exc:
+            log.warning("artifact upload failed for %s (%s): %s", task_id, name, exc)
+    return uploaded
+
+
 def execute(task: dict, headers: dict, auth) -> dict:
     from kodo import log as kodo_log
     from kodo.agent import Agent
@@ -482,6 +519,7 @@ def execute(task: dict, headers: dict, auth) -> dict:
         finally:
             stop_watch.set()
             _upload_trace(task["id"], kodo_log.get_log_file(), headers, auth)
+            _upload_artifacts(task["id"], project_dir, headers, auth)
 
     if cancelled.is_set():
         return {"text": "Task cancelled by operator.", "cancelled": True}
@@ -578,6 +616,7 @@ def main(argv: list[str] | None = None) -> None:
 
     def register(client: httpx.Client, *, boot: bool = False) -> tuple[str, list[str]]:
         backends, discoveries = discovery_payload()
+        capabilities = detect_capabilities()
         runner_id = client.post(
             "/api/runners/register",
             json={
@@ -591,6 +630,7 @@ def main(argv: list[str] | None = None) -> None:
                 "machine_kind": MACHINE_KIND,
                 "boot": boot,
                 "discoveries": discoveries,
+                "capabilities": capabilities,
                 "auto_probe": True,
             },
         ).raise_for_status().json()["runner_id"]

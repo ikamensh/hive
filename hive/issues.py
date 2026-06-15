@@ -342,6 +342,14 @@ def project_workstreams(store, project: Project) -> list[ProjectWorkstream]:
             issue_stream = ensure_issue_workstream(store, project)
         except ValueError:
             pass
+        try:
+            from hive.testing import ensure_testing_workstream
+
+            repos = project.member_repos or [project.spec_repo]
+            for repo in dict.fromkeys([r.strip() for r in repos if r.strip()]):
+                ensure_testing_workstream(store, project, repo=repo)
+        except ValueError:
+            pass
     for item in store.list(
         Workstream,
         workspace_id=project.workspace_id,

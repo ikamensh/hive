@@ -10,7 +10,7 @@ import {
   SegPicker,
   StateBadge,
 } from "../components/shared";
-import type { AgentConversation, Autonomy, GuessPropensity, HumanTodo, Mode, PreflightCheck, PreflightResult, Project, ProjectPatch, Question, ResourceInfo, ScanResult, Task, WorkItem, WorkItemStatus, Workstream } from "../types";
+import type { AgentConversation, Autonomy, Finding, GuessPropensity, HumanTodo, Mode, PreflightCheck, PreflightResult, Project, ProjectPatch, Question, ResourceInfo, ScanResult, Story, Task, TestEpisode, WorkItem, WorkItemStatus, Workstream } from "../types";
 
 /** Derive the issue's per-issue branch tree URL from its issue URL (`.../issues/42` → `.../tree/hive/issue-42`). */
 function issueBranchUrl(ws: WorkItem): string | null {
@@ -799,6 +799,253 @@ function IssuesView({
   );
 }
 
+const STORY_GROUPS: { label: string; statuses: Story["status"][] }[] = [
+  { label: "priority", statuses: ["untested", "stale", "failing", "blocked"] },
+  { label: "green", statuses: ["passing"] },
+  { label: "all", statuses: ["untested", "stale", "failing", "blocked", "passing"] },
+];
+
+function TestingToolbar({
+  project,
+  testingStreams,
+  selectedStreamId,
+  onSelectedStream,
+  selectedStoryKeys,
+  onChanged,
+}: {
+  project: Project;
+  testingStreams: Workstream[];
+  selectedStreamId: string;
+  onSelectedStream: (id: string) => void;
+  selectedStoryKeys: string[];
+  onChanged: () => void;
+}) {
+  const [busyAction, setBusyAction] = useState<"refresh" | "run" | "">("");
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [scope, setScope] = useState<"priority" | "full" | "selected">("priority");
+  const [maxStories, setMaxStories] = useState("5");
+  const stream = testingStreams.find((w) => w.id === selectedStreamId) ?? testingStreams[0];
+  const noRepo = !stream;
+  const streamDisabled = Boolean(stream && (!stream.enabled || stream.status === "disabled"));
+  const busy = busyAction !== "";
+
+  const refresh = async () => {
+    if (!stream) return;
+    setBusyAction("refresh");
+    setError("");
+    setMessage("");
+    try {
+      await api.refreshTests(project.id, stream.id);
+      setMessage("refresh task queued");
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message || "refresh failed");
+    }
+    setBusyAction("");
+  };
+
+  const run = async () => {
+    if (!stream) return;
+    setBusyAction("run");
+    setError("");
+    setMessage("");
+    const max = parseInt(maxStories, 10);
+    try {
+      const response = await api.runTests(project.id, stream.id, {
+        scope,
+        story_keys: scope === "selected" ? selectedStoryKeys : [],
+        max_stories: Number.isFinite(max) && max > 0 ? max : 0,
+      });
+      setMessage(`episode ${response.episode.status}`);
+      setDrawerOpen(false);
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message || "episode failed to start");
+    }
+    setBusyAction("");
+  };
+
+  return (
+    <section className="scan-bar test-bar reveal">
+      <div className="scan-text">
+        <h2>Testing</h2>
+        <select
+          value={stream?.id ?? ""}
+          onChange={(event) => onSelectedStream(event.target.value)}
+          disabled={testingStreams.length <= 1}
+        >
+          {testingStreams.length === 0 && <option value="">no testing workstream</option>}
+          {testingStreams.map((w) => (
+            <option value={w.id} key={w.id}>{repoShort(w.repo)}</option>
+          ))}
+        </select>
+      </div>
+      <div className="scan-actions">
+        {streamDisabled && <span className="muted">disabled in settings</span>}
+        <div className="scan-buttons">
+          <button className="ghost" onClick={refresh} disabled={busy || noRepo || streamDisabled}>
+            {busyAction === "refresh" ? "refreshing…" : "refresh stories"}
+          </button>
+          <button onClick={() => setDrawerOpen((v) => !v)} disabled={busy || noRepo || streamDisabled}>
+            run episode
+          </button>
+        </div>
+        {drawerOpen && (
+          <div className="issue-run-drawer test-run-drawer">
+            <label>
+              <input type="radio" checked={scope === "priority"} onChange={() => setScope("priority")} />
+              priority
+            </label>
+            <label>
+              <input type="radio" checked={scope === "selected"} onChange={() => setScope("selected")} />
+              selected ({selectedStoryKeys.length})
+            </label>
+            <label>
+              <input type="radio" checked={scope === "full"} onChange={() => setScope("full")} />
+              full
+            </label>
+            <label>
+              top
+              <input className="small-number" value={maxStories} onChange={(e) => setMaxStories(e.target.value)} />
+            </label>
+            <button onClick={run} disabled={busy || (scope === "selected" && selectedStoryKeys.length === 0)}>
+              {busyAction === "run" ? "starting…" : "start"}
+            </button>
+          </div>
+        )}
+        {error && <span className="form-error">{error}</span>}
+        {message && !error && <span className="scan-summary">{message}</span>}
+      </div>
+    </section>
+  );
+}
+
+function storySort(a: Story, b: Story): number {
+  const rank: Record<Story["status"], number> = {
+    failing: 0,
+    blocked: 1,
+    stale: 2,
+    untested: 3,
+    passing: 4,
+    archived: 5,
+  };
+  return (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || a.order - b.order || a.key.localeCompare(b.key);
+}
+
+function StoriesView({
+  stories,
+  findings,
+  episodes,
+  selectedStoryKeys,
+  onToggle,
+}: {
+  stories: Story[];
+  findings: Finding[];
+  episodes: TestEpisode[];
+  selectedStoryKeys: string[];
+  onToggle: (key: string) => void;
+}) {
+  const [filter, setFilter] = useState("priority");
+  const [openStory, setOpenStory] = useState<string | null>(null);
+  const group = STORY_GROUPS.find((g) => g.label === filter) ?? STORY_GROUPS[0];
+  const activeStories = stories.filter((s) => s.status !== "archived");
+  const items = activeStories
+    .filter((story) => group.label === "all" || group.statuses.includes(story.status))
+    .sort(storySort);
+  const latestEpisode = [...episodes].sort((a, b) => b.created_at - a.created_at)[0];
+
+  return (
+    <section className="issues-view stories-view">
+      {activeStories.length === 0 && <p className="muted">no stories yet — refresh to build the acceptance backlog</p>}
+      {activeStories.length > 0 && (
+        <>
+          <div className="issue-filter">
+            {STORY_GROUPS.map((g) => {
+              const count = activeStories.filter((s) => g.label === "all" || g.statuses.includes(s.status)).length;
+              return (
+                <button className={filter === g.label ? "active" : "ghost"} key={g.label} onClick={() => setFilter(g.label)}>
+                  {g.label} <span className="col-count">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+          {latestEpisode && (
+            <p className="muted test-episode-line">
+              latest episode {latestEpisode.status} · {ago(latestEpisode.created_at)}
+            </p>
+          )}
+          <div className="issue-table-wrap">
+            <table className="issue-table story-table">
+              <thead>
+                <tr>
+                  <th aria-label="select" />
+                  <th>story</th>
+                  <th>state</th>
+                  <th>fidelity</th>
+                  <th>tested</th>
+                  <th>issue</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((story) => {
+                  const open = openStory === story.key;
+                  const checked = selectedStoryKeys.includes(story.key);
+                  const storyFindings = findings.filter((finding) => finding.story_key === story.key);
+                  return (
+                    <Fragment key={story.id}>
+                      <tr>
+                        <td>
+                          <input type="checkbox" checked={checked} onChange={() => onToggle(story.key)} />
+                        </td>
+                        <td>
+                          <button className="issue-title" onClick={() => setOpenStory(open ? null : story.key)}>
+                            {story.title || story.key}
+                          </button>
+                          <small>{story.key}</small>
+                        </td>
+                        <td><span className={`chip chip-story-${story.status}`}>{story.status}</span></td>
+                        <td>{story.last_fidelity}</td>
+                        <td>{story.last_tested_at ? ago(story.last_tested_at) : "never"}</td>
+                        <td>
+                          {story.open_issue_url ? (
+                            <a href={story.open_issue_url} target="_blank" rel="noreferrer">#{story.open_issue_number}</a>
+                          ) : (
+                            <span className="muted">—</span>
+                          )}
+                        </td>
+                      </tr>
+                      {open && (
+                        <tr className="issue-detail-row">
+                          <td />
+                          <td colSpan={5}>
+                            <Markdown className="issue-detail" text={`${story.intent}\n\n${story.acceptance}`} />
+                            {storyFindings.length > 0 && (
+                              <div className="story-findings">
+                                {storyFindings.map((finding) => (
+                                  <p key={finding.id}>
+                                    <span className={`chip chip-find-${finding.status}`}>{finding.status}</span>
+                                    <b>{finding.kind.replace(/_/g, " ")}</b> {finding.summary}
+                                  </p>
+                                ))}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 function QuestionCard({ q, onAnswered }: { q: Question; onAnswered: () => void }) {
   const [answer, setAnswer] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1081,9 +1328,11 @@ function TaskCard({ task, projectId, onChanged }: { task: Task; projectId: strin
 
 export default function ProjectPage() {
   const { id = "" } = useParams();
-  const [primaryView, setPrimaryView] = useState<"work" | "issues">("work");
+  const [primaryView, setPrimaryView] = useState<"work" | "issues" | "tests">("work");
   const [selectedIssueStreamId, setSelectedIssueStreamId] = useState("");
   const [selectedIssueNumbers, setSelectedIssueNumbers] = useState<number[]>([]);
+  const [selectedTestingStreamId, setSelectedTestingStreamId] = useState("");
+  const [selectedStoryKeys, setSelectedStoryKeys] = useState<string[]>([]);
   const { data, failed, refresh } = usePoll(() => api.project(id), [id]);
   const { data: resources } = usePoll(() => api.resources(), [], 8000);
 
@@ -1091,7 +1340,7 @@ export default function ProjectPage() {
     return <div className="page">{failed ? <p className="muted">project unreachable</p> : <p className="muted">loading…</p>}</div>;
   }
 
-  const { project, workstreams, work_items, tasks, questions, conversations } = data;
+  const { project, workstreams, work_items, tasks, questions, conversations, stories, findings, test_episodes } = data;
   const humanTodos = data.human_todos ?? data.human_tasks ?? [];
   const intakeConversation =
     conversations.find((c) => c.id === project.intake_conversation_id) ??
@@ -1141,15 +1390,27 @@ export default function ProjectPage() {
   const configured = Boolean(project.spec_repo.trim());
   const issueStreams = workstreams.filter((w) => w.kind === "github_issues");
   const activeIssueStream = issueStreams.find((w) => w.id === selectedIssueStreamId) ?? issueStreams[0];
+  const testingStreams = workstreams.filter((w) => w.kind === "testing");
+  const activeTestingStream = testingStreams.find((w) => w.id === selectedTestingStreamId) ?? testingStreams[0];
   const manualWorkItems = work_items.filter((w) => (w.source ?? "manual") !== "issue");
   const issueWorkItems = work_items.filter((w) =>
     w.source === "issue" && (!activeIssueStream || !w.workstream_id || w.workstream_id === activeIssueStream.id)
   );
+  const testingStories = stories.filter((story) =>
+    !activeTestingStream || story.workstream_id === activeTestingStream.id
+  );
+  const testingFindings = findings.filter((finding) =>
+    !activeTestingStream || finding.workstream_id === activeTestingStream.id
+  );
+  const testingEpisodes = test_episodes.filter((episode) =>
+    !activeTestingStream || episode.workstream_id === activeTestingStream.id
+  );
   const issueNeeds = issueWorkItems.filter((w) => w.status === "blocked_clarity" || w.status === "rejected");
-  const inboxCount = openQs.length + openTodos.length + issueNeeds.length;
+  const testingNeeds = testingStories.filter((story) => story.status === "blocked");
+  const inboxCount = openQs.length + openTodos.length + issueNeeds.length + testingNeeds.length;
   const nonIntakeTasks = tasks.filter((t) => !["intake", "probe", "preflight", "resolve", "review"].includes(t.kind));
   const intakeDone = intakeConversation?.status === "done";
-  const hasProjectWork = manualWorkItems.length > 0 || issueWorkItems.length > 0 || nonIntakeTasks.length > 0;
+  const hasProjectWork = manualWorkItems.length > 0 || issueWorkItems.length > 0 || testingStories.length > 0 || nonIntakeTasks.length > 0;
   const needsSetup = !configured || (!hasProjectWork && !intakeDone);
   const needsStart = false;
   const trustedScouts = (resources?.resources ?? []).filter((resource) =>
@@ -1162,6 +1423,13 @@ export default function ProjectPage() {
         : [...numbers, issueNumber].sort((a, b) => a - b),
     );
   };
+  const toggleStorySelection = (storyKey: string) => {
+    setSelectedStoryKeys((keys) =>
+      keys.includes(storyKey)
+        ? keys.filter((key) => key !== storyKey)
+        : [...keys, storyKey].sort(),
+    );
+  };
 
   const needsYouCol = (
     <section className="col col-inbox">
@@ -1171,6 +1439,16 @@ export default function ProjectPage() {
       {inboxCount === 0 && <p className="muted">nothing needs you — the hive is unblocked</p>}
       {issueNeeds.map((w) => (
         <IssueCard key={w.id} ws={w} />
+      ))}
+      {testingNeeds.map((story) => (
+        <article className="todo-card project-todo reveal" key={story.id}>
+          <header>
+            <h3>{story.title || story.key}</h3>
+            <span className={`chip chip-story-${story.status}`}>{story.status}</span>
+          </header>
+          <p className="parked-reason">Testing is blocked for this story.</p>
+          <Markdown text={story.intent || story.acceptance} />
+        </article>
       ))}
       {openTodos.map((t) => (
         <HumanTodoCard key={t.id} task={t} onDone={refresh} />
@@ -1241,13 +1519,14 @@ export default function ProjectPage() {
                 options={[
                   { value: "work", label: "work" },
                   { value: "issues", label: "issues" },
+                  { value: "tests", label: "tests" },
                 ]}
                 onChange={setPrimaryView}
               />
             </div>
           )}
 
-          <div className={`columns ${primaryView === "issues" ? "columns-issues" : ""}`}>
+          <div className={`columns ${primaryView === "issues" || primaryView === "tests" ? "columns-issues" : ""}`}>
             {primaryView === "issues" ? (
               <section className="col col-ws col-issues-main">
                 <IssuesToolbar
@@ -1268,6 +1547,30 @@ export default function ProjectPage() {
                   workItems={issueWorkItems}
                   selectedNumbers={selectedIssueNumbers}
                   onToggle={toggleIssueSelection}
+                />
+              </section>
+            ) : primaryView === "tests" ? (
+              <section className="col col-ws col-issues-main">
+                <TestingToolbar
+                  project={project}
+                  testingStreams={testingStreams}
+                  selectedStreamId={activeTestingStream?.id ?? ""}
+                  onSelectedStream={(streamId) => {
+                    setSelectedTestingStreamId(streamId);
+                    setSelectedStoryKeys([]);
+                  }}
+                  selectedStoryKeys={selectedStoryKeys}
+                  onChanged={refresh}
+                />
+                <h2 className="col-title issues-title">
+                  stories <span className="col-count">{testingStories.length}</span>
+                </h2>
+                <StoriesView
+                  stories={testingStories}
+                  findings={testingFindings}
+                  episodes={testingEpisodes}
+                  selectedStoryKeys={selectedStoryKeys}
+                  onToggle={toggleStorySelection}
                 />
               </section>
             ) : (

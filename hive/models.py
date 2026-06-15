@@ -145,6 +145,7 @@ class AgentConversation(BaseModel):
 class ProjectWorkstreamKind(StrEnum):
     iteration = "iteration"
     github_issues = "github_issues"
+    testing = "testing"
 
 
 class ProjectWorkstreamStatus(StrEnum):
@@ -233,6 +234,30 @@ class TaskKind(StrEnum):
     resolve = "resolve"  # issue solving: one codex session clarifies then (if clear) fixes
     review = "review"  # issue solving: fresh agent reviews the fix, may fix on the spot
     preflight = "preflight"  # issue solving: runner self-check (git push + gh auth) before a big run
+    test_refresh = "test_refresh"  # testing: refresh/reconcile acceptance stories in the spec home
+    test_sweep = "test_sweep"  # testing: exploratory black-box sweep for one story
+    test_reproduce = "test_reproduce"  # testing: independent bug reproduction
+    test_judge = "test_judge"  # testing: UX-smell adjudication
+
+
+class TestSweepOutcome(StrEnum):
+    none = "none"
+    passed = "pass"
+    findings = "findings"
+    blocked = "blocked"
+
+
+class TestReproOutcome(StrEnum):
+    none = "none"
+    confirmed = "confirmed"
+    not_reproduced = "not_reproduced"
+
+
+class TestUxOutcome(StrEnum):
+    none = "none"
+    improvable = "improvable"
+    constrained = "constrained"
+    disagree = "disagree"
 
 
 class Verdict(StrEnum):
@@ -285,6 +310,62 @@ def parse_review(text: str) -> Verdict:
     return found
 
 
+def parse_test_refresh(text: str) -> bool:
+    """Return True when a test-refresh task reports `REFRESH: DONE`."""
+    done = False
+    for line in text.splitlines():
+        token = line.strip().upper()
+        if token.startswith("REFRESH:") and "DONE" in token:
+            done = True
+    return done
+
+
+def parse_test_sweep(text: str) -> TestSweepOutcome:
+    """Extract a sweep marker. The last `SWEEP:` line wins."""
+    found = TestSweepOutcome.none
+    for line in text.splitlines():
+        token = line.strip().upper()
+        if not token.startswith("SWEEP:"):
+            continue
+        if "FINDINGS" in token:
+            found = TestSweepOutcome.findings
+        elif "BLOCK" in token:
+            found = TestSweepOutcome.blocked
+        elif "PASS" in token:
+            found = TestSweepOutcome.passed
+    return found
+
+
+def parse_test_repro(text: str) -> TestReproOutcome:
+    """Extract a bug-reproduction marker. The last `REPRO:` line wins."""
+    found = TestReproOutcome.none
+    for line in text.splitlines():
+        token = line.strip().upper()
+        if not token.startswith("REPRO:"):
+            continue
+        if "NOT_REPRODUCED" in token or "NOT REPRODUCED" in token:
+            found = TestReproOutcome.not_reproduced
+        elif "CONFIRMED" in token:
+            found = TestReproOutcome.confirmed
+    return found
+
+
+def parse_test_ux(text: str) -> TestUxOutcome:
+    """Extract a UX adjudication marker. The last `UX:` line wins."""
+    found = TestUxOutcome.none
+    for line in text.splitlines():
+        token = line.strip().upper()
+        if not token.startswith("UX:"):
+            continue
+        if "IMPROVABLE" in token:
+            found = TestUxOutcome.improvable
+        elif "CONSTRAINED" in token:
+            found = TestUxOutcome.constrained
+        elif "DISAGREE" in token:
+            found = TestUxOutcome.disagree
+    return found
+
+
 class Task(BaseModel):
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
@@ -303,6 +384,7 @@ class Task(BaseModel):
     issue_number: int = 0  # issue solving: the issue this task resolves/reviews
     issue_doc: str = ""  # issue solving: full issue markdown (title+body+comments) -> .hive ISSUE.md
     issue_attachments: list[str] = []  # issue solving: image filenames the runner fetches from the control plane
+    required_capabilities: list[str] = []  # testing: runner capabilities such as browser/docker
     backend: str = "cursor"  # kodo backend name: claude | cursor | codex | gemini-cli
     model: str = ""  # backend default when empty
     status: TaskStatus = TaskStatus.pending
@@ -311,6 +393,7 @@ class Task(BaseModel):
     cancel_requested: bool = False  # operator asked to stop; runner honors cooperatively
     verdict: Verdict = Verdict.none  # parsed from a verify task's result
     trace_blob: str = ""  # blob key of the kodo JSONL run trace, once uploaded
+    artifact_blobs: list[str] = []  # artifact filenames uploaded by the runner for this task
     result_text: str = ""
     is_error: bool = False
     cost_usd: float = 0.0
@@ -346,6 +429,7 @@ class Runner(BaseModel):
     machine_id: str = ""
     name: str
     backends: list[str] = []  # installed agent CLIs
+    capabilities: list[str] = []  # runner-local capabilities such as browser/docker
     last_seen: float = Field(default_factory=now)
 
     ONLINE_WINDOW_S: float = 90.0
@@ -378,6 +462,12 @@ class Resource(BaseModel):
     last_probe_at: float = 0.0
     last_probe_task_id: str = ""
     last_probe_text: str = ""
+    browser_status: ResourceUsability = ResourceUsability.unknown
+    browser_probe_at: float = 0.0
+    browser_probe_text: str = ""
+    docker_status: ResourceUsability = ResourceUsability.unknown
+    docker_probe_at: float = 0.0
+    docker_probe_text: str = ""
     cooldown_until: float = 0.0  # epoch; >now means exhausted
     last_exhaustion_at: float = 0.0
     last_exhaustion_text: str = ""  # runner-reported quota/rate-limit message
@@ -393,6 +483,14 @@ class Resource(BaseModel):
             and self.usability_status == ResourceUsability.usable
             and now() >= self.cooldown_until
         )
+
+    def supports(self, capabilities: list[str]) -> bool:
+        for capability in capabilities:
+            if capability == "browser" and self.browser_status != ResourceUsability.usable:
+                return False
+            if capability == "docker" and self.docker_status != ResourceUsability.usable:
+                return False
+        return True
 
     def mark_exhausted(self, *, until: float, at: float, text: str, task_id: str) -> None:
         self.cooldown_until = until
@@ -468,6 +566,133 @@ class IssueRun(BaseModel):
     created_at: float = Field(default_factory=now)
     started_at: float = 0.0
     finished_at: float = 0.0
+
+
+class StoryStatus(StrEnum):
+    untested = "untested"
+    passing = "passing"
+    failing = "failing"
+    blocked = "blocked"
+    stale = "stale"
+    archived = "archived"
+
+
+class StoryCentrality(StrEnum):
+    core = "core"
+    major = "major"
+    minor = "minor"
+
+
+class StoryFidelity(StrEnum):
+    none = "none"
+    local = "local"
+    docker = "docker"
+
+
+class Story(BaseModel):
+    id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    project_id: str
+    workstream_id: str
+    repo: str = ""
+    key: str
+    title: str = ""
+    intent: str = ""
+    acceptance: str = ""
+    spec_ref: str = ""
+    tags: list[str] = []
+    status: StoryStatus = StoryStatus.untested
+    centrality: StoryCentrality = StoryCentrality.major
+    centrality_locked: bool = False
+    spec_baseline: str = ""
+    blessed: bool = False
+    blessed_at: float = 0.0
+    last_tested_baseline: str = ""
+    last_fidelity: StoryFidelity = StoryFidelity.none
+    open_issue_number: int = 0
+    open_issue_url: str = ""
+    known_limitations: list[str] = []
+    last_episode_id: str = ""
+    last_result_task_id: str = ""
+    last_tested_at: float = 0.0
+    order: int = 0
+    created_at: float = Field(default_factory=now)
+    updated_at: float = Field(default_factory=now)
+
+
+class TestEpisodeStatus(StrEnum):
+    refreshing = "refreshing"
+    sweeping = "sweeping"
+    confirming = "confirming"
+    done = "done"
+    cancelled = "cancelled"
+    failed = "failed"
+
+
+class TestEpisodeScope(StrEnum):
+    priority = "priority"
+    full = "full"
+    selected = "selected"
+
+
+class TestEpisode(BaseModel):
+    id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    project_id: str
+    workstream_id: str
+    repo: str
+    scope: TestEpisodeScope = TestEpisodeScope.priority
+    story_keys: list[str] = []
+    selected_story_keys: list[str] = []
+    max_stories: int = 0
+    status: TestEpisodeStatus = TestEpisodeStatus.refreshing
+    refresh_backend: str = "codex"
+    refresh_model: str = ""
+    sweep_backend: str = "codex"
+    sweep_model: str = ""
+    confirm_backend: str = "codex"
+    confirm_model: str = ""
+    counts: dict = {}
+    created_at: float = Field(default_factory=now)
+    started_at: float = 0.0
+    finished_at: float = 0.0
+
+
+class FindingKind(StrEnum):
+    bug = "bug"
+    ux_smell = "ux_smell"
+
+
+class FindingStatus(StrEnum):
+    suspected = "suspected"
+    confirmed = "confirmed"
+    rejected = "rejected"
+    constrained = "constrained"
+    duplicate = "duplicate"
+
+
+class Finding(BaseModel):
+    id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    project_id: str
+    workstream_id: str
+    repo: str = ""
+    episode_id: str
+    story_key: str
+    kind: FindingKind = FindingKind.bug
+    severity: str = "medium"
+    summary: str
+    detail: str = ""
+    oracle: str = ""
+    evidence_blobs: list[str] = []
+    status: FindingStatus = FindingStatus.suspected
+    issue_number: int = 0
+    issue_url: str = ""
+    sweep_task_id: str = ""
+    confirm_task_id: str = ""
+    signature: str = ""
+    created_at: float = Field(default_factory=now)
+    updated_at: float = Field(default_factory=now)
 
 
 class Feedback(BaseModel):

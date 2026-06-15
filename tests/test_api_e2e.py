@@ -159,10 +159,10 @@ def test_full_loop(harness):
     pid = project["id"]
     _pump(client, store)
     detail = client.get(f"/api/projects/{pid}").json()
-    assert len(detail["workstreams"]) == 1
-    assert detail["workstreams"][0]["kind"] == "iteration"
+    iteration_stream = next(w for w in detail["workstreams"] if w["kind"] == "iteration")
+    assert any(w["kind"] == "testing" for w in detail["workstreams"])
     assert len(detail["work_items"]) == 1
-    assert detail["work_items"][0]["workstream_id"] == detail["workstreams"][0]["id"]
+    assert detail["work_items"][0]["workstream_id"] == iteration_stream["id"]
     assert len(detail["tasks"]) == 1
 
     # 2. runner registers and polls — gets the task after dispatch

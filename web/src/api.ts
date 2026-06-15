@@ -20,6 +20,8 @@ import type {
   StorageInfo,
   Subscription,
   Task,
+  TestEpisode,
+  TestEpisodeResult,
   Workstream,
   WorkstreamPatch,
 } from "./types";
@@ -131,6 +133,21 @@ const realApi = {
       body: JSON.stringify(body),
     }),
   cancelIssueRun: (id: string) => http<IssueRun>(`/api/issue-runs/${id}/cancel`, { method: "POST" }),
+  refreshTests: (projectId: string, workstreamId: string) =>
+    http<{ task: Task }>(`/api/projects/${projectId}/workstreams/${workstreamId}/test-refresh`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  runTests: (
+    projectId: string,
+    workstreamId: string,
+    body: { scope: "priority" | "full" | "selected"; story_keys?: string[]; max_stories?: number },
+  ) =>
+    http<TestEpisodeResult>(`/api/projects/${projectId}/workstreams/${workstreamId}/test-episodes`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  cancelTestEpisode: (id: string) => http<TestEpisode>(`/api/test-episodes/${id}/cancel`, { method: "POST" }),
   answerQuestion: (id: string, answer: string) =>
     http<Question>(`/api/questions/${id}/answer`, { method: "POST", body: JSON.stringify({ answer }) }),
   feedback: async (project_id: string, target_id: string, verdict: "up" | "down", comment: string) => {

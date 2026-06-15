@@ -18,8 +18,12 @@ import type {
   Question,
   ResourcesPayload,
   ScanResult,
+  Finding,
+  Story,
   Subscription,
   Task,
+  TestEpisode,
+  TestEpisodeResult,
   WorkItem,
   Workstream,
   WorkstreamPatch,
@@ -217,6 +221,158 @@ const projectWorkstreams: Workstream[] = [
     config: {},
     created_at: now - 86400 * 8,
     updated_at: now - 1800,
+  },
+  {
+    id: "stream-beacon-testing",
+    project_id: "p-beacon",
+    kind: "testing",
+    title: "Testing: beacon",
+    repo: "https://github.com/acme/beacon.git",
+    source_ref: { acceptance_dir: "acceptance" },
+    status: "active",
+    enabled: true,
+    config: { fidelity: "local" },
+    created_at: now - 86400 * 2,
+    updated_at: now - 1200,
+  },
+];
+
+const stories: Story[] = [
+  {
+    id: "story-login-redirect",
+    project_id: "p-beacon",
+    workstream_id: "stream-beacon-testing",
+    repo: "https://github.com/acme/beacon.git",
+    key: "login-redirect",
+    title: "Login redirect",
+    intent: "As a user I can sign in from a deep link so that I continue where I started.",
+    acceptance: "## Examples\n- Given I open /reports/usage while signed out\n  When I sign in\n  Then I land on /reports/usage",
+    spec_ref: "acceptance/login-redirect.md",
+    tags: ["ui"],
+    status: "failing",
+    centrality: "core",
+    centrality_locked: false,
+    spec_baseline: "b1",
+    blessed: false,
+    blessed_at: 0,
+    last_tested_baseline: "b1",
+    last_fidelity: "local",
+    open_issue_number: 42,
+    open_issue_url: "https://github.com/acme/beacon/issues/42",
+    known_limitations: [],
+    last_episode_id: "test-episode-1",
+    last_result_task_id: "task-test-sweep-1",
+    last_tested_at: now - 3600 * 7,
+    order: 1,
+    created_at: now - 86400 * 2,
+    updated_at: now - 3600 * 7,
+  },
+  {
+    id: "story-audit-filter",
+    project_id: "p-beacon",
+    workstream_id: "stream-beacon-testing",
+    repo: "https://github.com/acme/beacon.git",
+    key: "audit-filter-refresh",
+    title: "Audit filters survive refresh",
+    intent: "As an admin I can refresh the audit log without losing filters.",
+    acceptance: "## Examples\n- Given I filter the audit log by actor\n  When I refresh the page\n  Then the same filtered view remains visible",
+    spec_ref: "acceptance/audit-filter-refresh.md",
+    tags: ["ui"],
+    status: "untested",
+    centrality: "major",
+    centrality_locked: false,
+    spec_baseline: "b1",
+    blessed: false,
+    blessed_at: 0,
+    last_tested_baseline: "",
+    last_fidelity: "none",
+    open_issue_number: 0,
+    open_issue_url: "",
+    known_limitations: [],
+    last_episode_id: "",
+    last_result_task_id: "",
+    last_tested_at: 0,
+    order: 2,
+    created_at: now - 86400,
+    updated_at: now - 86400,
+  },
+  {
+    id: "story-webhook-retry",
+    project_id: "p-beacon",
+    workstream_id: "stream-beacon-testing",
+    repo: "https://github.com/acme/beacon.git",
+    key: "webhook-retry",
+    title: "Webhook retries",
+    intent: "As an integrator I get reliable retry attempts for failed webhook deliveries.",
+    acceptance: "## Examples\n- Given a webhook endpoint returns 500\n  When Beacon schedules retries\n  Then attempts back off and continue beyond the first retry",
+    spec_ref: "acceptance/webhook-retry.md",
+    tags: ["api"],
+    status: "passing",
+    centrality: "major",
+    centrality_locked: false,
+    spec_baseline: "b1",
+    blessed: false,
+    blessed_at: 0,
+    last_tested_baseline: "b1",
+    last_fidelity: "docker",
+    open_issue_number: 0,
+    open_issue_url: "",
+    known_limitations: [],
+    last_episode_id: "test-episode-1",
+    last_result_task_id: "task-test-sweep-2",
+    last_tested_at: now - 3600 * 9,
+    order: 3,
+    created_at: now - 86400,
+    updated_at: now - 3600 * 9,
+  },
+];
+
+const findings: Finding[] = [
+  {
+    id: "finding-login-redirect",
+    project_id: "p-beacon",
+    workstream_id: "stream-beacon-testing",
+    repo: "https://github.com/acme/beacon.git",
+    episode_id: "test-episode-1",
+    story_key: "login-redirect",
+    kind: "bug",
+    severity: "high",
+    summary: "Deep-link redirect is lost after login",
+    detail: "Opening /reports/usage while signed out lands on / after authentication.",
+    oracle: "The login-redirect acceptance example requires returning to the deep link.",
+    evidence_blobs: ["login-redirect-console.txt"],
+    status: "confirmed",
+    issue_number: 42,
+    issue_url: "https://github.com/acme/beacon/issues/42",
+    sweep_task_id: "task-test-sweep-1",
+    confirm_task_id: "task-test-repro-1",
+    signature: "login-redirect",
+    created_at: now - 3600 * 8,
+    updated_at: now - 3600 * 7,
+  },
+];
+
+const testEpisodes: TestEpisode[] = [
+  {
+    id: "test-episode-1",
+    project_id: "p-beacon",
+    workstream_id: "stream-beacon-testing",
+    repo: "https://github.com/acme/beacon.git",
+    scope: "priority",
+    story_keys: ["login-redirect", "webhook-retry"],
+    selected_story_keys: [],
+    max_stories: 5,
+    status: "done",
+    refresh_backend: "codex",
+    refresh_model: "",
+    sweep_backend: "codex",
+    sweep_model: "",
+    confirm_backend: "codex",
+    confirm_model: "",
+    counts: { stories_passing: 1, stories_failing: 1, findings_confirmed: 1 },
+    created_at: now - 3600 * 10,
+    started_at: now - 3600 * 10,
+    finished_at: now - 3600 * 7,
   },
 ];
 
@@ -843,6 +999,9 @@ export const api = {
       human_tasks: humanTodos.filter((t) => t.project_id === id),
       conversations: conversations.filter((c) => c.project_id === id),
       issue_runs: issueRuns.filter((r) => r.project_id === id),
+      stories: stories.filter((s) => s.project_id === id),
+      findings: findings.filter((f) => f.project_id === id),
+      test_episodes: testEpisodes.filter((e) => e.project_id === id),
     });
   },
 
@@ -984,6 +1143,90 @@ export const api = {
     run.finished_at = Date.now() / 1000;
     run.counts = { ...run.counts, cancelled_tasks: 0 };
     return structuredClone(run);
+  },
+
+  refreshTests: async (projectId: string, workstreamId: string): Promise<{ task: Task }> => {
+    const stream = projectWorkstreams.find((w) => w.project_id === projectId && w.id === workstreamId);
+    if (!stream) throw new Error("not found");
+    const task: Task = {
+      id: `task-test-refresh-${Date.now()}`,
+      project_id: projectId,
+      workstream_id: workstreamId,
+      work_item_id: workstreamId,
+      run_id: "",
+      repo: stream.repo,
+      branch: "",
+      fresh_branch: false,
+      kind: "test_refresh",
+      instructions: "Refresh acceptance stories.",
+      conversation_id: "",
+      conversation_turn: "",
+      session_handle: "",
+      backend: "codex",
+      model: "",
+      status: "pending",
+      runner_id: "",
+      delivered: false,
+      cancel_requested: false,
+      verdict: "none",
+      trace_blob: "",
+      result_text: "",
+      is_error: false,
+      cost_usd: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      prompt_versions: {},
+      created_at: Date.now() / 1000,
+      started_at: 0,
+      finished_at: 0,
+    };
+    tasks.push(task);
+    return structuredClone({ task });
+  },
+
+  runTests: async (
+    projectId: string,
+    workstreamId: string,
+    body: { scope: "priority" | "full" | "selected"; story_keys?: string[]; max_stories?: number },
+  ): Promise<TestEpisodeResult> => {
+    const stream = projectWorkstreams.find((w) => w.project_id === projectId && w.id === workstreamId);
+    if (!stream) throw new Error("not found");
+    const selected = body.scope === "selected"
+      ? body.story_keys || []
+      : stories.filter((s) => s.workstream_id === workstreamId).slice(0, body.max_stories || 5).map((s) => s.key);
+    const episode: TestEpisode = {
+      id: `test-episode-${Date.now()}`,
+      project_id: projectId,
+      workstream_id: workstreamId,
+      repo: stream.repo,
+      scope: body.scope,
+      story_keys: [],
+      selected_story_keys: selected,
+      max_stories: body.max_stories || 0,
+      status: "refreshing",
+      refresh_backend: "codex",
+      refresh_model: "",
+      sweep_backend: "codex",
+      sweep_model: "",
+      confirm_backend: "codex",
+      confirm_model: "",
+      counts: { stories_selected: selected.length },
+      created_at: Date.now() / 1000,
+      started_at: Date.now() / 1000,
+      finished_at: 0,
+    };
+    testEpisodes.push(episode);
+    const { task } = await api.refreshTests(projectId, workstreamId);
+    task.run_id = episode.id;
+    return structuredClone({ episode, refresh_task: task });
+  },
+
+  cancelTestEpisode: async (id: string): Promise<TestEpisode> => {
+    const episode = testEpisodes.find((e) => e.id === id);
+    if (!episode) throw new Error("not found");
+    episode.status = "cancelled";
+    episode.finished_at = Date.now() / 1000;
+    return structuredClone(episode);
   },
 
   answerQuestion: async (id: string, answer: string): Promise<Question> => {

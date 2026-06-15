@@ -25,6 +25,12 @@ class Config:
     openai_base_url: str = "https://api.openai.com/v1"
     issue_backend: str = "codex"
     issue_model: str = ""  # empty = let the backend/CLI use its current configured default
+    test_refresh_backend: str = "codex"
+    test_refresh_model: str = ""
+    test_sweep_backend: str = "codex"
+    test_sweep_model: str = ""
+    test_confirm_backend: str = "codex"
+    test_confirm_model: str = ""
     auth_mode: str = "dev"  # dev | github
     allowed_github_users: str = "ikamensh"
     github_client_id: str = ""
@@ -62,6 +68,12 @@ class Config:
             ),
             issue_backend=os.environ.get("HIVE_ISSUE_BACKEND", "codex"),
             issue_model=os.environ.get("HIVE_ISSUE_MODEL", ""),
+            test_refresh_backend=os.environ.get("HIVE_TEST_REFRESH_BACKEND", "codex"),
+            test_refresh_model=os.environ.get("HIVE_TEST_REFRESH_MODEL", ""),
+            test_sweep_backend=os.environ.get("HIVE_TEST_SWEEP_BACKEND", "codex"),
+            test_sweep_model=os.environ.get("HIVE_TEST_SWEEP_MODEL", ""),
+            test_confirm_backend=os.environ.get("HIVE_TEST_CONFIRM_BACKEND", "codex"),
+            test_confirm_model=os.environ.get("HIVE_TEST_CONFIRM_MODEL", ""),
             auth_mode=os.environ.get("HIVE_AUTH_MODE", "dev"),
             allowed_github_users=os.environ.get("HIVE_ALLOWED_GITHUB_USERS", "ikamensh"),
             github_client_id=os.environ.get("HIVE_GITHUB_CLIENT_ID", ""),

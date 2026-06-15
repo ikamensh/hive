@@ -34,7 +34,7 @@ export interface Project {
   created_at: number;
 }
 
-export type WorkstreamKind = "iteration" | "github_issues";
+export type WorkstreamKind = "iteration" | "github_issues" | "testing";
 export type ProjectWorkstreamStatus = "idle" | "active" | "blocked" | "disabled";
 
 export interface Workstream {
@@ -100,11 +100,26 @@ export interface Task {
   repo: string;
   branch: string;
   fresh_branch: boolean;
-  kind: "work" | "verify" | "probe" | "intake" | "resolve" | "review" | "preflight";
+  kind:
+    | "work"
+    | "verify"
+    | "probe"
+    | "intake"
+    | "resolve"
+    | "review"
+    | "preflight"
+    | "test_refresh"
+    | "test_sweep"
+    | "test_reproduce"
+    | "test_judge";
   instructions: string;
   conversation_id: string;
   conversation_turn: string;
   session_handle: string;
+  issue_number?: number;
+  issue_doc?: string;
+  issue_attachments?: string[];
+  required_capabilities?: string[];
   backend: string;
   model: string;
   status: "pending" | "running" | "done" | "failed" | "cancelled";
@@ -113,6 +128,7 @@ export interface Task {
   cancel_requested: boolean;
   verdict: "none" | "accept" | "reject";
   trace_blob: string;
+  artifact_blobs?: string[];
   result_text: string;
   is_error: boolean;
   cost_usd: number;
@@ -163,6 +179,9 @@ export interface ProjectDetail {
   human_tasks?: HumanTodo[];
   conversations: AgentConversation[];
   issue_runs: IssueRun[];
+  stories: Story[];
+  findings: Finding[];
+  test_episodes: TestEpisode[];
 }
 
 export interface IssueRun {
@@ -175,6 +194,84 @@ export interface IssueRun {
   issue_numbers: number[];
   status: "scanning" | "queued" | "running" | "blocked" | "done" | "cancelled" | "failed";
   counts: Record<string, number>;
+  created_at: number;
+  started_at: number;
+  finished_at: number;
+}
+
+export interface Story {
+  id: string;
+  workspace_id?: string;
+  project_id: string;
+  workstream_id: string;
+  repo: string;
+  key: string;
+  title: string;
+  intent: string;
+  acceptance: string;
+  spec_ref: string;
+  tags: string[];
+  status: "untested" | "passing" | "failing" | "blocked" | "stale" | "archived";
+  centrality: "core" | "major" | "minor";
+  centrality_locked: boolean;
+  spec_baseline: string;
+  blessed: boolean;
+  blessed_at: number;
+  last_tested_baseline: string;
+  last_fidelity: "none" | "local" | "docker";
+  open_issue_number: number;
+  open_issue_url: string;
+  known_limitations: string[];
+  last_episode_id: string;
+  last_result_task_id: string;
+  last_tested_at: number;
+  order: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface Finding {
+  id: string;
+  workspace_id?: string;
+  project_id: string;
+  workstream_id: string;
+  repo: string;
+  episode_id: string;
+  story_key: string;
+  kind: "bug" | "ux_smell";
+  severity: string;
+  summary: string;
+  detail: string;
+  oracle: string;
+  evidence_blobs: string[];
+  status: "suspected" | "confirmed" | "rejected" | "constrained" | "duplicate";
+  issue_number: number;
+  issue_url: string;
+  sweep_task_id: string;
+  confirm_task_id: string;
+  signature: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface TestEpisode {
+  id: string;
+  workspace_id?: string;
+  project_id: string;
+  workstream_id: string;
+  repo: string;
+  scope: "priority" | "full" | "selected";
+  story_keys: string[];
+  selected_story_keys: string[];
+  max_stories: number;
+  status: "refreshing" | "sweeping" | "confirming" | "done" | "cancelled" | "failed";
+  refresh_backend: string;
+  refresh_model: string;
+  sweep_backend: string;
+  sweep_model: string;
+  confirm_backend: string;
+  confirm_model: string;
+  counts: Record<string, number | string>;
   created_at: number;
   started_at: number;
   finished_at: number;
@@ -227,6 +324,7 @@ export interface RunnerInfo {
   machine_id?: string;
   name: string;
   backends: string[];
+  capabilities?: string[];
   last_seen: number;
   online: boolean;
 }
@@ -260,6 +358,12 @@ export interface ResourceInfo {
   last_probe_at: number;
   last_probe_task_id: string;
   last_probe_text: string;
+  browser_status?: "unknown" | "probing" | "usable" | "failed";
+  browser_probe_at?: number;
+  browser_probe_text?: string;
+  docker_status?: "unknown" | "probing" | "usable" | "failed";
+  docker_probe_at?: number;
+  docker_probe_text?: string;
   cooldown_until: number;
   last_exhaustion_at: number;
   last_exhaustion_text: string;
@@ -366,4 +470,9 @@ export interface ScanResult {
 
 export interface IssueRunResult extends ScanResult {
   run: IssueRun;
+}
+
+export interface TestEpisodeResult {
+  episode: TestEpisode;
+  refresh_task: Task;
 }
