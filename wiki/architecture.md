@@ -16,7 +16,7 @@ Condensed current understanding of hive's design. Originated from a design inter
   - For a single-repo project, the spec home and the code repo may be the same repo (hive itself is the first example).
 - **Org context** — a "related resources" text document at the organization level (shared internal infra, conventions, org-wide facts), injected into orchestrator context for every project. Unstructured text in MVP.
 - **Modes** — per project: **Build** (work toward iteration goal; MVP) and **Maintain** (distill/refactor/test-suite care, drift repair; fast follow, designed-for but not in MVP). Finer-grained work-type toggles may come later.
-- **Workstreams** — issue solving is a triggerable GitHub issues workstream inside any project, not a separate project mode. See `wiki/unified-project-work.md` for the target design and remaining migration notes.
+- **Workstreams** — issue solving is a triggerable GitHub issues workstream inside any project, not a separate project mode. See `wiki/unified-project-work.md` for the target design and remaining migration notes. Testing is a planned third workstream kind (deterministic, capability-aware, files GitHub issues on failure) — see `wiki/testing.md`.
 
 ## 2. The core loop
 
