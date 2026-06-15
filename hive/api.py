@@ -1278,6 +1278,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def get_project(project_id: str, ctx: AuthContext = Depends(current)):
         project = require_project(project_id, ctx)
         work_items = store.list(Workstream, workspace_id=ctx.workspace_id, project_id=project_id)
+        human_todos = [
+            t.model_dump()
+            for t in store.list(HumanTask, workspace_id=ctx.workspace_id, project_id=project_id)
+        ]
         return {
             "project": project.model_dump(),
             "workstreams": [
@@ -1298,10 +1302,8 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 q.model_dump()
                 for q in store.list(Question, workspace_id=ctx.workspace_id, project_id=project_id)
             ],
-            "human_tasks": [
-                t.model_dump()
-                for t in store.list(HumanTask, workspace_id=ctx.workspace_id, project_id=project_id)
-            ],
+            "human_todos": human_todos,
+            "human_tasks": human_todos,
             "conversations": [
                 c.model_dump()
                 for c in store.list(AgentConversation, workspace_id=ctx.workspace_id, project_id=project_id)
@@ -1567,12 +1569,14 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         store.delete(Subscription, sub_id)
         return {"ok": True}
 
+    @app.get("/api/human-todos")
     @app.get("/api/human-tasks")
-    def list_human_tasks(ctx: AuthContext = Depends(current)):
+    def list_human_todos(ctx: AuthContext = Depends(current)):
         return [t.model_dump() for t in store.list(HumanTask, workspace_id=ctx.workspace_id)]
 
+    @app.post("/api/human-todos")
     @app.post("/api/human-tasks")
-    def create_human_task(body: dict, ctx: AuthContext = Depends(current)):
+    def create_human_todo(body: dict, ctx: AuthContext = Depends(current)):
         project_id = body.get("project_id", "")
         if project_id:
             require_project(project_id, ctx)
@@ -1585,9 +1589,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             )
         ).model_dump()
 
-    @app.post("/api/human-tasks/{task_id}/done")
-    def complete_human_task(task_id: str, ctx: AuthContext = Depends(current)):
-        task = store.get(HumanTask, task_id)
+    @app.post("/api/human-todos/{todo_id}/done")
+    @app.post("/api/human-tasks/{todo_id}/done")
+    def complete_human_todo(todo_id: str, ctx: AuthContext = Depends(current)):
+        task = store.get(HumanTask, todo_id)
         if not task or task.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
         task.status = HumanTaskStatus.done
@@ -1596,7 +1601,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         _sync_landing_failure_human_task(store, task, config)
         # The action may have unblocked work (a runner login, a granted access).
         # Wake the owning project, or every project for an org-wide todo.
-        note = f"Human task '{task.title}' was completed. Re-evaluate work that waited on it."
+        note = f"Human todo '{task.title}' was completed. Re-evaluate work that waited on it."
         if task.project_id:
             supervisor.wake(task.project_id, note)
         else:

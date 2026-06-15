@@ -2296,8 +2296,8 @@ textarea:focus {
 }
 
 /* ---- human todos + subscriptions (resources page) ---- */
-.human-tasks, .subscriptions { margin-top: 2.2rem; }
-.human-tasks .badge.hot { background: var(--accent); color: #ffffff; border-radius: 9px; padding: 0 0.5em; margin-left: 0.5em; font-size: 0.8em; }
+.human-todos, .subscriptions { margin-top: 2.2rem; }
+.human-todos .badge.hot { background: var(--accent); color: #ffffff; border-radius: 9px; padding: 0 0.5em; margin-left: 0.5em; font-size: 0.8em; }
 .todo-card { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; padding: 0.9rem 1.1rem; margin: 0.8rem 0; background: var(--panel); }
 .todo-card header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.4rem; }
 .todo-card h3 { margin: 0; font-size: 1rem; }

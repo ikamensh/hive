@@ -10,7 +10,7 @@ import {
   SegPicker,
   StateBadge,
 } from "../components/shared";
-import type { AgentConversation, Autonomy, GuessPropensity, HumanTask, Mode, PreflightCheck, PreflightResult, Project, ProjectPatch, Question, ResourceInfo, ScanResult, Task, WorkItem, WorkItemStatus, Workstream } from "../types";
+import type { AgentConversation, Autonomy, GuessPropensity, HumanTodo, Mode, PreflightCheck, PreflightResult, Project, ProjectPatch, Question, ResourceInfo, ScanResult, Task, WorkItem, WorkItemStatus, Workstream } from "../types";
 
 /** Derive the issue's per-issue branch tree URL from its issue URL (`.../issues/42` → `.../tree/hive/issue-42`). */
 function issueBranchUrl(ws: WorkItem): string | null {
@@ -826,12 +826,12 @@ function AnsweredQuestion({ q }: { q: Question }) {
   );
 }
 
-function HumanTaskCard({ task, onDone }: { task: HumanTask; onDone: () => void }) {
+function HumanTodoCard({ task, onDone }: { task: HumanTodo; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const done = async () => {
     setBusy(true);
     try {
-      await api.completeHumanTask(task.id);
+      await api.completeHumanTodo(task.id);
       onDone();
     } finally {
       setBusy(false);
@@ -1061,14 +1061,15 @@ export default function ProjectPage() {
     return <div className="page">{failed ? <p className="muted">project unreachable</p> : <p className="muted">loading…</p>}</div>;
   }
 
-  const { project, workstreams, work_items, tasks, questions, human_tasks, conversations } = data;
+  const { project, workstreams, work_items, tasks, questions, conversations } = data;
+  const humanTodos = data.human_todos ?? data.human_tasks ?? [];
   const intakeConversation =
     conversations.find((c) => c.id === project.intake_conversation_id) ??
     [...conversations].sort((a, b) => b.created_at - a.created_at)[0] ??
     null;
   const openQs = questions.filter((q) => q.status === "open").sort((a, b) => b.created_at - a.created_at);
   const answeredQs = questions.filter((q) => q.status === "answered").sort((a, b) => b.answered_at - a.answered_at);
-  const openTodos = human_tasks.filter((t) => t.status === "open").sort((a, b) => b.created_at - a.created_at);
+  const openTodos = humanTodos.filter((t) => t.status === "open").sort((a, b) => b.created_at - a.created_at);
   const sortedTasks = [...tasks].sort((a, b) => b.created_at - a.created_at);
   const wsOrder: Record<string, number> = { active: 0, parked: 1, done: 2 };
 
@@ -1137,7 +1138,7 @@ export default function ProjectPage() {
         <IssueCard key={w.id} ws={w} />
       ))}
       {openTodos.map((t) => (
-        <HumanTaskCard key={t.id} task={t} onDone={refresh} />
+        <HumanTodoCard key={t.id} task={t} onDone={refresh} />
       ))}
       {openQs.map((q) => (
         <QuestionCard key={q.id} q={q} onAnswered={refresh} />

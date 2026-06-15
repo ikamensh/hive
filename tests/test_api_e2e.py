@@ -401,7 +401,7 @@ def test_openai_orchestrator_requires_api_key_for_official_api(tmp_path):
         orch._generate(project, [], "event", Tools(store, project, spec=None))
 
 
-def test_human_task_tool_and_api(harness):
+def test_human_todo_tool_and_api(harness):
     client, store, _orch = harness
     project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
     tools = Tools(store, project, spec=None)
@@ -409,6 +409,7 @@ def test_human_task_tool_and_api(harness):
     task_id = out.split("=")[1].split()[0]
 
     assert "Log in codex on vm-1" in tools.snapshot()
+    assert client.get("/api/human-todos").json()[0]["status"] == "open"
     assert client.get("/api/human-tasks").json()[0]["status"] == "open"
 
     # Another project's scoped todo is invisible here; org-wide ones are shared.
@@ -417,9 +418,10 @@ def test_human_task_tool_and_api(harness):
     assert "Grant repo access" not in tools.snapshot()
     assert "Grant repo access" in Tools(store, other, spec=None).snapshot()
 
-    assert client.post(f"/api/human-tasks/{task_id}/done").json()["status"] == "done"
+    assert client.post(f"/api/human-todos/{task_id}/done").json()["status"] == "done"
     assert "Log in codex" not in tools.snapshot()  # only open todos are shown
     detail = client.get(f"/api/projects/{other.id}").json()
+    assert detail["human_todos"][0]["title"] == "Grant repo access"
     assert detail["human_tasks"][0]["title"] == "Grant repo access"
 
 
@@ -855,13 +857,13 @@ def test_trace_roundtrip(harness):
     assert client.post(f"/api/tasks/{task.id}/trace", content=trace).status_code == 401
 
 
-def test_human_task_done_wakes_project(harness):
+def test_human_todo_done_wakes_project(harness):
     client, store, _orch = harness
     pid = client.post("/api/projects", json={"name": "h"}).json()["id"]
-    task = client.post("/api/human-tasks", json={"title": "login", "project_id": pid}).json()
+    task = client.post("/api/human-todos", json={"title": "login", "project_id": pid}).json()
     sup = client.app.state.supervisor
     sup._events.clear()
-    client.post(f"/api/human-tasks/{task['id']}/done")
+    client.post(f"/api/human-todos/{task['id']}/done")
     assert sup._events.get(pid)  # completing the action re-evaluates work that waited on it
 
 

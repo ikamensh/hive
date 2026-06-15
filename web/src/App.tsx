@@ -12,17 +12,17 @@ export interface Overview {
 }
 
 async function fetchOverview(): Promise<Overview> {
-  const [projects, resources, humanTasks] = await Promise.all([
+  const [projects, resources, humanTodos] = await Promise.all([
     api.projects(),
     api.resources(),
-    api.humanTasks(),
+    api.humanTodos(),
   ]);
   const details = await Promise.all(projects.map((p) => api.project(p.id)));
   const openQuestions = details.reduce(
     (n, d) => n + d.questions.filter((q) => q.status === "open").length,
     0,
   );
-  const openTodos = humanTasks.filter((t) => t.status === "open").length;
+  const openTodos = humanTodos.filter((t) => t.status === "open").length;
   return { details, openQuestions, openTodos, resources };
 }
 

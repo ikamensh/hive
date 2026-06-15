@@ -399,14 +399,14 @@ def run(args: argparse.Namespace, client) -> dict | list:
     elif c == "sub-rm":
         r = client.delete(f"/api/subscriptions/{args.sub_id}")
     elif c == "todos":
-        r = client.get("/api/human-tasks")
+        r = client.get("/api/human-todos")
     elif c == "todo-add":
-        r = client.post("/api/human-tasks", json={
+        r = client.post("/api/human-todos", json={
             "title": args.title, "instructions": args.instructions,
             "project_id": args.project_id,
         })
     elif c == "todo-done":
-        r = client.post(f"/api/human-tasks/{args.task_id}/done")
+        r = client.post(f"/api/human-todos/{args.task_id}/done")
     elif c == "org-context":
         r = client.get("/api/org-context")
     elif c == "org-context-set":

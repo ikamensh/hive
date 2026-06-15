@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AuthInfo,
   AgentConversation,
-  HumanTask,
+  HumanTodo,
   GithubRepo,
   IntakeMessage,
   IssueRun,
@@ -154,9 +154,12 @@ const realApi = {
   deleteSubscription: async (id: string) => {
     await http(`/api/subscriptions/${id}`, { method: "DELETE" });
   },
-  humanTasks: () => http<HumanTask[]>("/api/human-tasks"),
+  humanTodos: () => http<HumanTodo[]>("/api/human-todos"),
+  completeHumanTodo: (id: string) =>
+    http<HumanTodo>(`/api/human-todos/${id}/done`, { method: "POST" }),
+  humanTasks: () => http<HumanTodo[]>("/api/human-tasks"),
   completeHumanTask: (id: string) =>
-    http<HumanTask>(`/api/human-tasks/${id}/done`, { method: "POST" }),
+    http<HumanTodo>(`/api/human-tasks/${id}/done`, { method: "POST" }),
   orgContext: async () => (await http<{ text: string }>("/api/org-context")).text,
   setOrgContext: async (text: string) => {
     await http("/api/org-context", { method: "PUT", body: JSON.stringify({ text }) });

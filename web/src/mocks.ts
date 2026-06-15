@@ -5,7 +5,7 @@ import type {
   AgentConversation,
   AuthInfo,
   GithubRepo,
-  HumanTask,
+  HumanTodo,
   IntakeMessage,
   IssueRun,
   Project,
@@ -837,7 +837,8 @@ export const api = {
       work_items: workItems.filter((w) => w.project_id === id),
       tasks: tasks.filter((t) => t.project_id === id),
       questions: questions.filter((q) => q.project_id === id),
-      human_tasks: humanTasks.filter((t) => t.project_id === id),
+      human_todos: humanTodos.filter((t) => t.project_id === id),
+      human_tasks: humanTodos.filter((t) => t.project_id === id),
       conversations: conversations.filter((c) => c.project_id === id),
       issue_runs: issueRuns.filter((r) => r.project_id === id),
     });
@@ -1094,14 +1095,18 @@ export const api = {
     if (i >= 0) subscriptions.splice(i, 1);
   },
 
-  humanTasks: async (): Promise<HumanTask[]> => structuredClone(humanTasks),
+  humanTodos: async (): Promise<HumanTodo[]> => structuredClone(humanTodos),
 
-  completeHumanTask: async (id: string): Promise<HumanTask> => {
-    const t = humanTasks.find((x) => x.id === id)!;
+  completeHumanTodo: async (id: string): Promise<HumanTodo> => {
+    const t = humanTodos.find((x) => x.id === id)!;
     t.status = "done";
     t.done_at = Date.now() / 1000;
     return structuredClone(t);
   },
+
+  humanTasks: async (): Promise<HumanTodo[]> => structuredClone(humanTodos),
+
+  completeHumanTask: async (id: string): Promise<HumanTodo> => api.completeHumanTodo(id),
 
   orgContext: async (): Promise<string> => orgContext,
 
@@ -1148,7 +1153,7 @@ const subscriptions: Subscription[] = [
   { id: "s2", provider: "claude", plan: "Claude Max 5x", notes: "", created_at: now - 86400 },
 ];
 
-const humanTasks: HumanTask[] = [
+const humanTodos: HumanTodo[] = [
   {
     id: "ht1",
     project_id: "",

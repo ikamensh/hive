@@ -153,7 +153,8 @@ export interface ProjectDetail {
   work_items: WorkItem[];
   tasks: Task[];
   questions: Question[];
-  human_tasks: HumanTask[];
+  human_todos: HumanTodo[];
+  human_tasks?: HumanTodo[];
   conversations: AgentConversation[];
   issue_runs: IssueRun[];
 }
@@ -298,7 +299,7 @@ export interface Subscription {
   created_at: number;
 }
 
-export interface HumanTask {
+export interface HumanTodo {
   id: string;
   workspace_id?: string;
   project_id: string; // empty = org-wide
@@ -308,6 +309,8 @@ export interface HumanTask {
   created_at: number;
   done_at: number;
 }
+
+export type HumanTask = HumanTodo;
 
 export interface ProjectCreate {
   name: string;

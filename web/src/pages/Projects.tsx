@@ -6,9 +6,10 @@ import { StateBadge } from "../components/shared";
 import type { ProjectDetail } from "../types";
 
 function ProjectRow({ detail, cooldownHint }: { detail: ProjectDetail; cooldownHint?: string }) {
-  const { project, workstreams, work_items, tasks, questions, human_tasks } = detail;
+  const { project, workstreams, work_items, tasks, questions } = detail;
+  const humanTodos = detail.human_todos ?? detail.human_tasks ?? [];
   const open = questions.filter((q) => q.status === "open").length;
-  const openTodos = human_tasks.filter((t) => t.status === "open").length;
+  const openTodos = humanTodos.filter((t) => t.status === "open").length;
   const active = work_items.filter((w) => w.status === "active").length;
   const issueNeeds = work_items.filter((w) => w.source === "issue" && (w.status === "blocked_clarity" || w.status === "rejected")).length;
   const issueRunning = work_items.filter((w) => w.source === "issue" && (w.status === "resolving" || w.status === "reviewing")).length;

@@ -3,8 +3,8 @@ import { marked } from "marked";
 import { ago, api, countdown, money, usePoll } from "../api";
 import type { LocalRunnerInfo, MachineInfo, ResourceInfo, ResourcesPayload, RunnerInfo } from "../types";
 
-function HumanTasks() {
-  const { data, refresh } = usePoll(() => api.humanTasks(), []);
+function HumanTodos() {
+  const { data, refresh } = usePoll(() => api.humanTodos(), []);
   const { data: projects } = usePoll(() => api.projects(), [], 30000);
   if (!data) return null;
   const open = data.filter((t) => t.status === "open");
@@ -12,7 +12,7 @@ function HumanTasks() {
   const scopeTag = (projectId: string) =>
     projectId === "" ? "org-wide" : (projects?.find((p) => p.id === projectId)?.name ?? projectId);
   return (
-    <section className="human-tasks">
+    <section className="human-todos">
       <h2 className="col-title">
         your todos {open.length > 0 && <span className="badge hot">{open.length}</span>}
       </h2>
@@ -29,7 +29,7 @@ function HumanTasks() {
           <div className="org-actions">
             <button
               onClick={async () => {
-                await api.completeHumanTask(t.id);
+                await api.completeHumanTodo(t.id);
                 refresh();
               }}
             >
@@ -292,7 +292,7 @@ export default function Resources() {
         </>
       )}
 
-      <HumanTasks />
+      <HumanTodos />
       <Subscriptions />
       <OrgContext />
     </div>
