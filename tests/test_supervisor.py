@@ -31,6 +31,13 @@ def make_supervisor(store) -> Supervisor:
     return Supervisor(store, orchestrate=lambda pid, events: None)
 
 
+class EmptyIdRejectingStore(MemoryStore):
+    def get(self, model, id):
+        if not id:
+            raise AssertionError("empty document ids are invalid in Firestore")
+        return super().get(model, id)
+
+
 def seed(store, *, with_runner=True) -> Project:
     project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
     if with_runner:
@@ -100,6 +107,13 @@ def test_supervisor_holds_new_spec_project_in_intake_until_approved():
     project.intake_conversation_id = conversation.id
     store.put(project)
     assert sup.refresh_state(project) == ProjectState.idle
+
+
+def test_supervisor_does_not_fetch_empty_intake_conversation_id():
+    store = EmptyIdRejectingStore()
+    project = store.put(Project(name="p", spec_repo="x"))
+    sup = make_supervisor(store)
+    assert sup.refresh_state(project) == ProjectState.intake
 
 
 def test_dispatch_serializes_per_repo():

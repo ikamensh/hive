@@ -166,7 +166,11 @@ class Supervisor:
         return project.daily_budget_usd > 0 and self.spend_today(project.id) >= project.daily_budget_usd
 
     def refresh_state(self, project: Project) -> ProjectState:
-        conversation = self.store.get(AgentConversation, project.intake_conversation_id)
+        conversation = (
+            self.store.get(AgentConversation, project.intake_conversation_id)
+            if project.intake_conversation_id
+            else None
+        )
         if conversation and conversation.status == ConversationStatus.done:
             pass
         elif conversation and conversation.status in (
