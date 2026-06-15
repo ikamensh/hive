@@ -52,6 +52,12 @@ export interface Workstream {
   updated_at: number;
 }
 
+export interface WorkstreamPatch {
+  title?: string;
+  enabled?: boolean;
+  config?: Record<string, unknown>;
+}
+
 /** Iteration work items plus the issue-solving per-issue lifecycle. */
 export type WorkItemStatus =
   | "active"

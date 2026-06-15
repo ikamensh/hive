@@ -282,10 +282,14 @@ function ProjectSetup({
 
 function ProjectSettings({
   project,
+  workstreams,
   onPatch,
+  onPatchWorkstream,
 }: {
   project: Project;
   onPatch: (p: ProjectPatch) => void;
+  workstreams: Workstream[];
+  onPatchWorkstream: (workstreamId: string, patch: { enabled?: boolean }) => Promise<void>;
 }) {
   const [memberRepos, setMemberRepos] = useState(project.member_repos);
   const [dailyBudget, setDailyBudget] = useState(
@@ -331,6 +335,30 @@ function ProjectSettings({
           {busy ? "saving…" : "save settings"}
         </button>
       </form>
+      <div className="workstream-settings">
+        <h3>workstreams</h3>
+        {workstreams.map((workstream) => (
+          <div className="workstream-setting" key={workstream.id}>
+            <div>
+              <strong>{workstream.title}</strong>
+              <span className="muted">
+                {workstream.kind.replace(/_/g, " ")}
+                {workstream.repo ? ` · ${repoShort(workstream.repo)}` : ""}
+              </span>
+            </div>
+            <button
+              type="button"
+              className={`switch ${workstream.enabled ? "on" : ""}`}
+              onClick={() => onPatchWorkstream(workstream.id, { enabled: !workstream.enabled })}
+              disabled={workstream.kind === "iteration"}
+              title={workstream.kind === "iteration" ? "iteration work is controlled by project pause" : undefined}
+              aria-pressed={workstream.enabled}
+            >
+              <i />
+            </button>
+          </div>
+        ))}
+      </div>
     </details>
   );
 }
@@ -481,6 +509,7 @@ function IssuesToolbar({
   const [scope, setScope] = useState<"selected" | "all_open_now" | "scan_only">("selected");
   const stream = issueStreams.find((w) => w.id === selectedStreamId) ?? issueStreams[0];
   const noRepo = !stream;
+  const streamDisabled = Boolean(stream && (!stream.enabled || stream.status === "disabled"));
   const busy = busyAction !== "";
 
   const runPreflight = async () => {
@@ -549,14 +578,15 @@ function IssuesToolbar({
         </select>
       </div>
       <div className="scan-actions">
+        {streamDisabled && <span className="muted">disabled in settings</span>}
         <div className="scan-buttons">
-          <button className="ghost" onClick={runPreflight} disabled={busy || noRepo} title={noRepo ? "set a spec repo first" : undefined}>
+          <button className="ghost" onClick={runPreflight} disabled={busy || noRepo || streamDisabled} title={noRepo ? "set a spec repo first" : undefined}>
             {busyAction === "preflight" ? "checking…" : "preflight"}
           </button>
-          <button className="ghost" onClick={sync} disabled={busy || noRepo} title={noRepo ? "set a GitHub repo first" : undefined}>
+          <button className="ghost" onClick={sync} disabled={busy || noRepo || streamDisabled} title={noRepo ? "set a GitHub repo first" : undefined}>
             {busyAction === "sync" ? "syncing…" : "sync"}
           </button>
-          <button onClick={() => setDrawerOpen((v) => !v)} disabled={busy || noRepo} title={noRepo ? "set a GitHub repo first" : undefined}>
+          <button onClick={() => setDrawerOpen((v) => !v)} disabled={busy || noRepo || streamDisabled} title={noRepo ? "set a GitHub repo first" : undefined}>
             run issues
           </button>
         </div>
@@ -1078,6 +1108,11 @@ export default function ProjectPage() {
     refresh();
   };
 
+  const patchWorkstream = async (workstreamId: string, p: { enabled?: boolean }) => {
+    await api.updateWorkstream(id, workstreamId, p);
+    refresh();
+  };
+
   const saveSetup = async (p: ProjectPatch) => {
     await api.patchProject(id, p);
     refresh();
@@ -1190,7 +1225,14 @@ export default function ProjectPage() {
         <>
           {project.goal_complete && <GoalBanner project={project} onPatch={patch} />}
           {configured && !needsStart && <TogglesBar project={project} onPatch={patch} />}
-          {configured && !needsStart && <ProjectSettings project={project} onPatch={patch} />}
+          {configured && !needsStart && (
+            <ProjectSettings
+              project={project}
+              workstreams={workstreams}
+              onPatch={patch}
+              onPatchWorkstream={patchWorkstream}
+            />
+          )}
 
           {configured && !needsStart && (
             <div className="project-primary-switch">

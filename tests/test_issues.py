@@ -594,6 +594,32 @@ def test_issue_workstream_run_selected_endpoint(app, monkeypatch):
     assert task.issue_number == 2 and task.run_id == resp["run"]["id"]
 
 
+def test_issue_workstream_can_be_disabled(app, monkeypatch):
+    client, store = app
+    project = client.post("/api/projects", json={"name": "spec"}).json()
+    client.patch(f"/api/projects/{project['id']}", json={"spec_repo": "https://github.com/o/r.git"})
+    _pass_preflight(monkeypatch)
+    monkeypatch.setattr("hive.api.fetch_open_issues_full", lambda repo, token: [issue(1, "bug")])
+
+    stream = next(
+        w for w in client.get(f"/api/projects/{project['id']}").json()["workstreams"]
+        if w["kind"] == "github_issues"
+    )
+    disabled = client.patch(
+        f"/api/projects/{project['id']}/workstreams/{stream['id']}",
+        json={"enabled": False},
+    ).json()
+    assert disabled["enabled"] is False and disabled["status"] == "disabled"
+    assert client.post(f"/api/projects/{project['id']}/workstreams/{stream['id']}/sync").status_code == 409
+
+    enabled = client.patch(
+        f"/api/projects/{project['id']}/workstreams/{stream['id']}",
+        json={"enabled": True},
+    ).json()
+    assert enabled["enabled"] is True and enabled["status"] == "idle"
+    assert client.post(f"/api/projects/{project['id']}/workstreams/{stream['id']}/sync").status_code == 200
+
+
 def test_cancel_issue_run_cancels_pending_run_task(app, monkeypatch):
     client, store = app
     project = client.post("/api/projects", json={"name": "spec"}).json()

@@ -21,6 +21,8 @@ import type {
   StorageInfo,
   Subscription,
   Task,
+  Workstream,
+  WorkstreamPatch,
 } from "./types";
 import { api as mockApi } from "./mocks";
 
@@ -95,6 +97,11 @@ const realApi = {
   project: (id: string) => http<ProjectDetail>(`/api/projects/${id}`),
   patchProject: (id: string, patch: ProjectPatch) =>
     http<Project>(`/api/projects/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  updateWorkstream: (projectId: string, workstreamId: string, patch: WorkstreamPatch) =>
+    http<Workstream>(`/api/projects/${projectId}/workstreams/${workstreamId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
   createProjectRepo: (id: string, body: ProjectRepoCreate) =>
     http<{ project: Project; repo: GithubRepo }>(`/api/projects/${id}/repo`, {
       method: "POST",

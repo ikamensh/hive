@@ -73,6 +73,7 @@ from hive.models import (
     Project,
     ProjectWorkstream,
     ProjectWorkstreamKind,
+    ProjectWorkstreamStatus,
     ProjectState,
     Question,
     QuestionStatus,
@@ -151,6 +152,12 @@ class ProjectRepoCreate(BaseModel):
 class ProjectWorkstreamCreate(BaseModel):
     kind: ProjectWorkstreamKind = ProjectWorkstreamKind.github_issues
     repo: str = ""
+
+
+class ProjectWorkstreamPatch(BaseModel):
+    title: str | None = None
+    enabled: bool | None = None
+    config: dict | None = None
 
 
 class IssueRunCreate(BaseModel):
@@ -487,6 +494,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             raise HTTPException(404)
         return workstream
 
+    def require_enabled_workstream(workstream: ProjectWorkstream) -> None:
+        if not workstream.enabled or workstream.status == ProjectWorkstreamStatus.disabled:
+            raise HTTPException(409, "workstream is disabled")
+
     def issue_preflight_checks(project: Project, repo: str):
         try:
             return preflight_checks(store, config, project, repo=repo)
@@ -496,6 +507,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def sync_issue_workstream(project: Project, workstream: ProjectWorkstream) -> tuple[list[str], int, int, int]:
         if workstream.kind != ProjectWorkstreamKind.github_issues:
             raise HTTPException(400, "workstream does not read GitHub issues")
+        require_enabled_workstream(workstream)
         hard_failed = [
             c
             for c in issue_preflight_checks(project, workstream.repo)
@@ -527,6 +539,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         workstream: ProjectWorkstream,
         body: IssueRunCreate,
     ) -> tuple[IssueRun, list[str], int, int, int, int]:
+        require_enabled_workstream(workstream)
         notes, open_count, downloaded, failed = sync_issue_workstream(project, workstream)
         open_items = [
             w
@@ -1180,6 +1193,36 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             raise HTTPException(400, "repo is required")
         return ensure_issue_workstream(store, project, repo=repo).model_dump()
 
+    @app.patch("/api/projects/{project_id}/workstreams/{workstream_id}")
+    def patch_project_workstream(
+        project_id: str,
+        workstream_id: str,
+        body: ProjectWorkstreamPatch,
+        ctx: AuthContext = Depends(current),
+    ):
+        project = require_project(project_id, ctx)
+        workstream = require_project_workstream(project, workstream_id, ctx)
+        if body.title is not None:
+            title = body.title.strip()
+            if not title:
+                raise HTTPException(400, "title cannot be empty")
+            workstream.title = title
+        if body.config is not None:
+            workstream.config = body.config
+        if body.enabled is not None:
+            workstream.enabled = body.enabled
+            if body.enabled:
+                if workstream.status == ProjectWorkstreamStatus.disabled:
+                    workstream.status = (
+                        ProjectWorkstreamStatus.active
+                        if workstream.kind == ProjectWorkstreamKind.iteration
+                        else ProjectWorkstreamStatus.idle
+                    )
+            else:
+                workstream.status = ProjectWorkstreamStatus.disabled
+        workstream.updated_at = time.time()
+        return store.put(workstream).model_dump()
+
     @app.post("/api/projects/{project_id}/workstreams/{workstream_id}/preflight")
     def issue_workstream_preflight(
         project_id: str,
@@ -1190,6 +1233,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         workstream = require_project_workstream(project, workstream_id, ctx)
         if workstream.kind != ProjectWorkstreamKind.github_issues:
             raise HTTPException(400, "workstream does not read GitHub issues")
+        require_enabled_workstream(workstream)
         checks = issue_preflight_checks(project, workstream.repo)
         hard_ok = all(c.ok for c in checks if c.hard)
         runner_task = None

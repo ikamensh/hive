@@ -22,6 +22,7 @@ import type {
   Task,
   WorkItem,
   Workstream,
+  WorkstreamPatch,
 } from "./types";
 
 const now = Date.now() / 1000;
@@ -853,6 +854,21 @@ export const api = {
       project.goal_complete_note = "";
     }
     return structuredClone(project);
+  },
+
+  updateWorkstream: async (projectId: string, workstreamId: string, patch: WorkstreamPatch): Promise<Workstream> => {
+    const workstream = projectWorkstreams.find((w) => w.project_id === projectId && w.id === workstreamId);
+    if (!workstream) throw new Error("not found");
+    if (patch.title !== undefined) workstream.title = patch.title;
+    if (patch.config !== undefined) workstream.config = patch.config;
+    if (patch.enabled !== undefined) {
+      workstream.enabled = patch.enabled;
+      workstream.status = patch.enabled
+        ? workstream.kind === "iteration" ? "active" : "idle"
+        : "disabled";
+    }
+    workstream.updated_at = Date.now() / 1000;
+    return structuredClone(workstream);
   },
 
   issuesPreflight: async (): Promise<PreflightResult> => ({
