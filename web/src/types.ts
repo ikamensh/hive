@@ -38,6 +38,7 @@ export interface Project {
 /** Spec-mode statuses plus the issues-mode per-issue lifecycle. */
 export type WorkstreamStatus =
   | "active"
+  | "queued"
   | "parked"
   | "done"
   | "resolving"
@@ -58,6 +59,7 @@ export interface Workstream {
   source?: "manual" | "issue";
   issue_number?: number;
   issue_url?: string;
+  order?: number;
   created_at: number;
 }
 

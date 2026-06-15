@@ -510,9 +510,21 @@ function IssueCard({ ws }: { ws: Workstream }) {
 
 const ISSUE_GROUPS: { label: string; statuses: WorkstreamStatus[] }[] = [
   { label: "in progress", statuses: ["resolving", "reviewing"] },
+  { label: "queue", statuses: ["queued"] },
   { label: "needs you", statuses: ["blocked_clarity", "rejected"] },
   { label: "done", statuses: ["done", "cancelled"] },
 ];
+
+function issueSort(group: { statuses: WorkstreamStatus[] }) {
+  return (a: Workstream, b: Workstream) => {
+    if (group.statuses.includes("queued")) {
+      return (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) ||
+        (a.issue_number ?? 0) - (b.issue_number ?? 0) ||
+        a.created_at - b.created_at;
+    }
+    return b.created_at - a.created_at;
+  };
+}
 
 function IssuesView({ workstreams }: { workstreams: Workstream[] }) {
   const issues = workstreams.filter((w) => w.source === "issue");
@@ -522,7 +534,7 @@ function IssuesView({ workstreams }: { workstreams: Workstream[] }) {
       {ISSUE_GROUPS.map((group) => {
         const items = issues
           .filter((w) => group.statuses.includes(w.status))
-          .sort((a, b) => b.created_at - a.created_at);
+          .sort(issueSort(group));
         if (items.length === 0) return null;
         return (
           <div className="issue-group" key={group.label}>

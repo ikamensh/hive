@@ -1326,6 +1326,9 @@ textarea:focus {
 .issue-card.iss-reviewing {
   border-left-color: var(--accent);
 }
+.issue-card.iss-queued {
+  border-left-color: var(--line);
+}
 .issue-card.iss-blocked_clarity {
   border-left-color: var(--amber);
 }
@@ -1367,6 +1370,10 @@ textarea:focus {
 .chip-iss-resolving {
   color: var(--accent);
   border-color: #5b8cff33;
+}
+.chip-iss-queued {
+  color: var(--ink-dim);
+  border-color: var(--line);
 }
 .chip-iss-reviewing {
   color: #7fb8e8;
