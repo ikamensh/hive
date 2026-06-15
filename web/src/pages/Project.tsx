@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { ApiError, ago, api, duration, money, repoShort, usePoll } from "../api";
 import { RepoListEditor, RepoUrlInput } from "../components/RepoPicker";
@@ -811,6 +811,7 @@ function TestingToolbar({
   selectedStreamId,
   onSelectedStream,
   selectedStoryKeys,
+  activityVersion,
   onChanged,
 }: {
   project: Project;
@@ -818,6 +819,7 @@ function TestingToolbar({
   selectedStreamId: string;
   onSelectedStream: (id: string) => void;
   selectedStoryKeys: string[];
+  activityVersion: string;
   onChanged: () => void;
 }) {
   const [busyAction, setBusyAction] = useState<"refresh" | "run" | "">("");
@@ -830,6 +832,10 @@ function TestingToolbar({
   const noRepo = !stream;
   const streamDisabled = Boolean(stream && (!stream.enabled || stream.status === "disabled"));
   const busy = busyAction !== "";
+
+  useEffect(() => {
+    setMessage("");
+  }, [activityVersion]);
 
   const refresh = async () => {
     if (!stream) return;
@@ -1006,7 +1012,7 @@ function StoriesView({
                           <small>{story.key}</small>
                         </td>
                         <td><span className={`chip chip-story-${story.status}`}>{story.status}</span></td>
-                        <td>{story.last_fidelity}</td>
+                        <td><span className={`chip chip-fidelity-${story.last_fidelity}`}>{story.last_fidelity}</span></td>
                         <td>{story.last_tested_at ? ago(story.last_tested_at) : "never"}</td>
                         <td>
                           {story.open_issue_url ? (
@@ -1405,6 +1411,13 @@ export default function ProjectPage() {
   const testingEpisodes = test_episodes.filter((episode) =>
     !activeTestingStream || episode.workstream_id === activeTestingStream.id
   );
+  const testingActivityVersion = [
+    testingStories.map((story) => `${story.id}:${story.status}:${story.last_fidelity}:${story.last_tested_at}`).join("|"),
+    testingEpisodes.map((episode) => `${episode.id}:${episode.status}:${episode.finished_at}`).join("|"),
+    tasks.filter((task) => ["test_refresh", "test_sweep", "test_reproduce", "test_judge"].includes(task.kind))
+      .map((task) => `${task.id}:${task.status}:${task.finished_at}:${task.cancel_requested}`)
+      .join("|"),
+  ].join("::");
   const issueNeeds = issueWorkItems.filter((w) => w.status === "blocked_clarity" || w.status === "rejected");
   const testingNeeds = testingStories.filter((story) => story.status === "blocked");
   const inboxCount = openQs.length + openTodos.length + issueNeeds.length + testingNeeds.length;
@@ -1560,6 +1573,7 @@ export default function ProjectPage() {
                     setSelectedStoryKeys([]);
                   }}
                   selectedStoryKeys={selectedStoryKeys}
+                  activityVersion={testingActivityVersion}
                   onChanged={refresh}
                 />
                 <h2 className="col-title issues-title">

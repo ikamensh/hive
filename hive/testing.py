@@ -52,6 +52,33 @@ ARTIFACT_DIR = ".hive/artifacts"
 ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9._/-]+$")
 STORY_HEADING = re.compile(r"^\s*#\s*story:\s*([A-Za-z0-9._-]+)(?:\s*\[([^\]]+)\])?", re.I | re.M)
 SECTION_HEADING = re.compile(r"^##\s+(.+?)\s*$", re.M)
+USER_IMPACT_WORDS = {
+    "block",
+    "broken",
+    "cannot",
+    "can't",
+    "crash",
+    "error",
+    "fail",
+    "incorrect",
+    "lose",
+    "missing",
+    "prevent",
+    "unable",
+    "wrong",
+}
+WEAK_NITPICK_WORDS = {
+    "alignment",
+    "color",
+    "copy",
+    "cosmetic",
+    "font",
+    "margin",
+    "nit",
+    "polish",
+    "spacing",
+    "typo",
+}
 
 
 @dataclass
@@ -559,6 +586,25 @@ def _finding_signature(story_key: str, kind: str, summary: str, oracle: str) -> 
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def finding_quality_problem(item: dict) -> str:
+    """Return why a sweep finding is too weak to enter the denoise funnel."""
+    summary = str(item.get("summary") or "").strip()
+    detail = str(item.get("detail") or item.get("repro_steps") or "").strip()
+    oracle = str(item.get("oracle") or "").strip()
+    if not summary:
+        return "missing summary"
+    if len(detail) < 30:
+        return "missing concrete reproduction detail"
+    if len(oracle) < 12:
+        return "missing oracle"
+    text = f"{summary} {detail} {oracle}".lower()
+    has_impact = any(word in text for word in USER_IMPACT_WORDS)
+    weak_nitpick = any(word in text for word in WEAK_NITPICK_WORDS)
+    if weak_nitpick and not has_impact:
+        return "cosmetic or low-impact nitpick"
+    return ""
+
+
 def persist_sweep_findings(
     store,
     project: Project,
@@ -573,6 +619,8 @@ def persist_sweep_findings(
         raw_findings = []
     for item in raw_findings:
         if not isinstance(item, dict):
+            continue
+        if finding_quality_problem(item):
             continue
         kind_raw = str(item.get("kind") or "bug")
         kind = FindingKind.ux_smell if kind_raw == FindingKind.ux_smell else FindingKind.bug

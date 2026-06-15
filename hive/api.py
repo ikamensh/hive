@@ -62,6 +62,7 @@ from hive.testing import (
     close_story_issue,
     ensure_testing_workstream,
     file_or_update_finding_issue,
+    finding_quality_problem,
     finish_refresh,
     persist_sweep_findings,
     queue_confirm_task,
@@ -655,6 +656,37 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
         store.update(TestEpisode, episode.id, mark)
 
+    def block_story_on_bad_sweep(
+        project: Project,
+        story: Story,
+        task: Task,
+        episode: TestEpisode | None,
+        reason: str,
+        output: str,
+    ) -> None:
+        story.status = StoryStatus.blocked
+        story.last_episode_id = task.run_id
+        story.last_result_task_id = task.id
+        story.updated_at = time.time()
+        store.put(story)
+        escalate(
+            store,
+            f"Repair testing sweep output for {story.key}",
+            instructions=(
+                "Hive's testing sweep reported findings, but none were actionable enough "
+                "to enter the confirmation funnel. The story was blocked instead of filing "
+                "a weak or malformed issue.\n\n"
+                f"Story: `{story.key}`\n"
+                f"Task: `{task.id}`\n"
+                f"Reason: {reason}\n\n"
+                f"Task output:\n\n```\n{output.strip()[:2000]}\n```"
+            ),
+            project_id=project.id,
+            workspace_id=project.workspace_id,
+        )
+        if episode:
+            refresh_episode_counts(store, project, episode)
+
     def handle_test_refresh_result(task: Task, body: TaskResult) -> None:
         project = store.get(Project, task.project_id)
         workstream = store.get(ProjectWorkstream, task.workstream_id)
@@ -760,9 +792,22 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             story.updated_at = time.time()
             store.put(story)
         elif outcome == "findings":
+            raw_findings = payload.get("findings") if isinstance(payload, dict) else None
             findings = persist_sweep_findings(
                 store, project, story, task, episode or TestEpisode(project_id=project.id, workstream_id=story.workstream_id, repo=story.repo), payload
             )
+            if not findings:
+                if not isinstance(raw_findings, list) or not raw_findings:
+                    reason = "missing or malformed findings JSON"
+                else:
+                    problems = [
+                        finding_quality_problem(item)
+                        for item in raw_findings
+                        if isinstance(item, dict)
+                    ]
+                    reason = ", ".join(dict.fromkeys(p for p in problems if p)) or "no actionable findings"
+                block_story_on_bad_sweep(project, story, task, episode, reason, body.text)
+                return
             story.status = StoryStatus.failing
             story.last_episode_id = task.run_id
             story.last_result_task_id = task.id
@@ -1652,13 +1697,16 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             project_id=episode.project_id,
             run_id=episode.id,
         ):
-            if task.status != TaskStatus.pending:
-                continue
-            task.status = TaskStatus.cancelled
-            task.result_text = "Cancelled by operator when the testing episode was cancelled."
-            task.finished_at = time.time()
-            store.put(task)
-            cancelled_tasks += 1
+            if task.status == TaskStatus.pending:
+                task.status = TaskStatus.cancelled
+                task.result_text = "Cancelled by operator when the testing episode was cancelled."
+                task.finished_at = time.time()
+                store.put(task)
+                cancelled_tasks += 1
+            elif task.status == TaskStatus.running:
+                task.cancel_requested = True
+                store.put(task)
+                cancelled_tasks += 1
 
         def mark(saved: TestEpisode) -> None:
             saved.status = TestEpisodeStatus.cancelled

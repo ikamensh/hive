@@ -6,6 +6,7 @@ from hive.blobstore import LocalBlobStore
 from hive.config import Config
 from hive.models import (
     Finding,
+    HumanTask,
     Project,
     Story,
     StoryStatus,
@@ -195,3 +196,80 @@ def test_artifact_upload_roundtrip(tmp_path):
         content=b"x",
         headers=RUNNER_HEADERS,
     ).status_code in {400, 404}
+
+
+def _start_episode_to_sweep(client, store, pid, rid, stream_id):
+    created = client.post(
+        f"/api/projects/{pid}/workstreams/{stream_id}/test-episodes",
+        json={"scope": "full"},
+    ).json()
+    episode_id = created["episode"]["id"]
+    _pump(client, store)
+    refresh = _poll(client, rid)
+    _report(client, refresh["id"], "Refreshed acceptance.\nREFRESH: DONE")
+    _pump(client, store)
+    sweep = _poll(client, rid)
+    assert sweep["kind"] == "test_sweep"
+    return episode_id, sweep
+
+
+def test_malformed_sweep_findings_block_story_and_file_todo(tmp_path):
+    repo = spec_repo(tmp_path)
+    client, store = app(tmp_path, repo)
+    pid = _project_with_repo(client, repo)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    stream = next(w for w in client.get(f"/api/projects/{pid}").json()["workstreams"] if w["kind"] == "testing")
+
+    _episode_id, sweep = _start_episode_to_sweep(client, store, pid, rid, stream["id"])
+    _report(client, sweep["id"], "Found a problem.\nSWEEP: FINDINGS\nnot json")
+
+    story = store.list(Story, project_id=pid)[0]
+    assert story.status == StoryStatus.blocked
+    assert store.list(Finding, project_id=pid) == []
+    todos = store.list(HumanTask, project_id=pid)
+    assert [t.title for t in todos] == ["Repair testing sweep output for webhook-retry"]
+    assert "missing or malformed findings JSON" in todos[0].instructions
+
+
+def test_weak_sweep_findings_are_not_filed(tmp_path):
+    repo = spec_repo(tmp_path)
+    client, store = app(tmp_path, repo)
+    pid = _project_with_repo(client, repo)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    stream = next(w for w in client.get(f"/api/projects/{pid}").json()["workstreams"] if w["kind"] == "testing")
+
+    _episode_id, sweep = _start_episode_to_sweep(client, store, pid, rid, stream["id"])
+    _report(
+        client,
+        sweep["id"],
+        "Button color is a bit off.\n"
+        "SWEEP: FINDINGS\n"
+        "```json\n"
+        '{"fidelity":"local","findings":[{"kind":"ux_smell","severity":"low",'
+        '"summary":"Button color looks off",'
+        '"detail":"The button color is a little different from the rest of the page but the flow still works.",'
+        '"oracle":"The page should feel polished."}]}\n'
+        "```",
+    )
+
+    story = store.list(Story, project_id=pid)[0]
+    assert story.status == StoryStatus.blocked
+    assert store.list(Finding, project_id=pid) == []
+    assert "cosmetic or low-impact nitpick" in store.list(HumanTask, project_id=pid)[0].instructions
+
+
+def test_cancel_testing_episode_signals_running_tasks(tmp_path):
+    repo = spec_repo(tmp_path)
+    client, store = app(tmp_path, repo)
+    pid = _project_with_repo(client, repo)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    stream = next(w for w in client.get(f"/api/projects/{pid}").json()["workstreams"] if w["kind"] == "testing")
+
+    episode_id, sweep = _start_episode_to_sweep(client, store, pid, rid, stream["id"])
+    cancelled = client.post(f"/api/test-episodes/{episode_id}/cancel").json()
+
+    task = store.get(Task, sweep["id"])
+    assert task.status == TaskStatus.running
+    assert task.cancel_requested is True
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["counts"]["cancelled_tasks"] == 1

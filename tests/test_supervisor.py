@@ -19,6 +19,7 @@ from hive.models import (
     ResourceUsability,
     Runner,
     Task,
+    TaskKind,
     TaskStatus,
     Workstream,
     WorkstreamStatus,
@@ -257,4 +258,49 @@ def test_orchestrator_failure_files_project_todo():
     assert "No API key was provided" in tasks[0].instructions
 
     asyncio.run(sup._orchestrate(project.id, ["Project created again"]))
+    assert len(store.list(HumanTask, project_id=project.id)) == 1
+
+
+def test_testing_capability_blocker_files_project_todo():
+    store = MemoryStore()
+    project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
+    conversation = store.put(
+        AgentConversation(
+            project_id=project.id,
+            repo=project.spec_repo,
+            backend="codex",
+            model="gpt-5.5",
+            status=ConversationStatus.done,
+        )
+    )
+    project.intake_conversation_id = conversation.id
+    store.put(project)
+    runner = store.put(Runner(name="r1", backends=["codex"]))
+    store.put(
+        Resource(
+            runner_id=runner.id,
+            backend="codex",
+            usability_status=ResourceUsability.usable,
+        )
+    )
+    store.put(
+        Task(
+            project_id=project.id,
+            workstream_id="story",
+            repo="r",
+            instructions="test",
+            kind=TaskKind.test_sweep,
+            backend="codex",
+            required_capabilities=["browser", "docker"],
+        )
+    )
+
+    sup = make_supervisor(store)
+    assert sup.refresh_state(project) == ProjectState.blocked_resources
+    todos = store.list(HumanTask, project_id=project.id)
+    assert [t.title for t in todos] == ["Enable testing capabilities for p"]
+    assert "`browser`" in todos[0].instructions
+    assert "`docker`" in todos[0].instructions
+
+    sup.refresh_state(project)
     assert len(store.list(HumanTask, project_id=project.id)) == 1

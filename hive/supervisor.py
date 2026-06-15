@@ -241,6 +241,7 @@ class Supervisor:
             )
             if t.status in (TaskStatus.pending, TaskStatus.running)
         ]
+        available_capacity = self.available_capacity()
         state = compute_state(
             project,
             workstreams,
@@ -248,12 +249,54 @@ class Supervisor:
             tasks,
             self.available_backends(),
             self.over_budget(project),
-            self.available_capacity(),
+            available_capacity,
         )
+        if state == ProjectState.blocked_resources:
+            self._file_testing_capability_blocker(project, tasks, available_capacity)
         if state != project.state:
             project.state = state
             self.store.put(project)
         return state
+
+    def _file_testing_capability_blocker(
+        self,
+        project: Project,
+        tasks: list[Task],
+        available_capacity: set[str],
+    ) -> None:
+        blocked = [
+            task
+            for task in tasks
+            if task.status == TaskStatus.pending
+            and task.required_capabilities
+            and _task_capacity_key(task) not in available_capacity
+        ]
+        if not blocked:
+            return
+        needs = "\n".join(
+            "- `{}` `{}` needs backend `{}` with {}".format(
+                task.kind,
+                task.id,
+                task.backend,
+                ", ".join(f"`{cap}`" for cap in sorted(task.required_capabilities)),
+            )
+            for task in blocked[:10]
+        )
+        available = ", ".join(f"`{item}`" for item in sorted(available_capacity)) or "(none)"
+        escalate(
+            self.store,
+            f"Enable testing capabilities for {project.name}",
+            instructions=(
+                "Hive has testing tasks ready, but no online usable runner currently offers "
+                "the required browser/Docker capability bundle.\n\n"
+                f"Blocked task(s):\n{needs}\n\n"
+                f"Available capacity right now: {available}\n\n"
+                "Install and probe the missing runner capability, or run a capable runner, then "
+                "mark this todo done so Hive can re-check dispatch."
+            ),
+            project_id=project.id,
+            workspace_id=self.workspace_id,
+        )
 
     def dispatch(self, project: Project) -> int:
         """Assign pending tasks to runners. Mutating tasks serialize per repo;

@@ -1669,6 +1669,17 @@ textarea:focus {
   color: var(--green);
   border-color: #5fd6a433;
 }
+.chip-fidelity-docker {
+  color: var(--green);
+  border-color: #5fd6a433;
+}
+.chip-fidelity-local {
+  color: var(--amber);
+  border-color: #f0b35033;
+}
+.chip-fidelity-none {
+  color: var(--ink-faint);
+}
 .chip-story-archived,
 .chip-find-rejected,
 .chip-find-duplicate {
