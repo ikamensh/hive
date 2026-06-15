@@ -1704,7 +1704,12 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 store.put(task)
                 cancelled_tasks += 1
             elif task.status == TaskStatus.running:
-                task.cancel_requested = True
+                if task.delivered:
+                    task.cancel_requested = True
+                else:
+                    task.status = TaskStatus.cancelled
+                    task.result_text = "Cancelled by operator before delivery to a runner."
+                    task.finished_at = time.time()
                 store.put(task)
                 cancelled_tasks += 1
 
@@ -1868,8 +1873,13 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             _cancel_issue_work(store, task)
             supervisor.wake(task.project_id, f"Task {task.id} was cancelled before it ran.")
         elif task.status == TaskStatus.running:
-            # Cooperative: the runner polls this flag and stops the agent.
-            task.cancel_requested = True
+            if task.delivered:
+                # Cooperative: the runner polls this flag and stops the agent.
+                task.cancel_requested = True
+            else:
+                task.status = TaskStatus.cancelled
+                task.result_text = "Cancelled by operator before delivery to a runner."
+                task.finished_at = time.time()
             store.put(task)
         return task.model_dump()
 

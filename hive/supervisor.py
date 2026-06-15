@@ -309,6 +309,11 @@ class Supervisor:
             for t in tasks
             if t.status == TaskStatus.running and _serializes_repo(t)
         }
+        busy_runners = {
+            t.runner_id
+            for t in tasks
+            if t.status == TaskStatus.running and t.runner_id
+        }
         runners = [r for r in self.store.list(Runner, workspace_id=self.workspace_id) if r.online()]
         resources = {
             (r.runner_id, r.backend): r
@@ -322,6 +327,8 @@ class Supervisor:
             if _serializes_repo(task) and task.repo in busy_repos:
                 continue
             for runner in runners:
+                if runner.id in busy_runners:
+                    continue
                 resource = resources.get((runner.id, task.backend))
                 if (
                     task.backend in runner.backends
@@ -329,6 +336,7 @@ class Supervisor:
                     and resource.supports(task.required_capabilities)
                 ):
                     if self._claim(task.id, runner):
+                        busy_runners.add(runner.id)
                         if _serializes_repo(task):
                             busy_repos.add(task.repo)
                         dispatched += 1

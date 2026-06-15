@@ -133,11 +133,41 @@ def test_dispatch_serializes_per_repo():
 def test_dispatch_parallel_across_repos():
     store = MemoryStore()
     project = seed(store)
+    runner = store.put(Runner(name="r2", backends=["cursor"]))
+    store.put(Resource(runner_id=runner.id, backend="cursor",
+                       usability_status=ResourceUsability.usable))
     ws = store.put(Workstream(project_id=project.id, title="w"))
     store.put(Task(project_id=project.id, workstream_id=ws.id, repo="repo-a", instructions="a"))
     store.put(Task(project_id=project.id, workstream_id=ws.id, repo="repo-b", instructions="b"))
     sup = make_supervisor(store)
     assert sup.dispatch(project) == 2
+
+
+def test_dispatch_limits_parallel_test_tasks_to_runner_capacity():
+    store = MemoryStore()
+    project = seed(store)
+    ws = store.put(Workstream(project_id=project.id, title="w"))
+    for i in range(3):
+        store.put(
+            Task(
+                project_id=project.id,
+                workstream_id=ws.id,
+                repo="same-repo",
+                instructions=f"test {i}",
+                kind=TaskKind.test_sweep,
+            )
+        )
+    sup = make_supervisor(store)
+    assert sup.dispatch(project) == 1
+    assert len(store.list(Task, status=TaskStatus.running)) == 1
+    assert len(store.list(Task, status=TaskStatus.pending)) == 2
+
+    runner = store.put(Runner(name="r2", backends=["cursor"]))
+    store.put(Resource(runner_id=runner.id, backend="cursor",
+                       usability_status=ResourceUsability.usable))
+    assert sup.dispatch(project) == 1
+    assert len(store.list(Task, status=TaskStatus.running)) == 2
+    assert len(store.list(Task, status=TaskStatus.pending)) == 1
 
 
 def test_dispatch_requires_backend_and_resource():

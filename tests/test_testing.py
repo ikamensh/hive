@@ -273,3 +273,40 @@ def test_cancel_testing_episode_signals_running_tasks(tmp_path):
     assert task.cancel_requested is True
     assert cancelled["status"] == "cancelled"
     assert cancelled["counts"]["cancelled_tasks"] == 1
+
+
+def test_cancel_testing_episode_hard_cancels_undelivered_running_tasks(tmp_path):
+    repo = spec_repo(tmp_path)
+    client, store = app(tmp_path, repo)
+    pid = _project_with_repo(client, repo)
+    stream = next(w for w in client.get(f"/api/projects/{pid}").json()["workstreams"] if w["kind"] == "testing")
+    episode = store.put(
+        EpisodeModel(
+            project_id=pid,
+            workstream_id=stream["id"],
+            repo=str(repo),
+            story_keys=["webhook-retry"],
+        )
+    )
+    task = store.put(
+        Task(
+            project_id=pid,
+            workstream_id="story",
+            work_item_id="story",
+            run_id=episode.id,
+            repo=str(repo),
+            instructions="test",
+            status=TaskStatus.running,
+            kind=TaskKind.test_sweep,
+            runner_id="runner-1",
+            delivered=False,
+        )
+    )
+
+    cancelled = client.post(f"/api/test-episodes/{episode.id}/cancel").json()
+
+    task = store.get(Task, task.id)
+    assert task.status == TaskStatus.cancelled
+    assert task.cancel_requested is False
+    assert "before delivery" in task.result_text
+    assert cancelled["counts"]["cancelled_tasks"] == 1
