@@ -19,7 +19,7 @@ from pathlib import Path
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from hive.auth import (
     SESSION_COOKIE,
@@ -29,13 +29,7 @@ from hive.auth import (
     ensure_control_plane_machine,
     ensure_machine,
 )
-from hive.backends import REGISTRY, probe_instructions
-from hive.agent_results import (
-    test_repro_outcome as structured_test_repro_outcome,
-    test_sweep_outcome as structured_test_sweep_outcome,
-    test_ux_outcome as structured_test_ux_outcome,
-    verdict_from_structured,
-)
+from hive.backends import probe_instructions
 from hive.config import Config
 from hive.escalation import escalate
 from hive.github_repos import all_repos as list_github_repos
@@ -43,13 +37,10 @@ from hive.github_repos import create_repo as create_github_repo
 from hive.issues import (
     advance_issues,
     attachment_key,
-    create_review_task,
     download_issue_attachments,
     ensure_issue_workstream,
     fetch_open_issues_full,
-    issue_branch,
     issue_is_closed,
-    LANDING_FAILED_PREFIX,
     merge_branch,
     project_workstreams,
     reconcile,
@@ -68,16 +59,9 @@ from hive.testing import (
     close_story_issue,
     ensure_testing_workstream,
     file_or_update_finding_issue,
-    finding_quality_problem,
-    finish_refresh,
-    persist_sweep_findings,
-    queue_confirm_task,
     queue_refresh_task,
-    reconcile_stories,
-    refresh_episode_counts,
     safe_artifact_name,
     start_episode,
-    result_payload as test_payload,
 )
 from hive.models import (
     AgentConversation,
@@ -85,7 +69,6 @@ from hive.models import (
     ConversationStatus,
     Feedback,
     Finding,
-    FindingStatus,
     GuessPropensity,
     HumanTask,
     HumanTaskStatus,
@@ -105,8 +88,6 @@ from hive.models import (
     ResourceUsability,
     Runner,
     Story,
-    StoryFidelity,
-    StoryStatus,
     Subscription,
     Task,
     TaskKind,
@@ -114,46 +95,26 @@ from hive.models import (
     TestEpisode,
     TestEpisodeScope,
     TestEpisodeStatus,
-    TestReproOutcome,
-    TestSweepOutcome,
-    TestUxOutcome,
-    Verdict,
     Workstream,
     WorkstreamSource,
     WorkstreamStatus,
-    parse_test_refresh,
-    parse_test_repro,
-    parse_test_sweep,
-    parse_test_ux,
-    parse_resolve,
-    parse_review,
-    parse_verdict,
 )
 from hive.specrepo import SpecRepo
 from hive.storage import storage_info
 from hive.supervisor import Supervisor
+from hive.task_results import (
+    TaskResult,
+    TaskResultProcessor,
+    cancel_issue_work,
+    complete_resource_login_todos,
+    sync_landing_failure_human_task,
+)
 
 log = logging.getLogger("hive.api")
 
 RUNNER_POLL_WAIT_S = 5.0
 RUNNER_POLL_SLEEP_S = 1.0
-RATE_LIMIT_COOLDOWN_S = 3600.0
 PROBE_REPO_DIR = "agent-probe-repo"
-HUMAN_FIX_PATTERNS = re.compile(
-    r"auth|login|credential|api.?key|not authenticated|forbidden|permission|subscription|billing",
-    re.IGNORECASE,
-)
-ISSUE_RESULT_MARKER_RE = re.compile(
-    r"^\s*(OUTCOME|REVIEW)\s*:\s*(FIXED|BLOCKED|ACCEPT|REJECT)\s*$",
-    re.IGNORECASE,
-)
-ISSUE_COMMENT_SECTION_LIMIT = 6000
-TEST_TASK_KINDS = (
-    TaskKind.test_refresh,
-    TaskKind.test_sweep,
-    TaskKind.test_reproduce,
-    TaskKind.test_judge,
-)
 
 
 def _iso_utc(epoch: float) -> str:
@@ -261,54 +222,6 @@ class RunnerRegister(BaseModel):
     auto_probe: bool = False
 
 
-class TaskResult(BaseModel):
-    text: str
-    is_error: bool = False
-    cost_usd: float = 0.0
-    input_tokens: int = 0
-    output_tokens: int = 0
-    structured_result: dict = Field(default_factory=dict)
-    structured_result_error: str = ""
-    resource_exhausted: bool = False  # rate limit / quota detected by runner
-    cancelled: bool = False  # runner stopped the task on an operator cancel request
-    session_handle: str = ""  # backend session id/chat id for conversation continuation
-
-
-def _structured_or_legacy_verdict(
-    kind: TaskKind,
-    body: TaskResult,
-    legacy: Verdict,
-) -> Verdict:
-    structured = verdict_from_structured(kind, body.structured_result)
-    return structured if structured != Verdict.none else legacy
-
-
-def _test_refresh_done(body: TaskResult) -> bool:
-    return (
-        verdict_from_structured(TaskKind.test_refresh, body.structured_result) == Verdict.accept
-        or parse_test_refresh(body.text)
-    )
-
-
-def _test_sweep_payload(body: TaskResult) -> dict:
-    return body.structured_result or test_payload(body.text)
-
-
-def _test_sweep_outcome(body: TaskResult) -> TestSweepOutcome:
-    structured = structured_test_sweep_outcome(body.structured_result)
-    return structured if structured != TestSweepOutcome.none else parse_test_sweep(body.text)
-
-
-def _test_repro_outcome(body: TaskResult) -> TestReproOutcome:
-    structured = structured_test_repro_outcome(body.structured_result)
-    return structured if structured != TestReproOutcome.none else parse_test_repro(body.text)
-
-
-def _test_ux_outcome(body: TaskResult) -> TestUxOutcome:
-    structured = structured_test_ux_outcome(body.structured_result)
-    return structured if structured != TestUxOutcome.none else parse_test_ux(body.text)
-
-
 class ResourcePatch(BaseModel):
     enabled: bool | None = None
     disabled_reason: str = ""
@@ -329,221 +242,6 @@ def _ensure_probe_repo(data_dir: Path) -> Path:
         subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, timeout=60)
         subprocess.run(["git", "commit", "-m", "Initial probe repo"], cwd=repo, check=True, timeout=60)
     return repo
-
-
-def _set_ws_status(store, ws_id: str, status: WorkstreamStatus, reason: str) -> Workstream | None:
-    def mutate(ws: Workstream) -> None:
-        ws.status = status
-        ws.parked_reason = reason
-
-    return store.update(Workstream, ws_id, mutate)
-
-
-def _land_resolve(store, task: Task, body: "TaskResult", config: Config) -> None:
-    """Issue solving: a resolve task finished.
-
-    FIXED -> reviewing (queue the review); BLOCKED/unparseable ->
-    blocked_clarity (the agent commented on the issue); an execution error
-    leaves it resolving so the next scan retries.
-    """
-    if body.is_error:
-        log.warning("resolve task %s (issue #%s) errored; leaving 'resolving' for re-scan retry: %s",
-                    task.id, task.issue_number, body.text[:300])
-        return
-    if task.verdict == Verdict.none:
-        log.warning("resolve task %s (issue #%s) finished WITHOUT an `OUTCOME:` line — "
-                    "treating as BLOCKED. Tail: %s", task.id, task.issue_number, body.text[-300:])
-
-    def transition(ws: Workstream) -> None:
-        if ws.status != WorkstreamStatus.resolving:
-            return
-        if task.verdict == Verdict.accept:  # OUTCOME: FIXED
-            ws.status = WorkstreamStatus.reviewing
-            ws.parked_reason = ""
-        else:  # OUTCOME: BLOCKED, or no parseable outcome
-            ws.status = WorkstreamStatus.blocked_clarity
-            ws.parked_reason = "blocked at clarify step — see the GitHub issue comment"
-
-    ws = store.update(Workstream, task.workstream_id, transition)
-    if ws is None:
-        return
-    log.info("resolve task %s (issue #%s) verdict=%s → workstream %s",
-             task.id, task.issue_number, task.verdict, ws.status)
-    if ws.status == WorkstreamStatus.reviewing:
-        project = store.get(Project, task.project_id)
-        if project:
-            run = store.get(IssueRun, task.run_id) if task.run_id else None
-            review = create_review_task(store, project, ws, backend=task.backend, model=task.model, run=run)
-            if run:
-                refresh_issue_run(store, project, run)
-            log.info("queued review task %s for issue #%s on %s", review.id, ws.issue_number, review.branch)
-
-
-def _agent_report(text: str) -> str:
-    lines = [
-        line.rstrip()
-        for line in text.splitlines()
-        if not ISSUE_RESULT_MARKER_RE.match(line)
-    ]
-    while lines and not lines[0].strip():
-        lines.pop(0)
-    while lines and not lines[-1].strip():
-        lines.pop()
-    return "\n".join(lines).strip()
-
-
-def _comment_section(text: str) -> str:
-    text = text.strip()
-    if len(text) <= ISSUE_COMMENT_SECTION_LIMIT:
-        return text
-    return text[:ISSUE_COMMENT_SECTION_LIMIT].rstrip() + "\n\n[Truncated by Hive.]"
-
-
-def _latest_resolve_report(store, review_task: Task) -> str:
-    tasks = [
-        t
-        for t in store.list(
-            Task,
-            project_id=review_task.project_id,
-            workstream_id=review_task.workstream_id,
-            kind=TaskKind.resolve,
-        )
-        if (
-            t.issue_number == review_task.issue_number
-            and t.verdict == Verdict.accept
-            and t.result_text.strip()
-        )
-    ]
-    return _agent_report(tasks[-1].result_text) if tasks else ""
-
-
-def _issue_resolution_comment(store, review_task: Task, review_text: str, branch: str) -> str:
-    parts = [f"Resolved by Hive — merged `{branch}` into the default branch."]
-    resolve_report = _latest_resolve_report(store, review_task)
-    review_report = _agent_report(review_text)
-    if resolve_report:
-        parts.append(f"### Fix summary\n{_comment_section(resolve_report)}")
-    if review_report:
-        parts.append(f"### Review summary\n{_comment_section(review_report)}")
-    return "\n\n".join(parts)
-
-
-def _land_review(store, task: Task, body: "TaskResult", config: Config) -> None:
-    """Issue solving: a review task finished.
-
-    ACCEPT -> merge the branch into the default branch and close the issue
-    (Hive, via the GitHub API); REJECT/error -> rejected (the agent commented).
-    Landing failures escalate to a human.
-    """
-    ws = store.get(Workstream, task.workstream_id)
-    if ws is None or ws.status != WorkstreamStatus.reviewing:
-        return
-    if body.is_error:
-        log.warning("review task %s (issue #%s) errored → rejected (re-scan to retry): %s",
-                    task.id, task.issue_number, body.text[:300])
-        _set_ws_status(store, ws.id, WorkstreamStatus.rejected, "review errored — re-scan to retry")
-        project = store.get(Project, task.project_id)
-        run = store.get(IssueRun, task.run_id) if task.run_id else None
-        if project and run:
-            refresh_issue_run(store, project, run)
-        return
-    if task.verdict == Verdict.none:
-        log.warning("review task %s (issue #%s) finished WITHOUT a `REVIEW:` line — treating as REJECT. "
-                    "Tail: %s", task.id, task.issue_number, body.text[-300:])
-    if task.verdict != Verdict.accept:  # REVIEW: REJECT, or unparseable
-        log.info("review task %s (issue #%s) verdict=%s → rejected", task.id, task.issue_number, task.verdict)
-        _set_ws_status(
-            store, ws.id, WorkstreamStatus.rejected, "rejected at review — see the GitHub issue comment"
-        )
-        project = store.get(Project, task.project_id)
-        run = store.get(IssueRun, task.run_id) if task.run_id else None
-        if project and run:
-            refresh_issue_run(store, project, run)
-        return
-    branch = issue_branch(ws.issue_number)
-    log.info("review task %s ACCEPTED issue #%s — merging %s and closing the issue",
-             task.id, ws.issue_number, branch)
-    try:
-        merge_branch(task.repo, branch, config.gh_token, message=f"Resolve #{ws.issue_number} via Hive")
-        resolve_issue_on_github(
-            task.repo,
-            ws.issue_number,
-            comment=_issue_resolution_comment(store, task, body.text, branch),
-            token=config.gh_token,
-        )
-    except Exception as exc:  # merge conflict / API failure: don't lose the work
-        log.error("landing issue #%s failed (merge/close): %s", ws.issue_number, exc)
-        escalate(
-            store,
-            f"Land issue #{ws.issue_number} failed",
-            instructions=(
-                f"The review accepted the fix on `{branch}`, but merging it into the "
-                f"default branch or closing issue #{ws.issue_number} failed:\n\n{exc}\n\n"
-                "Land it manually (the branch is intact)."
-            ),
-            project_id=task.project_id,
-            workspace_id=task.workspace_id,
-        )
-        _set_ws_status(store, ws.id, WorkstreamStatus.rejected, f"{LANDING_FAILED_PREFIX}: {exc}")
-        project = store.get(Project, task.project_id)
-        run = store.get(IssueRun, task.run_id) if task.run_id else None
-        if project and run:
-            refresh_issue_run(store, project, run)
-        return
-    log.info("issue #%s landed: merged + closed; workstream done", ws.issue_number)
-    _set_ws_status(store, ws.id, WorkstreamStatus.done, "")
-    project = store.get(Project, task.project_id)
-    run = store.get(IssueRun, task.run_id) if task.run_id else None
-    if project and run:
-        refresh_issue_run(store, project, run)
-
-
-def _should_advance_after_issue_result(store, task: Task) -> bool:
-    if task.kind not in (TaskKind.resolve, TaskKind.review):
-        return False
-    ws = store.get(Workstream, task.workstream_id)
-    if ws is None:
-        return True
-    if ws.status == WorkstreamStatus.rejected and ws.parked_reason.startswith(LANDING_FAILED_PREFIX):
-        return False
-    return True
-
-
-def _sync_landing_failure_human_task(store, task: HumanTask, config: Config) -> None:
-    match = re.fullmatch(r"Land issue #(\d+) failed", task.title)
-    if not match or not task.project_id:
-        return
-    project = store.get(Project, task.project_id)
-    if not project or not project.spec_repo:
-        return
-    issue_number = int(match.group(1))
-    try:
-        closed = issue_is_closed(project.spec_repo, issue_number, config.gh_token)
-    except Exception as exc:
-        log.warning("could not verify issue #%s while completing human task %s: %s", issue_number, task.id, exc)
-        return
-    if not closed:
-        return
-    for ws in store.list(Workstream, project_id=project.id):
-        if (
-            ws.source == WorkstreamSource.issue
-            and ws.issue_number == issue_number
-            and ws.status == WorkstreamStatus.rejected
-            and ws.parked_reason.startswith(LANDING_FAILED_PREFIX)
-        ):
-            _set_ws_status(store, ws.id, WorkstreamStatus.done, "")
-            log.info("human task %s confirmed issue #%s is closed; marked workstream done", task.id, issue_number)
-            return
-
-
-def _cancel_issue_work(store, task: Task) -> None:
-    if task.kind in (TaskKind.resolve, TaskKind.review) and task.workstream_id:
-        _set_ws_status(
-            store,
-            task.workstream_id,
-            WorkstreamStatus.queued,
-            "cancelled by operator — scan to retry",
-        )
 
 
 def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_runner=None) -> FastAPI:
@@ -690,273 +388,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if workstream.kind != ProjectWorkstreamKind.testing:
             raise HTTPException(400, "workstream is not a testing workstream")
         require_enabled_workstream(workstream)
-
-    def fail_test_episode(episode: TestEpisode | None, reason: str) -> None:
-        if not episode:
-            return
-
-        def mark(saved: TestEpisode) -> None:
-            saved.status = TestEpisodeStatus.failed
-            saved.finished_at = saved.finished_at or time.time()
-            saved.counts = {**saved.counts, "failure": reason[:500]}
-
-        store.update(TestEpisode, episode.id, mark)
-
-    def block_story_on_bad_sweep(
-        project: Project,
-        story: Story,
-        task: Task,
-        episode: TestEpisode | None,
-        reason: str,
-        output: str,
-    ) -> None:
-        story.status = StoryStatus.blocked
-        story.last_episode_id = task.run_id
-        story.last_result_task_id = task.id
-        story.updated_at = time.time()
-        store.put(story)
-        escalate(
-            store,
-            f"Repair testing sweep output for {story.key}",
-            instructions=(
-                "Hive's testing sweep reported findings, but none were actionable enough "
-                "to enter the confirmation funnel. The story was blocked instead of filing "
-                "a weak or malformed issue.\n\n"
-                f"Story: `{story.key}`\n"
-                f"Task: `{task.id}`\n"
-                f"Reason: {reason}\n\n"
-                f"Task output:\n\n```\n{output.strip()[:2000]}\n```"
-            ),
-            project_id=project.id,
-            workspace_id=project.workspace_id,
-        )
-        if episode:
-            refresh_episode_counts(store, project, episode)
-
-    def handle_test_refresh_result(task: Task, body: TaskResult) -> None:
-        project = store.get(Project, task.project_id)
-        workstream = store.get(ProjectWorkstream, task.workstream_id)
-        episode = store.get(TestEpisode, task.run_id) if task.run_id else None
-        if not project or not workstream:
-            return
-        if body.cancelled:
-            if episode:
-                def cancel(saved: TestEpisode) -> None:
-                    saved.status = TestEpisodeStatus.cancelled
-                    saved.finished_at = time.time()
-
-                store.update(
-                    TestEpisode,
-                    episode.id,
-                    cancel,
-                )
-            return
-        if body.is_error or not _test_refresh_done(body):
-            fail_test_episode(episode, "test refresh failed or omitted REFRESH: DONE")
-            return
-        try:
-            spec = SpecRepo(
-                project.spec_repo,
-                Path(config.data_dir or "/tmp/hive-data") / "specs",
-                config.gh_token,
-            )
-            spec.sync()
-            if episode:
-                finish_refresh(store, project, workstream, episode, spec.path)
-            else:
-                reconcile_stories(store, project, workstream, spec.path)
-        except Exception as exc:
-            log.exception("test refresh finalization failed for task %s", task.id)
-            fail_test_episode(episode, f"{type(exc).__name__}: {exc}")
-            escalate(
-                store,
-                f"Repair testing refresh for {project.name}",
-                instructions=(
-                    "Hive's test-refresh task finished, but the control plane could not "
-                    "sync/reconcile `acceptance/` afterward.\n\n"
-                    f"Task: `{task.id}`\n\nError:\n\n```\n{type(exc).__name__}: {str(exc)[:1500]}\n```"
-                ),
-                project_id=project.id,
-                workspace_id=project.workspace_id,
-            )
-
-    def handle_test_sweep_result(task: Task, body: TaskResult) -> None:
-        project = store.get(Project, task.project_id)
-        story = store.get(Story, task.work_item_id or task.workstream_id)
-        episode = store.get(TestEpisode, task.run_id) if task.run_id else None
-        if not project or not story:
-            return
-        if body.cancelled:
-            if episode:
-                refresh_episode_counts(store, project, episode)
-            return
-        if body.is_error:
-            story.status = StoryStatus.blocked
-            story.last_episode_id = task.run_id
-            story.last_result_task_id = task.id
-            story.updated_at = time.time()
-            store.put(story)
-            if episode:
-                refresh_episode_counts(store, project, episode)
-            return
-        payload = _test_sweep_payload(body)
-        outcome = _test_sweep_outcome(body)
-        if outcome == TestSweepOutcome.passed:
-            closed = False
-            if story.open_issue_number:
-                try:
-                    close_story_issue(
-                        story.repo,
-                        story,
-                        config.gh_token,
-                        f"Hive re-tested story `{story.key}` in episode `{task.run_id}` and it passed.",
-                    )
-                    closed = True
-                except Exception as exc:
-                    log.warning("could not close green story issue #%s: %s", story.open_issue_number, exc)
-                    escalate(
-                        store,
-                        f"Close testing issue #{story.open_issue_number} failed",
-                        instructions=(
-                            f"Story `{story.key}` passed in task `{task.id}`, but Hive could not "
-                            f"close issue #{story.open_issue_number} automatically.\n\n{exc}"
-                        ),
-                        project_id=project.id,
-                        workspace_id=project.workspace_id,
-                    )
-            story.status = StoryStatus.passing
-            story.last_tested_baseline = story.spec_baseline
-            story.last_fidelity = (
-                StoryFidelity.docker if payload.get("fidelity") == "docker" else StoryFidelity.local
-            )
-            story.last_episode_id = task.run_id
-            story.last_result_task_id = task.id
-            story.last_tested_at = task.finished_at or time.time()
-            if closed:
-                story.open_issue_number = 0
-                story.open_issue_url = ""
-            story.updated_at = time.time()
-            store.put(story)
-        elif outcome == TestSweepOutcome.findings:
-            raw_findings = payload.get("findings") if isinstance(payload, dict) else None
-            findings = persist_sweep_findings(
-                store, project, story, task, episode or TestEpisode(project_id=project.id, workstream_id=story.workstream_id, repo=story.repo), payload
-            )
-            if not findings:
-                if not isinstance(raw_findings, list) or not raw_findings:
-                    reason = "missing or malformed findings JSON"
-                else:
-                    problems = [
-                        finding_quality_problem(item)
-                        for item in raw_findings
-                        if isinstance(item, dict)
-                    ]
-                    reason = ", ".join(dict.fromkeys(p for p in problems if p)) or "no actionable findings"
-                block_story_on_bad_sweep(project, story, task, episode, reason, body.text)
-                return
-            story.status = StoryStatus.failing
-            story.last_episode_id = task.run_id
-            story.last_result_task_id = task.id
-            story.last_tested_at = task.finished_at or time.time()
-            story.last_fidelity = (
-                StoryFidelity.docker if payload.get("fidelity") == "docker" else StoryFidelity.local
-            )
-            story.updated_at = time.time()
-            store.put(story)
-            if episode:
-                for finding in findings:
-                    queue_confirm_task(store, project, story, finding, episode)
-        else:
-            story.status = StoryStatus.blocked
-            story.last_episode_id = task.run_id
-            story.last_result_task_id = task.id
-            story.updated_at = time.time()
-            store.put(story)
-        if episode:
-            refresh_episode_counts(store, project, episode)
-
-    def confirm_test_finding(project: Project, story: Story, finding: Finding, episode: TestEpisode | None) -> None:
-        try:
-            number, url = file_or_update_finding_issue(story.repo or finding.repo, finding, story, config.gh_token)
-        except Exception as exc:
-            log.exception("filing testing issue failed for finding %s", finding.id)
-            fail_test_episode(episode, f"file GitHub issue failed: {type(exc).__name__}: {exc}")
-            escalate(
-                store,
-                f"File testing issue failed for {story.key}",
-                instructions=(
-                    f"Hive confirmed a testing finding but could not file/update the GitHub issue.\n\n"
-                    f"Story: `{story.key}`\nFinding: `{finding.summary}`\n\n"
-                    f"Error:\n\n```\n{type(exc).__name__}: {str(exc)[:1500]}\n```"
-                ),
-                project_id=project.id,
-                workspace_id=project.workspace_id,
-            )
-            return
-        finding.issue_number = number
-        finding.issue_url = url
-        finding.status = FindingStatus.confirmed
-        finding.updated_at = time.time()
-        store.put(finding)
-        story.status = StoryStatus.failing
-        story.open_issue_number = number
-        story.open_issue_url = url
-        story.updated_at = time.time()
-        store.put(story)
-
-    def handle_test_confirm_result(task: Task, body: TaskResult) -> None:
-        project = store.get(Project, task.project_id)
-        finding = store.get(Finding, task.workstream_id)
-        story = store.get(Story, task.work_item_id)
-        episode = store.get(TestEpisode, task.run_id) if task.run_id else None
-        if not project or not finding or not story:
-            return
-        if body.cancelled:
-            if episode:
-                refresh_episode_counts(store, project, episode)
-            return
-        if body.is_error:
-            finding.status = FindingStatus.rejected
-            finding.detail = (finding.detail + "\n\nConfirmation task errored:\n" + body.text).strip()
-            finding.updated_at = time.time()
-            store.put(finding)
-            if episode:
-                refresh_episode_counts(store, project, episode)
-            return
-        if task.kind == TaskKind.test_reproduce:
-            outcome = _test_repro_outcome(body)
-            if outcome == TestReproOutcome.confirmed:
-                confirm_test_finding(project, story, finding, episode)
-            else:
-                finding.status = FindingStatus.rejected
-                finding.updated_at = time.time()
-                store.put(finding)
-        elif task.kind == TaskKind.test_judge:
-            outcome = _test_ux_outcome(body)
-            if outcome == TestUxOutcome.improvable:
-                confirm_test_finding(project, story, finding, episode)
-            elif outcome == TestUxOutcome.constrained:
-                finding.status = FindingStatus.constrained
-                finding.updated_at = time.time()
-                store.put(finding)
-                note = body.text.strip()
-                story.known_limitations = list(dict.fromkeys([*story.known_limitations, note[:1000]]))
-                story.updated_at = time.time()
-                store.put(story)
-            else:
-                finding.status = FindingStatus.rejected
-                finding.updated_at = time.time()
-                store.put(finding)
-        if episode:
-            refresh_episode_counts(store, project, episode)
-
-    def handle_test_task_result(task: Task, body: TaskResult) -> None:
-        if task.kind == TaskKind.test_refresh:
-            handle_test_refresh_result(task, body)
-        elif task.kind == TaskKind.test_sweep:
-            handle_test_sweep_result(task, body)
-        elif task.kind in (TaskKind.test_reproduce, TaskKind.test_judge):
-            handle_test_confirm_result(task, body)
 
     def can_write_spec_repo(project: Project) -> bool:
         """Avoid slow surprise network attempts in throwaway/local runs.
@@ -1273,20 +704,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         store.put(resource)
         return task, resource
 
-    def complete_resource_login_todos(resource: Resource) -> None:
-        runner = store.get(Runner, resource.runner_id)
-        runner_name = runner.name if runner else resource.runner_id
-        title = f"Fix {resource.backend} login on {runner_name}"
-        for task in store.list(HumanTask, workspace_id=resource.workspace_id):
-            if (
-                task.status == HumanTaskStatus.open
-                and task.project_id == ""
-                and task.title == title
-            ):
-                task.status = HumanTaskStatus.done
-                task.done_at = time.time()
-                store.put(task)
-
     def local_runner_payload(workspace_id: str, status: dict | None = None) -> dict:
         if local_runner is None:
             return {
@@ -1308,6 +725,24 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     def _storage_payload() -> dict:
         return storage_info(store, config, blobs)
+
+    task_results = TaskResultProcessor(
+        store,
+        supervisor,
+        config,
+        merge_branch_func=lambda repo, head, token, message="": merge_branch(
+            repo, head, token, message=message
+        ),
+        resolve_issue_func=lambda repo, number, comment, token: resolve_issue_on_github(
+            repo, number, comment, token
+        ),
+        file_finding_issue_func=lambda repo_ref, finding, story, token: file_or_update_finding_issue(
+            repo_ref, finding, story, token
+        ),
+        close_story_issue_func=lambda repo_ref, story, token, comment: close_story_issue(
+            repo_ref, story, token, comment
+        ),
+    )
 
     # ---- auth ---------------------------------------------------------------
 
@@ -1671,7 +1106,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             task.finished_at = time.time()
             store.put(task)
             if task.kind in (TaskKind.resolve, TaskKind.review):
-                _cancel_issue_work(store, task)
+                cancel_issue_work(store, task)
             cancelled_tasks += 1
 
         run = refresh_issue_run(store, project, run)
@@ -1916,7 +1351,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             task.result_text = "Cancelled by operator before dispatch."
             task.finished_at = time.time()
             store.put(task)
-            _cancel_issue_work(store, task)
+            cancel_issue_work(store, task)
             supervisor.wake(task.project_id, f"Task {task.id} was cancelled before it ran.")
         elif task.status == TaskStatus.running:
             if task.delivered:
@@ -2090,7 +1525,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if updated is None:
             raise HTTPException(404)
         if body.enabled is False:
-            complete_resource_login_todos(updated)
+            complete_resource_login_todos(store, updated)
         return {**updated.model_dump(), "available": updated.available()}
 
     @app.get("/api/subscriptions")
@@ -2147,7 +1582,12 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         task.status = HumanTaskStatus.done
         task.done_at = time.time()
         store.put(task)
-        _sync_landing_failure_human_task(store, task, config)
+        sync_landing_failure_human_task(
+            store,
+            task,
+            config,
+            issue_is_closed_func=lambda repo, number, token: issue_is_closed(repo, number, token),
+        )
         # The action may have unblocked work (a runner login, a granted access).
         # Wake the owning project, or every project for an org-wide todo.
         note = f"Human todo '{task.title}' was completed. Re-evaluate work that waited on it."
@@ -2325,218 +1765,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         body: TaskResult,
         workspace_id: str = Depends(runner_auth),
     ):
-        existing = store.get(Task, task_id)
-        if not existing or existing.workspace_id != workspace_id:
+        try:
+            return task_results.handle(task_id, body, workspace_id)
+        except LookupError:
             raise HTTPException(404)
-
-        finished_at = time.time()
-
-        def record(task: Task) -> None:
-            if task.status != TaskStatus.running:
-                return
-            if body.cancelled:
-                task.status = TaskStatus.cancelled
-            else:
-                task.status = TaskStatus.failed if body.is_error else TaskStatus.done
-            if task.kind == TaskKind.verify and not body.cancelled:
-                task.verdict = _structured_or_legacy_verdict(
-                    task.kind,
-                    body,
-                    parse_verdict(body.text),
-                )
-            if not body.cancelled and not body.is_error:
-                if task.kind == TaskKind.resolve:
-                    task.verdict = _structured_or_legacy_verdict(
-                        task.kind,
-                        body,
-                        parse_resolve(body.text),
-                    )
-                elif task.kind == TaskKind.review:
-                    task.verdict = _structured_or_legacy_verdict(
-                        task.kind,
-                        body,
-                        parse_review(body.text),
-                    )
-                elif task.kind == TaskKind.test_refresh:
-                    task.verdict = Verdict.accept if _test_refresh_done(body) else Verdict.none
-                elif task.kind == TaskKind.test_sweep:
-                    task.verdict = (
-                        Verdict.accept
-                        if _test_sweep_outcome(body) == TestSweepOutcome.passed
-                        else Verdict.reject
-                    )
-                elif task.kind == TaskKind.test_reproduce:
-                    task.verdict = (
-                        Verdict.accept
-                        if _test_repro_outcome(body) == TestReproOutcome.confirmed
-                        else Verdict.reject
-                    )
-                elif task.kind == TaskKind.test_judge:
-                    task.verdict = (
-                        Verdict.accept
-                        if _test_ux_outcome(body) == TestUxOutcome.improvable
-                        else Verdict.reject
-                    )
-            task.result_text = body.text
-            task.is_error = body.is_error
-            task.cost_usd = body.cost_usd
-            task.input_tokens = body.input_tokens
-            task.output_tokens = body.output_tokens
-            task.structured_result = body.structured_result
-            task.structured_result_error = body.structured_result_error
-            task.finished_at = finished_at
-
-        task = store.update(Task, task_id, record)
-        if task is None:
-            raise HTTPException(404)
-        if task.finished_at != finished_at:
-            return {"ok": True, "ignored": True, "status": task.status}
-
-        probe_resources: list[Resource] = []
-
-        def account(resource: Resource) -> None:
-            resource.total_tasks += 1
-            resource.total_cost_usd += body.cost_usd
-            if task.kind == TaskKind.probe and resource.last_probe_task_id == task.id:
-                resource.last_probe_at = task.finished_at
-                resource.last_probe_text = body.text[:2000]
-                if body.cancelled:
-                    resource.usability_status = ResourceUsability.unknown
-                elif body.resource_exhausted:
-                    resource.usability_status = ResourceUsability.usable
-                elif body.is_error:
-                    resource.usability_status = ResourceUsability.failed
-                else:
-                    resource.usability_status = ResourceUsability.usable
-                    resource.clear_exhaustion()
-            if body.resource_exhausted:
-                resource.mark_exhausted(
-                    until=time.time() + RATE_LIMIT_COOLDOWN_S,
-                    at=task.finished_at,
-                    text=body.text,
-                    task_id=task.id,
-                )
-
-        for resource in store.list(
-            Resource,
-            workspace_id=workspace_id,
-            runner_id=task.runner_id,
-            backend=task.backend,
-        ):
-            updated = store.update(Resource, resource.id, account)
-            if updated and task.kind == TaskKind.probe and updated.last_probe_task_id == task.id:
-                probe_resources.append(updated)
-
-        if task.kind == TaskKind.probe:
-            if not body.cancelled and not body.is_error and not body.resource_exhausted:
-                for resource in probe_resources:
-                    if resource.enabled:
-                        complete_resource_login_todos(resource)
-            if (
-                any(resource.enabled for resource in probe_resources)
-                and body.is_error
-                and not body.resource_exhausted
-                and HUMAN_FIX_PATTERNS.search(body.text)
-            ):
-                runner = store.get(Runner, task.runner_id)
-                runner_name = runner.name if runner else task.runner_id
-                hint = REGISTRY.get(task.backend).login_hint if task.backend in REGISTRY else ""
-                escalate(
-                    store,
-                    f"Fix {task.backend} login on {runner_name}",
-                    instructions=(
-                        f"Refresh or repair the `{task.backend}` CLI login on runner "
-                        f"`{runner_name}`, then rerun the resource probe."
-                        f"{chr(10) + chr(10) + hint if hint else ''}\n\n"
-                        f"Recent probe output:\n\n```\n{body.text[:1500]}\n```"
-                    ),
-                    workspace_id=workspace_id,
-                )
-            return {"ok": True}
-
-        if task.kind == TaskKind.intake and task.conversation_id:
-            def update_conversation(conversation: AgentConversation) -> None:
-                conversation.updated_at = task.finished_at
-                if body.session_handle.strip():
-                    conversation.session_handle = body.session_handle.strip()
-                if body.cancelled:
-                    conversation.status = ConversationStatus.open
-                    conversation.transcript.append({"role": "system", "text": "Intake turn cancelled."})
-                    return
-                if body.is_error:
-                    conversation.status = ConversationStatus.failed
-                    conversation.latest_brief = body.text
-                    conversation.transcript.append({"role": "assistant", "text": body.text})
-                    return
-                conversation.latest_brief = body.text
-                conversation.transcript.append({"role": "assistant", "text": body.text})
-                conversation.status = (
-                    ConversationStatus.done
-                    if task.conversation_turn == "finalize"
-                    else ConversationStatus.open
-                )
-
-            conversation = store.update(AgentConversation, task.conversation_id, update_conversation)
-            project = store.get(Project, task.project_id)
-            if project and conversation:
-                if conversation.status == ConversationStatus.done:
-                    project.state = ProjectState.idle
-                    store.put(project)
-                    supervisor.wake(
-                        task.project_id,
-                        f"Intake accepted and pushed by scout task {task.id}. Plan from the durable spec.\n"
-                        f"Result:\n{body.text[:6000]}",
-                    )
-                elif conversation.status == ConversationStatus.open:
-                    project.state = ProjectState.intake
-                    store.put(project)
-            return {"ok": True}
-
-        if task.kind == TaskKind.resolve and not body.cancelled:
-            _land_resolve(store, task, body, config)
-        elif task.kind == TaskKind.review and not body.cancelled:
-            _land_review(store, task, body, config)
-        elif task.kind in (TaskKind.resolve, TaskKind.review) and body.cancelled:
-            _cancel_issue_work(store, task)
-        if (
-            task.kind in (TaskKind.resolve, TaskKind.review)
-            and not body.cancelled
-            and _should_advance_after_issue_result(store, task)
-        ):
-            # Strict per-issue: when this issue parked or landed, start the next.
-            project = store.get(Project, task.project_id)
-            if project:
-                run = store.get(IssueRun, task.run_id) if task.run_id else None
-                workstream = store.get(ProjectWorkstream, run.workstream_id) if run else None
-                advance_issues(
-                    store,
-                    project,
-                    workstream=workstream,
-                    run=run,
-                    backend=config.issue_backend,
-                    model=config.issue_model,
-                )
-
-        if task.kind in (TaskKind.resolve, TaskKind.review, TaskKind.preflight):
-            return {"ok": True}
-
-        if task.kind in TEST_TASK_KINDS:
-            handle_test_task_result(task, body)
-            return {"ok": True}
-
-        outcome = "cancelled" if body.cancelled else ("failed" if body.is_error else "finished")
-        verdict_note = (
-            f" verdict={task.verdict}"
-            if task.kind in (TaskKind.verify, TaskKind.resolve, TaskKind.review)
-            and not body.cancelled
-            else ""
-        )
-        supervisor.wake(
-            task.project_id,
-            f"{task.kind} task {task.id} (ws {task.workstream_id}, repo {task.repo}) "
-            f"{outcome}{verdict_note}.\nResult:\n{body.text[:6000]}",
-        )
-        return {"ok": True}
 
     return app
 

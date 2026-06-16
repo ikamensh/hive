@@ -67,7 +67,7 @@ Backend pipeline is built and unit/e2e-tested (`tests/test_issues.py`):
 1. ✅ `fetch_open_issues_full` (issues + comments + embedded image URLs); runner `prepare_issue_workspace` materializes `.hive/issue-<n>/` (ISSUE.md + downloaded attachments, git-excluded).
 2. ✅ `resolve` task kind + `prompts/resolve.md` (clarify→fix, codex `gpt-5.5`, branch `hive/issue-<n>`); `parse_resolve` (`OUTCOME: FIXED|BLOCKED`).
 3. ✅ `review` task kind + `prompts/review.md` (fresh codex `gpt-5.5`, fix-on-spot, rejection comment); `parse_review` (`REVIEW: ACCEPT|REJECT`).
-4. ✅ Deterministic state machine in `api.task_result` (`_land_resolve`/`_land_review`): resolve->review chaining, `merge_branch` (merges API) + idempotent `resolve_issue_on_github` on accept, escalate and stop advancement on unresolved landing failure. Issue task completion advances the issue queue directly instead of waking the planner.
+4. ✅ Deterministic state machine in `hive/task_results.py` (`TaskResultProcessor._land_resolve`/`_land_review`): resolve->review chaining, `merge_branch` (merges API) + idempotent `resolve_issue_on_github` on accept, escalate and stop advancement on unresolved landing failure. Issue task completion advances the issue queue directly instead of waking the planner.
 5. ✅ Strict per-issue sequencing (`advance_issues`): one issue through resolve->review->land before the next starts. Resolve retries get a fresh branch from current default while preserving the old attempt. Interim batch `clarity` task removed (folded into resolve).
 
 6. ✅ Preflight gate (`hive/preflight.py`): control-plane checks + a runner self-check (push + gh auth); `scan-issues` is gated on the hard checks.
