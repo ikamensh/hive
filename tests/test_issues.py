@@ -293,9 +293,11 @@ def _poll(client, rid):
     return client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
 
 
-def _report(client, task_id, text, is_error=False):
-    client.post(f"/api/tasks/{task_id}/result",
-                json={"text": text, "is_error": is_error}, headers=RUNNER_HEADERS)
+def _report(client, task_id, text, is_error=False, structured_result=None):
+    body = {"text": text, "is_error": is_error}
+    if structured_result is not None:
+        body["structured_result"] = structured_result
+    client.post(f"/api/tasks/{task_id}/result", json=body, headers=RUNNER_HEADERS)
 
 
 def _pass_preflight(monkeypatch):
@@ -321,8 +323,13 @@ def test_scan_resolve_review_accept_lands(app, monkeypatch):
         client,
         resolve["id"],
         "Found the close comment was hardcoded to the merge notice.\n"
-        "Updated the landing path to include the resolver's summary.\n"
-        "OUTCOME: FIXED",
+        "Updated the landing path to include the resolver's summary.",
+        structured_result={
+            "task_id": resolve["id"],
+            "outcome": "fixed",
+            "tests_run": ["pytest"],
+            "branch_pushed": True,
+        },
     )
 
     ws_id = resolve["workstream_id"]
@@ -340,7 +347,17 @@ def test_scan_resolve_review_accept_lands(app, monkeypatch):
         merged["comment"] = comment
 
     monkeypatch.setattr("hive.api.resolve_issue_on_github", close_issue)
-    _report(client, review["id"], "Verified the comment includes the fix report.\nREVIEW: ACCEPT")
+    _report(
+        client,
+        review["id"],
+        "Verified the comment includes the fix report.",
+        structured_result={
+            "task_id": review["id"],
+            "outcome": "accept",
+            "tests_run": ["pytest"],
+            "changes_pushed": False,
+        },
+    )
 
     assert merged["head"] == "hive/issue-1"
     assert merged["closed"] == 1

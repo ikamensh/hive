@@ -399,6 +399,8 @@ class Task(BaseModel):
     cost_usd: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
+    structured_result: dict = Field(default_factory=dict)
+    structured_result_error: str = ""
     prompt_versions: dict[str, str] = {}  # role -> content hash
     created_at: float = Field(default_factory=now)
     started_at: float = 0.0

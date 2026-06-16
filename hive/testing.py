@@ -29,7 +29,6 @@ from hive.models import (
     ProjectWorkstream,
     ProjectWorkstreamKind,
     ProjectWorkstreamStatus,
-    Question,
     Story,
     StoryCentrality,
     StoryFidelity,

@@ -30,6 +30,7 @@ from hive.backends import (
     discover_backends,
     make_session,
 )
+from hive.agent_results import call_agent, result_spec_for_task
 from hive.machine import machine_metadata
 from hive.models import DEFAULT_WORKSPACE_ID
 
@@ -511,7 +512,12 @@ def execute(task: dict, headers: dict, auth) -> dict:
         watcher_thread.start()
         try:
             with Agent(session, max_turns=100, timeout_s=TASK_TIMEOUT_S) as agent:
-                result = agent.run(task["instructions"], project_dir, agent_name=task["kind"])
+                result = call_agent(
+                    agent,
+                    task,
+                    project_dir,
+                    result_spec_for_task(task["kind"]),
+                )
         except BaseException:
             if cancelled.is_set():
                 return {"text": "Task cancelled by operator.", "cancelled": True}
@@ -523,7 +529,6 @@ def execute(task: dict, headers: dict, auth) -> dict:
 
     if cancelled.is_set():
         return {"text": "Task cancelled by operator.", "cancelled": True}
-    query = result.query
     text = result.text
     is_error = result.is_error
     if task["kind"] == "probe":
@@ -545,9 +550,11 @@ def execute(task: dict, headers: dict, auth) -> dict:
     return {
         "text": text,
         "is_error": is_error,
-        "cost_usd": query.cost_usd or 0.0,
-        "input_tokens": query.input_tokens or 0,
-        "output_tokens": query.output_tokens or 0,
+        "cost_usd": result.cost_usd,
+        "input_tokens": result.input_tokens,
+        "output_tokens": result.output_tokens,
+        "structured_result": result.structured_result,
+        "structured_result_error": result.structured_result_error,
         "resource_exhausted": bool(is_error and EXHAUSTED_PATTERNS.search(text)),
         "session_handle": session_handle,
     }

@@ -9,6 +9,7 @@ from hive.models import (
     HumanTask,
     Project,
     Story,
+    StoryFidelity,
     StoryStatus,
     Task,
     TaskKind,
@@ -76,12 +77,11 @@ def _poll(client, rid):
     return client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
 
 
-def _report(client, task_id, text, is_error=False):
-    client.post(
-        f"/api/tasks/{task_id}/result",
-        json={"text": text, "is_error": is_error},
-        headers=RUNNER_HEADERS,
-    )
+def _report(client, task_id, text, is_error=False, structured_result=None):
+    body = {"text": text, "is_error": is_error}
+    if structured_result is not None:
+        body["structured_result"] = structured_result
+    client.post(f"/api/tasks/{task_id}/result", json=body, headers=RUNNER_HEADERS)
 
 
 def test_reconcile_stories_from_acceptance(tmp_path):
@@ -162,6 +162,94 @@ def test_testing_episode_files_confirmed_bug_issue(tmp_path, monkeypatch):
     assert finding.issue_number == 99
     assert story.status == "failing"
     assert story.open_issue_number == 99
+    assert episode.status == "done"
+
+
+def test_testing_episode_accepts_structured_results_without_markers(tmp_path, monkeypatch):
+    repo = spec_repo(tmp_path)
+    client, store = app(tmp_path, repo)
+    pid = _project_with_repo(client, repo)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    detail = client.get(f"/api/projects/{pid}").json()
+    stream = next(w for w in detail["workstreams"] if w["kind"] == "testing")
+
+    created = client.post(
+        f"/api/projects/{pid}/workstreams/{stream['id']}/test-episodes",
+        json={"scope": "full"},
+    ).json()
+    episode_id = created["episode"]["id"]
+
+    _pump(client, store)
+    refresh = _poll(client, rid)
+    _report(
+        client,
+        refresh["id"],
+        "Refreshed acceptance without the legacy marker.",
+        structured_result={
+            "task_id": refresh["id"],
+            "outcome": "done",
+            "stories_changed": ["webhook-retry"],
+        },
+    )
+
+    story = store.list(Story, project_id=pid)[0]
+    _pump(client, store)
+    sweep = _poll(client, rid)
+    _report(
+        client,
+        sweep["id"],
+        "Found a retry bug without the legacy marker.",
+        structured_result={
+            "task_id": sweep["id"],
+            "outcome": "findings",
+            "fidelity": "docker",
+            "findings": [
+                {
+                    "kind": "bug",
+                    "severity": "high",
+                    "summary": "Webhook retries stop after one attempt",
+                    "detail": "Return 500 and observe one retry.",
+                    "oracle": "Failed webhooks must retry with backoff",
+                    "evidence_blobs": ["retry.log"],
+                }
+            ],
+        },
+    )
+
+    finding = store.list(Finding, project_id=pid)[0]
+    story = store.get(Story, story.id)
+    assert finding.status == "suspected"
+    assert story.status == "failing"
+    assert story.last_fidelity == StoryFidelity.docker
+
+    _pump(client, store)
+    repro = _poll(client, rid)
+    assert repro["kind"] == "test_reproduce"
+
+    filed = {}
+
+    def fake_file(repo_ref, finding, story, token):
+        filed["story"] = story.key
+        return 101, "https://github.com/acme/beacon/issues/101"
+
+    monkeypatch.setattr("hive.api.file_or_update_finding_issue", fake_file)
+    _report(
+        client,
+        repro["id"],
+        "Confirmed without the legacy marker.",
+        structured_result={
+            "task_id": repro["id"],
+            "outcome": "confirmed",
+            "evidence_blobs": ["retry.log"],
+        },
+    )
+
+    finding = store.get(Finding, finding.id)
+    story = store.get(Story, story.id)
+    episode = store.get(EpisodeModel, episode_id)
+    assert filed["story"] == "webhook-retry"
+    assert finding.status == "confirmed"
+    assert story.open_issue_number == 101
     assert episode.status == "done"
 
 

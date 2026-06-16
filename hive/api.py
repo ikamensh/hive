@@ -19,7 +19,7 @@ from pathlib import Path
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from hive.auth import (
     SESSION_COOKIE,
@@ -30,6 +30,12 @@ from hive.auth import (
     ensure_machine,
 )
 from hive.backends import REGISTRY, probe_instructions
+from hive.agent_results import (
+    test_repro_outcome as structured_test_repro_outcome,
+    test_sweep_outcome as structured_test_sweep_outcome,
+    test_ux_outcome as structured_test_ux_outcome,
+    verdict_from_structured,
+)
 from hive.config import Config
 from hive.escalation import escalate
 from hive.github_repos import all_repos as list_github_repos
@@ -108,6 +114,9 @@ from hive.models import (
     TestEpisode,
     TestEpisodeScope,
     TestEpisodeStatus,
+    TestReproOutcome,
+    TestSweepOutcome,
+    TestUxOutcome,
     Verdict,
     Workstream,
     WorkstreamSource,
@@ -258,9 +267,46 @@ class TaskResult(BaseModel):
     cost_usd: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
+    structured_result: dict = Field(default_factory=dict)
+    structured_result_error: str = ""
     resource_exhausted: bool = False  # rate limit / quota detected by runner
     cancelled: bool = False  # runner stopped the task on an operator cancel request
     session_handle: str = ""  # backend session id/chat id for conversation continuation
+
+
+def _structured_or_legacy_verdict(
+    kind: TaskKind,
+    body: TaskResult,
+    legacy: Verdict,
+) -> Verdict:
+    structured = verdict_from_structured(kind, body.structured_result)
+    return structured if structured != Verdict.none else legacy
+
+
+def _test_refresh_done(body: TaskResult) -> bool:
+    return (
+        verdict_from_structured(TaskKind.test_refresh, body.structured_result) == Verdict.accept
+        or parse_test_refresh(body.text)
+    )
+
+
+def _test_sweep_payload(body: TaskResult) -> dict:
+    return body.structured_result or test_payload(body.text)
+
+
+def _test_sweep_outcome(body: TaskResult) -> TestSweepOutcome:
+    structured = structured_test_sweep_outcome(body.structured_result)
+    return structured if structured != TestSweepOutcome.none else parse_test_sweep(body.text)
+
+
+def _test_repro_outcome(body: TaskResult) -> TestReproOutcome:
+    structured = structured_test_repro_outcome(body.structured_result)
+    return structured if structured != TestReproOutcome.none else parse_test_repro(body.text)
+
+
+def _test_ux_outcome(body: TaskResult) -> TestUxOutcome:
+    structured = structured_test_ux_outcome(body.structured_result)
+    return structured if structured != TestUxOutcome.none else parse_test_ux(body.text)
 
 
 class ResourcePatch(BaseModel):
@@ -705,7 +751,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                     cancel,
                 )
             return
-        if body.is_error or not parse_test_refresh(body.text):
+        if body.is_error or not _test_refresh_done(body):
             fail_test_episode(episode, "test refresh failed or omitted REFRESH: DONE")
             return
         try:
@@ -753,9 +799,9 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             if episode:
                 refresh_episode_counts(store, project, episode)
             return
-        payload = test_payload(body.text)
-        outcome = parse_test_sweep(body.text)
-        if outcome == "pass":
+        payload = _test_sweep_payload(body)
+        outcome = _test_sweep_outcome(body)
+        if outcome == TestSweepOutcome.passed:
             closed = False
             if story.open_issue_number:
                 try:
@@ -791,7 +837,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 story.open_issue_url = ""
             story.updated_at = time.time()
             store.put(story)
-        elif outcome == "findings":
+        elif outcome == TestSweepOutcome.findings:
             raw_findings = payload.get("findings") if isinstance(payload, dict) else None
             findings = persist_sweep_findings(
                 store, project, story, task, episode or TestEpisode(project_id=project.id, workstream_id=story.workstream_id, repo=story.repo), payload
@@ -878,18 +924,18 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 refresh_episode_counts(store, project, episode)
             return
         if task.kind == TaskKind.test_reproduce:
-            outcome = parse_test_repro(body.text)
-            if outcome == "confirmed":
+            outcome = _test_repro_outcome(body)
+            if outcome == TestReproOutcome.confirmed:
                 confirm_test_finding(project, story, finding, episode)
             else:
                 finding.status = FindingStatus.rejected
                 finding.updated_at = time.time()
                 store.put(finding)
         elif task.kind == TaskKind.test_judge:
-            outcome = parse_test_ux(body.text)
-            if outcome == "improvable":
+            outcome = _test_ux_outcome(body)
+            if outcome == TestUxOutcome.improvable:
                 confirm_test_finding(project, story, finding, episode)
-            elif outcome == "constrained":
+            elif outcome == TestUxOutcome.constrained:
                 finding.status = FindingStatus.constrained
                 finding.updated_at = time.time()
                 store.put(finding)
@@ -2293,30 +2339,42 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             else:
                 task.status = TaskStatus.failed if body.is_error else TaskStatus.done
             if task.kind == TaskKind.verify and not body.cancelled:
-                task.verdict = parse_verdict(body.text)
+                task.verdict = _structured_or_legacy_verdict(
+                    task.kind,
+                    body,
+                    parse_verdict(body.text),
+                )
             if not body.cancelled and not body.is_error:
                 if task.kind == TaskKind.resolve:
-                    task.verdict = parse_resolve(body.text)
+                    task.verdict = _structured_or_legacy_verdict(
+                        task.kind,
+                        body,
+                        parse_resolve(body.text),
+                    )
                 elif task.kind == TaskKind.review:
-                    task.verdict = parse_review(body.text)
+                    task.verdict = _structured_or_legacy_verdict(
+                        task.kind,
+                        body,
+                        parse_review(body.text),
+                    )
                 elif task.kind == TaskKind.test_refresh:
-                    task.verdict = Verdict.accept if parse_test_refresh(body.text) else Verdict.none
+                    task.verdict = Verdict.accept if _test_refresh_done(body) else Verdict.none
                 elif task.kind == TaskKind.test_sweep:
                     task.verdict = (
                         Verdict.accept
-                        if parse_test_sweep(body.text) == "pass"
+                        if _test_sweep_outcome(body) == TestSweepOutcome.passed
                         else Verdict.reject
                     )
                 elif task.kind == TaskKind.test_reproduce:
                     task.verdict = (
                         Verdict.accept
-                        if parse_test_repro(body.text) == "confirmed"
+                        if _test_repro_outcome(body) == TestReproOutcome.confirmed
                         else Verdict.reject
                     )
                 elif task.kind == TaskKind.test_judge:
                     task.verdict = (
                         Verdict.accept
-                        if parse_test_ux(body.text) == "improvable"
+                        if _test_ux_outcome(body) == TestUxOutcome.improvable
                         else Verdict.reject
                     )
             task.result_text = body.text
@@ -2324,6 +2382,8 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             task.cost_usd = body.cost_usd
             task.input_tokens = body.input_tokens
             task.output_tokens = body.output_tokens
+            task.structured_result = body.structured_result
+            task.structured_result_error = body.structured_result_error
             task.finished_at = finished_at
 
         task = store.update(Task, task_id, record)

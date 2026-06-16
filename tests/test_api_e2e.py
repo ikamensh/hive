@@ -28,6 +28,7 @@ from hive.models import (
     Task,
     TaskKind,
     TaskStatus,
+    Verdict,
     Workstream,
 )
 from hive.orchestrator import Orchestrator, Tools
@@ -490,6 +491,40 @@ def test_duplicate_task_result_is_ignored(harness):
     assert updated.total_cost_usd == resource.total_cost_usd + 1.0
     assert updated.cooldown_until == 0
     assert updated.last_exhaustion_text == ""
+
+
+def test_structured_verify_result_sets_verdict_without_marker(harness):
+    client, store, _orch = harness
+    project = store.put(Project(name="structured-verify", spec_repo="https://example.com/spec.git"))
+    ws = store.put(Workstream(project_id=project.id, title="build"))
+    task = store.put(
+        Task(
+            project_id=project.id,
+            workstream_id=ws.id,
+            repo="https://example.com/app.git",
+            instructions="verify feature",
+            kind=TaskKind.verify,
+            status=TaskStatus.running,
+        )
+    )
+
+    assert client.post(
+        f"/api/tasks/{task.id}/result",
+        json={
+            "text": "Looks good. No legacy marker here.",
+            "structured_result": {
+                "task_id": task.id,
+                "outcome": "accept",
+                "acceptance_checked": ["feature works"],
+                "commands_run": ["pytest"],
+            },
+        },
+        headers=RUNNER_HEADERS,
+    ).json() == {"ok": True}
+
+    saved = store.get(Task, task.id)
+    assert saved.verdict == Verdict.accept
+    assert saved.structured_result["outcome"] == "accept"
 
 
 # Real message from `codex exec` when the ChatGPT subscription window is exhausted.
