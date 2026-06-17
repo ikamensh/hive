@@ -23,9 +23,15 @@ Takes all findings and, for each: drops it if the spec or `input-log/` already a
 
 ### Stage 3 — output through existing machinery
 
+Both outputs land in `wiki/decisions.md` as provenance-tagged entries — the
+ledger is the single structured home for every resolution (`wiki/proactive-autonomy.md`):
+
 - Surviving findings become **one batched inbox question** (top ~5–7, ranked).
-- Below-the-ask-bar items become **guess-and-flag assumptions** committed to `wiki/`.
-- Raw answers land in `input-log/`, distilled into `wiki/` — same memory path as all clarifications.
+  The human's answer is recorded `source_type: user_provided`.
+- Below-the-ask-bar items become **guess-and-flag assumptions**, recorded
+  `source_type: agent_proposed` with `reversibility: high` and an `expires_when`.
+- Raw answers land in `input-log/`; the ledger entry carries the distilled
+  decision and a `trace` link back — same memory path as all clarifications.
 
 ## Diagram
 

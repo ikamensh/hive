@@ -145,6 +145,7 @@ Update durable spec files to match it. You may edit:
 - mission.md
 - iteration.md
 - wiki/intake.md
+- wiki/decisions.md (log each assumption and accepted answer with provenance)
 - input-log/* intake records
 
 Preserve coherent existing mission/iteration text. Rewrite stale or wrong
@@ -196,8 +197,16 @@ Ready to approve means:
 - mission is stated
 - next iteration is stated in concrete, verifiable terms
 - likely next steps exist
-- assumptions are explicit
+- assumptions are explicit and logged with provenance in `wiki/decisions.md`
+- the agent authority boundary is set: the `must_ask` categories Hive will not
+  decide on its own are known (project default in `mission.md`, plus any
+  iteration override). See `wiki/proactive-autonomy.md`.
 - there are no remaining material questions
+
+These are the five lean readiness checks — capability, actor, acceptance,
+boundary, authority — in intake form. The first four were already implicit in
+the mission/iteration/steps/assumptions criteria; the authority line is the only
+addition, and it is satisfied once the project has an authority contract.
 
 If material questions remain, the intake panel shows them with the current best
 brief. The user can answer, correct the brief, or proceed with assumptions.
@@ -214,9 +223,14 @@ added later, but the MVP supports push mode only.
 
 The scout may modify existing `mission.md` and `iteration.md` when the user has
 approved the understanding. It should preserve coherent existing specs and
-rewrite stale or wrong ones. Assumptions, evidence, and useful context should go
-to `wiki/intake.md` or another appropriate wiki file. Raw user answers should be
-preserved under `input-log/`.
+rewrite stale or wrong ones. Each assumption it made instead of asking is
+recorded as a provenance-tagged entry in `wiki/decisions.md`
+(`source_type: agent_proposed`, with `impact`/`reversibility`/`expires_when`);
+each accepted user answer is recorded as `source_type: user_provided`. See
+`wiki/proactive-autonomy.md`. Evidence and useful narrative context go to
+`wiki/intake.md` or another appropriate wiki file, citing decision IDs rather
+than restating assumptions inline. Raw user answers are preserved under
+`input-log/`.
 
 After the push succeeds, Hive wakes the normal orchestrator with a note like:
 

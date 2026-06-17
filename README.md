@@ -205,6 +205,7 @@ from inside the project.
 - [mission.md](mission.md) — what hive is and its principles.
 - [iteration.md](iteration.md) — the current iteration goal.
 - [wiki/architecture.md](wiki/architecture.md) — full system design.
+- [wiki/proactive-autonomy.md](wiki/proactive-autonomy.md) — decision ledger and agent authority: the human/AI boundary.
 - [AGENTS.md](AGENTS.md) — code map and how to run each component.
 
 Built on primitives from [kodo](https://github.com/ikamensh/kodo) (agent/session wrappers for Claude Code, Cursor, Codex, Gemini CLI), with hive's own distributed orchestration layer on top.
