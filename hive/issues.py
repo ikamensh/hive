@@ -58,6 +58,15 @@ _IMG_MD = re.compile(r"!\[[^\]]*\]\(([^)\s]+)\)")
 _IMG_HTML = re.compile(r"""<img[^>]+src=["']([^"']+)["']""", re.IGNORECASE)
 
 
+class MergeConflictError(RuntimeError):
+    """The issue branch could not be mechanically merged into the default branch."""
+
+    def __init__(self, head: str, base: str) -> None:
+        self.head = head
+        self.base = base
+        super().__init__(f"merge conflict landing {head} into {base}")
+
+
 def _headers(token: str) -> dict:
     return {**_GH_HEADERS, "Authorization": f"Bearer {token}"} if token else dict(_GH_HEADERS)
 
@@ -171,7 +180,7 @@ def merge_branch(repo_ref: str, head: str, token: str, message: str = "") -> Non
         timeout=30.0,
     )
     if response.status_code == 409:
-        raise RuntimeError(f"merge conflict landing {head} into {base}")
+        raise MergeConflictError(head, base)
     response.raise_for_status()  # 201 merged, 204 nothing to merge
 
 
@@ -515,7 +524,7 @@ def _has_live_task(store, project: Project, workstream_id: str) -> bool:
     )
 
 
-def _instructions(ws: Workstream, prompt_name: str) -> tuple[str, dict]:
+def _instructions(ws: Workstream, prompt_name: str, context: str = "") -> tuple[str, dict]:
     prompt, version = load_prompt(prompt_name)
     path = ISSUE_DIR.format(n=ws.issue_number)
     branch = issue_branch(ws.issue_number)
@@ -525,7 +534,8 @@ def _instructions(ws: Workstream, prompt_name: str) -> tuple[str, dict]:
         f"image attachments, if any, are in `{path}/attachments/`.\n"
         f"You are on git branch `{branch}` (already checked out).\n"
     )
-    return f"{header}\n{prompt}", {prompt_name: version}
+    extra = f"\n{context.strip()}\n" if context.strip() else ""
+    return f"{header}{extra}\n{prompt}", {prompt_name: version}
 
 
 def _make_issue_task(
@@ -536,9 +546,11 @@ def _make_issue_task(
     backend: str,
     model: str = DEFAULT_ISSUE_MODEL,
     run: IssueRun | None = None,
+    prompt_name: str = "",
+    context: str = "",
 ) -> Task:
-    prompt_name = "resolve" if kind == TaskKind.resolve else "review"
-    instructions, versions = _instructions(ws, prompt_name)
+    prompt_name = prompt_name or ("resolve" if kind == TaskKind.resolve else "review")
+    instructions, versions = _instructions(ws, prompt_name, context=context)
     return store.put(
         Task(
             workspace_id=project.workspace_id,
@@ -622,6 +634,37 @@ def create_review_task(
 ) -> Task:
     """Queue the independent review task for a fixed issue."""
     return _make_issue_task(store, project, ws, TaskKind.review, backend, model=model, run=run)
+
+
+def create_landing_integration_task(
+    store,
+    project: Project,
+    ws: Workstream,
+    failure: str,
+    accepted_review: str = "",
+    backend: str = RESOLVE_BACKEND,
+    model: str = DEFAULT_ISSUE_MODEL,
+    run: IssueRun | None = None,
+) -> Task:
+    """Queue an AI review task to integrate an accepted issue branch with the
+    latest default branch after a landing-time merge conflict."""
+    context = (
+        "The previous review accepted this fix, but Hive could not merge the "
+        f"issue branch into the default branch:\n\n{failure.strip()}"
+    )
+    if accepted_review.strip():
+        context += f"\n\nAccepted review report:\n{accepted_review.strip()}"
+    return _make_issue_task(
+        store,
+        project,
+        ws,
+        TaskKind.review,
+        backend,
+        model=model,
+        run=run,
+        prompt_name="landing_integration",
+        context=context,
+    )
 
 
 def activate_next(store, project: Project) -> Workstream | None:

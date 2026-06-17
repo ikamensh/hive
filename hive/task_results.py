@@ -26,7 +26,9 @@ from hive.config import Config
 from hive.escalation import escalate
 from hive.issues import (
     LANDING_FAILED_PREFIX,
+    MergeConflictError,
     advance_issues,
+    create_landing_integration_task,
     create_review_task,
     issue_branch,
     issue_is_closed as default_issue_is_closed,
@@ -102,6 +104,7 @@ TEST_TASK_KINDS = (
     TaskKind.test_reproduce,
     TaskKind.test_judge,
 )
+LANDING_INTEGRATION_PROMPT = "landing_integration"
 
 
 class TaskResult(BaseModel):
@@ -216,6 +219,10 @@ def complete_resource_login_todos(store, resource: Resource) -> None:
             task.status = HumanTaskStatus.done
             task.done_at = time.time()
             store.put(task)
+
+
+def _is_merge_conflict(exc: Exception) -> bool:
+    return isinstance(exc, MergeConflictError) or "merge conflict" in str(exc).lower()
 
 
 class TaskResultProcessor:
@@ -514,6 +521,7 @@ class TaskResultProcessor:
         ws = self.store.get(Workstream, task.workstream_id)
         if ws is None or ws.status != WorkstreamStatus.reviewing:
             return
+        landing_integration = self._is_landing_integration_task(task)
         if body.is_error:
             log.warning(
                 "review task %s (issue #%s) errored → rejected (re-scan to retry): %s",
@@ -521,7 +529,12 @@ class TaskResultProcessor:
                 task.issue_number,
                 body.text[:300],
             )
-            _set_ws_status(self.store, ws.id, WorkstreamStatus.rejected, "review errored — re-scan to retry")
+            reason = (
+                f"{LANDING_FAILED_PREFIX}: landing integration errored — re-scan to retry"
+                if landing_integration
+                else "review errored — re-scan to retry"
+            )
+            _set_ws_status(self.store, ws.id, WorkstreamStatus.rejected, reason)
             project = self.store.get(Project, task.project_id)
             run = self.store.get(IssueRun, task.run_id) if task.run_id else None
             if project and run:
@@ -537,6 +550,13 @@ class TaskResultProcessor:
             )
         if task.verdict != Verdict.accept:
             log.info("review task %s (issue #%s) verdict=%s → rejected", task.id, task.issue_number, task.verdict)
+            if landing_integration:
+                self._escalate_landing_needs_human(task, ws, body.text)
+                project = self.store.get(Project, task.project_id)
+                run = self.store.get(IssueRun, task.run_id) if task.run_id else None
+                if project and run:
+                    refresh_issue_run(self.store, project, run)
+                return
             _set_ws_status(
                 self.store,
                 ws.id,
@@ -564,6 +584,28 @@ class TaskResultProcessor:
                 token=self.config.gh_token,
             )
         except Exception as exc:
+            if _is_merge_conflict(exc):
+                project = self.store.get(Project, task.project_id)
+                run = self.store.get(IssueRun, task.run_id) if task.run_id else None
+                if project:
+                    repair = create_landing_integration_task(
+                        self.store,
+                        project,
+                        ws,
+                        failure=str(exc),
+                        accepted_review=body.text,
+                        backend=task.backend,
+                        model=task.model,
+                        run=run,
+                    )
+                    if run:
+                        refresh_issue_run(self.store, project, run)
+                    log.info(
+                        "landing issue #%s hit merge conflict; queued integration review task %s",
+                        ws.issue_number,
+                        repair.id,
+                    )
+                    return
             log.error("landing issue #%s failed (merge/close): %s", ws.issue_number, exc)
             escalate(
                 self.store,
@@ -588,6 +630,31 @@ class TaskResultProcessor:
         run = self.store.get(IssueRun, task.run_id) if task.run_id else None
         if project and run:
             refresh_issue_run(self.store, project, run)
+
+    @staticmethod
+    def _is_landing_integration_task(task: Task) -> bool:
+        return LANDING_INTEGRATION_PROMPT in task.prompt_versions
+
+    def _escalate_landing_needs_human(self, task: Task, ws: Workstream, report: str) -> None:
+        branch = issue_branch(ws.issue_number)
+        _set_ws_status(
+            self.store,
+            ws.id,
+            WorkstreamStatus.rejected,
+            f"{LANDING_FAILED_PREFIX}: integration needs human input",
+        )
+        escalate(
+            self.store,
+            f"Land issue #{ws.issue_number} failed",
+            instructions=(
+                f"Hive tried to integrate accepted branch `{branch}` with the latest default branch, "
+                "but the integration agent reported that resolving it needs human input or a "
+                "tradeoff decision.\n\n"
+                f"Agent report:\n\n{report[:4000]}"
+            ),
+            project_id=task.project_id,
+            workspace_id=task.workspace_id,
+        )
 
     def _agent_report(self, text: str) -> str:
         lines = [

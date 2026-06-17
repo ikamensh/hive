@@ -19,8 +19,9 @@ Driven by the human scan + the task-result state machine — not the planner.
    - Decide `REVIEW: ACCEPT` (the fix, possibly amended, is good) or `REVIEW: REJECT` (major flaws, or it makes other areas worse and can't be salvaged here). On reject the agent posts a GitHub comment stating **what went wrong and the recommended approach for the next attempt**.
 4. **Land** (Hive, deterministic, no PR workflow):
    - **ACCEPT** → merge `hive/issue-<number>` into the default branch via the GitHub **merges API** (`POST /repos/{owner}/{repo}/merges`, no PR object), then close the issue with a summary comment. The close step is idempotent: if GitHub already reports the issue closed (for example because a merged commit auto-closed it), Hive treats that as success. The branch is **kept** (review/debug history).
+   - **Merge conflict** → queue a fresh AI landing-integration review task on the same branch. It fetches the latest default branch, resolves only mechanical conflicts, commits/pushes the integrated issue branch, and ends `REVIEW: ACCEPT` so Hive retries the deterministic merge. It ends `REVIEW: REJECT` only when the conflict needs human information or a product/behavior tradeoff, in which case Hive files a human todo and stops advancement.
    - **REJECT** → leave the default branch untouched; the reviewer's comment already explains the failure. Branch kept.
-   - **Landing failure** → create an operator todo (currently `HumanTask` in code) and do **not** advance to the next queued issue until the landing failure is resolved. The UI's todo completion verifies the GitHub issue is closed and marks the issue-workstream `done`.
+   - **Non-conflict landing failure** → create an operator todo (currently `HumanTask` in code) and do **not** advance to the next queued issue until the landing failure is resolved. The UI's todo completion verifies the GitHub issue is closed and marks the issue-workstream `done`.
 
 No ordering: issues are processed independently. Per-repo serialization still holds (one task per repo at a time), so for a single spec repo the pipeline runs issue-by-issue in practice.
 
@@ -67,7 +68,7 @@ Backend pipeline is built and unit/e2e-tested (`tests/test_issues.py`):
 1. ✅ `fetch_open_issues_full` (issues + comments + embedded image URLs); runner `prepare_issue_workspace` materializes `.hive/issue-<n>/` (ISSUE.md + downloaded attachments, git-excluded).
 2. ✅ `resolve` task kind + `prompts/resolve.md` (clarify→fix, codex `gpt-5.5`, branch `hive/issue-<n>`); `parse_resolve` (`OUTCOME: FIXED|BLOCKED`).
 3. ✅ `review` task kind + `prompts/review.md` (fresh codex `gpt-5.5`, fix-on-spot, rejection comment); `parse_review` (`REVIEW: ACCEPT|REJECT`).
-4. ✅ Deterministic state machine in `hive/task_results.py` (`TaskResultProcessor._land_resolve`/`_land_review`): resolve->review chaining, `merge_branch` (merges API) + idempotent `resolve_issue_on_github` on accept, escalate and stop advancement on unresolved landing failure. Issue task completion advances the issue queue directly instead of waking the planner.
+4. ✅ Deterministic state machine in `hive/task_results.py` (`TaskResultProcessor._land_resolve`/`_land_review`): resolve->review chaining, `merge_branch` (merges API) + idempotent `resolve_issue_on_github` on accept, AI landing integration for merge conflicts, and human escalation only when integration needs input/tradeoffs or another landing failure occurs. Issue task completion advances the issue queue directly instead of waking the planner.
 5. ✅ Strict per-issue sequencing (`advance_issues`): one issue through resolve->review->land before the next starts. Resolve retries get a fresh branch from current default while preserving the old attempt. Interim batch `clarity` task removed (folded into resolve).
 
 6. ✅ Preflight gate (`hive/preflight.py`): control-plane checks + a runner self-check (push + gh auth); `scan-issues` is gated on the hard checks.
@@ -93,5 +94,4 @@ A real run depends on things the happy-path code can't see; `hive/preflight.py` 
 ## Open questions / to validate
 
 - Image inspection per backend (OCR vs graphical) — test and record. (Image *fetch* now happens control-plane-side at scan and is counted in the scan result; inspection capability is still per-backend.)
-- Merge conflicts on the merges API (should be rare under per-repo serialization since the branch is cut from current default) — on failure, mark blocked/escalate rather than force.
 - Reusing the dormant ordering logic when an ordered variant is wanted.

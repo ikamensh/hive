@@ -16,6 +16,7 @@ from hive.issues import (
     ensure_issue_workstream,
     issue_branch,
     LANDING_FAILED_PREFIX,
+    MergeConflictError,
     project_workstreams,
     reconcile,
     resolve_issue_on_github,
@@ -436,6 +437,88 @@ def test_landing_failure_does_not_advance_to_next_issue(app, monkeypatch):
     assert ws.status == WorkstreamStatus.rejected
     assert ws.parked_reason.startswith(LANDING_FAILED_PREFIX)
     assert [t.title for t in store.list(HumanTask, project_id=pid)] == ["Land issue #1 failed"]
+
+
+def test_landing_merge_conflict_queues_ai_integration_review(app, monkeypatch):
+    client, store = app
+    pid = _issues_project_via_api(client)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    _pass_preflight(monkeypatch)
+    monkeypatch.setattr(
+        "hive.api.fetch_open_issues_full",
+        lambda repo, token: [issue(1, "bug a"), issue(2, "bug b")],
+    )
+    merge_calls = []
+
+    def merge(repo, head, token, message=""):
+        merge_calls.append(head)
+        if len(merge_calls) == 1:
+            raise MergeConflictError(head, "main")
+
+    closed = {}
+    monkeypatch.setattr("hive.api.merge_branch", merge)
+    monkeypatch.setattr(
+        "hive.api.resolve_issue_on_github",
+        lambda repo, number, comment, token: closed.setdefault("number", number),
+    )
+
+    client.post(f"/api/projects/{pid}/scan-issues")
+    _pump(client, store)
+    resolve = _poll(client, rid)
+    _report(client, resolve["id"], "fixed\nOUTCOME: FIXED")
+    _pump(client, store)
+    review = _poll(client, rid)
+    _report(client, review["id"], "good\nREVIEW: ACCEPT")
+
+    ws = store.get(Workstream, review["workstream_id"])
+    assert ws.status == WorkstreamStatus.reviewing
+    assert not store.list(HumanTask, project_id=pid)
+    reviews = [t for t in store.list(Task, project_id=pid) if t.kind == TaskKind.review]
+    integration = next(t for t in reviews if t.id != review["id"])
+    assert "landing_integration" in integration.prompt_versions
+    assert "could not merge the issue branch" in integration.instructions
+    assert sorted(t.issue_number for t in store.list(Task, project_id=pid) if t.kind == TaskKind.resolve) == [1]
+
+    _pump(client, store)
+    repair = _poll(client, rid)
+    assert repair["id"] == integration.id
+    _report(client, repair["id"], "Merged latest main and tests pass.\nREVIEW: ACCEPT")
+
+    assert merge_calls == ["hive/issue-1", "hive/issue-1"]
+    assert closed["number"] == 1
+    assert store.get(Workstream, review["workstream_id"]).status == WorkstreamStatus.done
+    assert sorted(t.issue_number for t in store.list(Task, project_id=pid) if t.kind == TaskKind.resolve) == [1, 2]
+
+
+def test_landing_integration_reject_creates_human_todo(app, monkeypatch):
+    client, store = app
+    pid = _issues_project_via_api(client)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    _pass_preflight(monkeypatch)
+    monkeypatch.setattr("hive.api.fetch_open_issues_full", lambda repo, token: [issue(1, "bug")])
+    monkeypatch.setattr(
+        "hive.api.merge_branch",
+        lambda repo, head, token, message="": (_ for _ in ()).throw(MergeConflictError(head, "main")),
+    )
+
+    client.post(f"/api/projects/{pid}/scan-issues")
+    _pump(client, store)
+    resolve = _poll(client, rid)
+    _report(client, resolve["id"], "fixed\nOUTCOME: FIXED")
+    _pump(client, store)
+    review = _poll(client, rid)
+    _report(client, review["id"], "good\nREVIEW: ACCEPT")
+    _pump(client, store)
+    repair = _poll(client, rid)
+
+    _report(client, repair["id"], "Need a product decision about which behavior wins.\nREVIEW: REJECT")
+
+    ws = store.get(Workstream, repair["workstream_id"])
+    assert ws.status == WorkstreamStatus.rejected
+    assert ws.parked_reason == f"{LANDING_FAILED_PREFIX}: integration needs human input"
+    todos = store.list(HumanTask, project_id=pid)
+    assert [t.title for t in todos] == ["Land issue #1 failed"]
+    assert "Need a product decision" in todos[0].instructions
 
 
 def test_mark_landing_failure_todo_done_marks_closed_issue_done(app, monkeypatch):
