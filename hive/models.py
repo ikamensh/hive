@@ -102,6 +102,7 @@ class Project(BaseModel):
     guess_propensity: GuessPropensity = GuessPropensity.sometimes
     prod_deploys: bool = False
     paused: bool = False
+    archived: bool = False  # hidden from the default list; data retained
     daily_budget_usd: float = 0.0  # 0 = no cap; else soft cap on today's task spend
     goal_complete: bool = False
     goal_complete_note: str = ""

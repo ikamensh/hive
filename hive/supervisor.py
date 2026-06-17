@@ -407,7 +407,7 @@ class Supervisor:
         self.fail_orphaned_tasks()
         avail = self.available_backends()
         for project in self.store.list(Project, workspace_id=self.workspace_id):
-            if project.paused or not project.spec_repo.strip():
+            if project.archived or project.paused or not project.spec_repo.strip():
                 continue
             self.dispatch(project)
             state = self.refresh_state(project)

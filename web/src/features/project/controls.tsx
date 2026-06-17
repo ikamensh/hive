@@ -21,6 +21,7 @@ export function ProjectSettings({
   workstreams: Workstream[];
   onPatchWorkstream: (workstreamId: string, patch: { enabled?: boolean }) => Promise<void>;
 }) {
+  const [name, setName] = useState(project.name);
   const [memberRepos, setMemberRepos] = useState(project.member_repos);
   const [dailyBudget, setDailyBudget] = useState(
     project.daily_budget_usd > 0 ? String(project.daily_budget_usd) : "",
@@ -31,17 +32,29 @@ export function ProjectSettings({
     e.preventDefault();
     setBusy(true);
     const budget = parseFloat(dailyBudget);
-    await onPatch({
+    const patch: ProjectPatch = {
       member_repos: memberRepos.map((s) => s.trim()).filter(Boolean),
       daily_budget_usd: Number.isFinite(budget) && budget >= 0 ? budget : 0,
-    });
+    };
+    if (name.trim() && name.trim() !== project.name) patch.name = name.trim();
+    await onPatch(patch);
     setBusy(false);
+  };
+
+  const archive = () => {
+    if (window.confirm(`Archive "${project.name}"? It will be hidden from the project list. Data is kept and it can be restored.`)) {
+      onPatch({ archived: true, paused: true });
+    }
   };
 
   return (
     <details className="project-settings">
       <summary>settings</summary>
       <form onSubmit={save} className="settings-form">
+        <label>
+          project name
+          <input value={name} onChange={(e) => setName(e.target.value)} />
+        </label>
         <label>
           spec repo
           <input value={project.spec_repo} readOnly />
@@ -88,6 +101,12 @@ export function ProjectSettings({
             </button>
           </div>
         ))}
+      </div>
+      <div className="settings-danger">
+        <button type="button" className="danger" onClick={archive}>
+          archive project
+        </button>
+        <span className="muted">hides it from the list; data is kept</span>
       </div>
     </details>
   );

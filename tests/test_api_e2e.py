@@ -217,6 +217,27 @@ def test_create_draft_does_not_wake_orchestrator(harness):
     assert len(orch.invocations) == 0
 
 
+def test_rename_and_archive_project(harness):
+    """Renaming persists; blank names are rejected; archiving hides the project
+    from the default list (data retained) but keeps it reachable directly and
+    via include_archived. Regression for missing rename/delete UI."""
+    client, _store, _orch = harness
+    pid = client.post("/api/projects", json={"name": "old"}).json()["id"]
+
+    assert client.patch(f"/api/projects/{pid}", json={"name": "  new  "}).json()["name"] == "new"
+    assert client.patch(f"/api/projects/{pid}", json={"name": "   "}).status_code == 400
+
+    client.patch(f"/api/projects/{pid}", json={"archived": True})
+    listed = {p["id"] for p in client.get("/api/projects").json()}
+    assert pid not in listed
+    with_archived = {p["id"] for p in client.get("/api/projects?include_archived=true").json()}
+    assert pid in with_archived
+    assert client.get(f"/api/projects/{pid}").status_code == 200
+
+    client.patch(f"/api/projects/{pid}", json={"archived": False})
+    assert pid in {p["id"] for p in client.get("/api/projects").json()}
+
+
 def test_start_requires_spec_repo(harness):
     client, store, orch = harness
     project = client.post("/api/projects", json={"name": "draft"}).json()

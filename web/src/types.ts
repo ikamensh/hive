@@ -26,6 +26,7 @@ export interface Project {
   guess_propensity: GuessPropensity;
   prod_deploys: boolean;
   paused: boolean;
+  archived: boolean;
   daily_budget_usd: number;
   goal_complete: boolean;
   goal_complete_note: string;
@@ -435,6 +436,8 @@ export interface ProjectRepoCreate {
 }
 
 export interface ProjectPatch {
+  name?: string;
+  archived?: boolean;
   spec_repo?: string;
   mode?: Mode;
   autonomy?: Autonomy;

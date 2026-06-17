@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { api, repoShort, usePoll } from "../api";
 import { Markdown, SegPicker, StateBadge } from "../components/shared";
 import {
@@ -22,6 +22,7 @@ import type { ProjectPatch } from "../types";
 
 export default function ProjectPage() {
   const { id = "" } = useParams();
+  const navigate = useNavigate();
   const [primaryView, setPrimaryView] = useState<"work" | "issues" | "tests">("work");
   const [selectedIssueStreamId, setSelectedIssueStreamId] = useState("");
   const [selectedIssueNumbers, setSelectedIssueNumbers] = useState<number[]>([]);
@@ -67,6 +68,10 @@ export default function ProjectPage() {
 
   const patch = async (p: ProjectPatch) => {
     await api.patchProject(id, p);
+    if (p.archived) {
+      navigate("/");
+      return;
+    }
     refresh();
   };
 

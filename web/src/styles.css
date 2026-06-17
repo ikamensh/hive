@@ -1035,6 +1035,23 @@ textarea:focus {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.settings-danger {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
+.settings-danger button.danger {
+  color: var(--red);
+  border-color: var(--red);
+  background: transparent;
+}
+.settings-danger button.danger:hover {
+  background: var(--red);
+  color: #fff;
+}
 
 /* ---- repo picker --------------------------------------------------------------- */
 

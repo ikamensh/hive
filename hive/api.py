@@ -132,6 +132,8 @@ class ProjectStart(BaseModel):
 
 
 class ProjectPatch(BaseModel):
+    name: str | None = None
+    archived: bool | None = None
     spec_repo: str | None = None
     mode: Mode | None = None
     autonomy: Autonomy | None = None
@@ -724,6 +726,25 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         store.put(resource)
         return task, resource
 
+    def should_auto_probe(
+        resource: Resource,
+        discovery: BackendDiscoveryInput | None,
+        *,
+        auto_probe: bool,
+        boot: bool,
+    ) -> bool:
+        if not auto_probe or not resource.enabled:
+            return False
+        if resource.usability_status == ResourceUsability.probing:
+            return False
+        if resource.usability_status == ResourceUsability.unknown:
+            return True
+        if not boot:
+            return False
+        if not discovery or not discovery.installed or discovery.status != "ok":
+            return False
+        return not resource.available()
+
     def local_runner_payload(workspace_id: str, status: dict | None = None) -> dict:
         if local_runner is None:
             return {
@@ -838,8 +859,11 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     # ---- web API -------------------------------------------------------------
 
     @app.get("/api/projects")
-    def list_projects(ctx: AuthContext = Depends(current)):
-        return [p.model_dump() for p in store.list(Project, workspace_id=ctx.workspace_id)]
+    def list_projects(include_archived: bool = False, ctx: AuthContext = Depends(current)):
+        projects = store.list(Project, workspace_id=ctx.workspace_id)
+        if not include_archived:
+            projects = [p for p in projects if not p.archived]
+        return [p.model_dump() for p in projects]
 
     def intake_is_done(project: Project) -> bool:
         if not project.intake_conversation_id:
@@ -1294,6 +1318,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         project = require_project(project_id, ctx)
         updates = body.model_dump(exclude_none=True)
         note = updates.pop("new_iteration_note", None)
+        if "name" in updates:
+            updates["name"] = updates["name"].strip()
+            if not updates["name"]:
+                raise HTTPException(400, "name cannot be empty")
         if "spec_repo" in updates and not updates["spec_repo"].strip():
             if store.list(Workstream, workspace_id=ctx.workspace_id, project_id=project_id):
                 raise HTTPException(400, "cannot clear spec_repo after work has started")
@@ -1756,7 +1784,12 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             apply_capabilities(resource)
             store.put(resource)
             resources_by_pair[(machine.id, backend)] = resource
-            if body.auto_probe and resource.enabled and resource.usability_status == ResourceUsability.unknown:
+            if should_auto_probe(
+                resource,
+                discovery_by_name.get(backend),
+                auto_probe=body.auto_probe,
+                boot=body.boot,
+            ):
                 queue_probe(resource, runner)
 
         for discovery in body.discoveries:
