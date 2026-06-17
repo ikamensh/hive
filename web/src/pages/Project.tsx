@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { useOverview } from "../App";
 import { api, repoShort, usePoll } from "../api";
 import { Markdown, SegPicker, StateBadge } from "../components/shared";
 import {
@@ -30,6 +31,7 @@ export default function ProjectPage() {
   const [selectedStoryKeys, setSelectedStoryKeys] = useState<string[]>([]);
   const { data, failed, refresh } = usePoll(() => api.project(id), [id]);
   const { data: resources } = usePoll(() => api.resources(), [], 8000);
+  const overview = useOverview();
 
   if (!data) {
     return <div className="page">{failed ? <p className="muted">project unreachable</p> : <p className="muted">loading...</p>}</div>;
@@ -73,6 +75,11 @@ export default function ProjectPage() {
       return;
     }
     refresh();
+  };
+
+  const refreshProjectAndOverview = () => {
+    refresh();
+    overview.refresh();
   };
 
   const patchWorkstream = async (workstreamId: string, p: { enabled?: boolean }) => {
@@ -142,10 +149,10 @@ export default function ProjectPage() {
         </article>
       ))}
       {openTodos.map((t) => (
-        <HumanTodoCard key={t.id} task={t} onDone={refresh} />
+        <HumanTodoCard key={t.id} task={t} onDone={refreshProjectAndOverview} />
       ))}
       {openQs.map((q) => (
-        <QuestionCard key={q.id} q={q} onAnswered={refresh} />
+        <QuestionCard key={q.id} q={q} onAnswered={refreshProjectAndOverview} />
       ))}
       {answeredQs.length > 0 && (
         <div className="answered-section">

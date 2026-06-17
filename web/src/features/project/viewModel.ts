@@ -50,8 +50,8 @@ export function projectViewModel(
       .join("|"),
   ].join("::");
   const issueNeeds = issueWorkItems.filter((w) => w.status === "blocked_clarity" || w.status === "rejected");
-  const testingNeeds = testingStories.filter((story) => story.status === "blocked");
-  const inboxCount = openQs.length + openTodos.length + issueNeeds.length + testingNeeds.length;
+  const testingNeeds = [] as typeof testingStories;
+  const inboxCount = openQs.length + openTodos.length + issueNeeds.length;
   const nonIntakeTasks = tasks.filter((t) => !["intake", "probe", "preflight", "resolve", "review"].includes(t.kind));
   const intakeDone = intakeConversation?.status === "done";
   const hasProjectWork = manualWorkItems.length > 0 || issueWorkItems.length > 0 || testingStories.length > 0 || nonIntakeTasks.length > 0;

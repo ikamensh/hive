@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { marked } from "marked";
+import { useOverview } from "../App";
 import { ago, api, countdown, money, usePoll } from "../api";
 import type { LocalRunnerInfo, MachineInfo, ResourceInfo, ResourcesPayload, RunnerInfo } from "../types";
 
 function HumanTodos() {
   const { data, refresh } = usePoll(() => api.humanTodos(), []);
   const { data: projects } = usePoll(() => api.projects(), [], 30000);
+  const overview = useOverview();
   if (!data) return null;
   const open = data.filter((t) => t.status === "open");
   const done = data.filter((t) => t.status === "done");
@@ -30,7 +32,7 @@ function HumanTodos() {
             <button
               onClick={async () => {
                 await api.completeHumanTodo(t.id);
-                refresh();
+                await Promise.all([refresh(), overview.refresh()]);
               }}
             >
               mark done

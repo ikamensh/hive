@@ -558,7 +558,7 @@ const questions: Question[] = [
     id: "q-region",
     project_id: "p-atlas",
     workstream_id: "",
-    text: "Should EU customer data stay in `eu-west` exclusively, or is cross-region replication to `us-east` for DR acceptable? The spec's compliance section is silent on this.",
+    text: "## EU customer data residency\n\nThe spec's compliance section is silent on whether disaster recovery may leave the EU.\n\n**Options:**\n\n1. Keep EU customer data in `eu-west` exclusively, including backups and DR.\n2. Allow encrypted replication to `us-east` for disaster recovery only.\n\n**Recommendation:** option 1 for the first paid pilots; it is easier to explain and safer to relax later than to claw back.",
     status: "open",
     answer: "",
     created_at: now - 1800,

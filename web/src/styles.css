@@ -1737,12 +1737,42 @@ textarea:focus {
   gap: 8px;
   margin-top: 12px;
 }
-.story-findings p {
+.story-finding {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--panel);
+}
+.story-finding p {
   display: flex;
   align-items: baseline;
   gap: 8px;
   margin: 0;
   color: var(--ink-dim);
+  flex-wrap: wrap;
+}
+.finding-notes {
+  display: grid;
+  gap: 6px;
+  color: var(--ink-dim);
+}
+.finding-notes p {
+  display: block;
+}
+.finding-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.finding-evidence code {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 /* inbox */

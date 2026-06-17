@@ -234,10 +234,32 @@ export function StoriesView({
                             {storyFindings.length > 0 && (
                               <div className="story-findings">
                                 {storyFindings.map((finding) => (
-                                  <p key={finding.id}>
-                                    <span className={`chip chip-find-${finding.status}`}>{finding.status}</span>
-                                    <b>{finding.kind.replace(/_/g, " ")}</b> {finding.summary}
-                                  </p>
+                                  <div className="story-finding" key={finding.id}>
+                                    <p>
+                                      <span className={`chip chip-find-${finding.status}`}>{finding.status}</span>
+                                      <b>{finding.kind.replace(/_/g, " ")}</b> {finding.summary}
+                                      {finding.issue_url && (
+                                        <a href={finding.issue_url} target="_blank" rel="noreferrer">
+                                          #{finding.issue_number}
+                                        </a>
+                                      )}
+                                    </p>
+                                    {(finding.detail || finding.oracle) && (
+                                      <div className="finding-notes">
+                                        {finding.detail && <p>{finding.detail}</p>}
+                                        {finding.oracle && <p>{finding.oracle}</p>}
+                                      </div>
+                                    )}
+                                    {finding.evidence_blobs.length > 0 && (
+                                      <ul className="finding-evidence">
+                                        {finding.evidence_blobs.map((name) => (
+                                          <li key={name}>
+                                            <code>{name}</code>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    )}
+                                  </div>
                                 ))}
                               </div>
                             )}
