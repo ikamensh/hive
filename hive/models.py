@@ -591,6 +591,11 @@ class StoryFidelity(StrEnum):
     docker = "docker"
 
 
+class StoryOracleStatus(StrEnum):
+    trusted = "trusted"
+    draft = "draft"
+
+
 class Story(BaseModel):
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
@@ -606,6 +611,8 @@ class Story(BaseModel):
     status: StoryStatus = StoryStatus.untested
     centrality: StoryCentrality = StoryCentrality.major
     centrality_locked: bool = False
+    oracle_status: StoryOracleStatus = StoryOracleStatus.trusted
+    oracle_status_reason: str = ""
     spec_baseline: str = ""
     blessed: bool = False
     blessed_at: float = 0.0

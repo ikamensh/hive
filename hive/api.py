@@ -60,6 +60,7 @@ from hive.testing import (
     ensure_testing_workstream,
     file_or_update_finding_issue,
     queue_refresh_task,
+    reconcile_story_backlog,
     safe_artifact_name,
     start_episode,
 )
@@ -388,6 +389,25 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if workstream.kind != ProjectWorkstreamKind.testing:
             raise HTTPException(400, "workstream is not a testing workstream")
         require_enabled_workstream(workstream)
+
+    def sync_testing_backlog(project: Project, workstream: ProjectWorkstream) -> None:
+        """Read current acceptance files before queueing an agent refresh.
+
+        This makes a missing backlog an explicit bootstrap case instead of
+        conflating it with an already-authored spec home that simply has not been
+        mirrored into Store rows yet.
+        """
+        try:
+            spec = SpecRepo(
+                project.spec_repo,
+                Path(config.data_dir or "/tmp/hive-data") / "specs",
+                config.gh_token,
+            )
+            spec.sync()
+            reconcile_story_backlog(store, project, workstream, spec.path)
+        except Exception as exc:
+            log.exception("testing backlog sync failed for project %s", project.id)
+            raise HTTPException(400, f"could not read acceptance stories from spec repo: {exc}") from exc
 
     def can_write_spec_repo(project: Project) -> bool:
         """Avoid slow surprise network attempts in throwaway/local runs.
@@ -1129,6 +1149,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         project = require_project(project_id, ctx)
         workstream = require_project_workstream(project, workstream_id, ctx)
         require_testing_workstream(workstream)
+        sync_testing_backlog(project, workstream)
         task = queue_refresh_task(
             store,
             project,
@@ -1150,6 +1171,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         require_testing_workstream(workstream)
         if body.scope == TestEpisodeScope.selected and not body.story_keys:
             raise HTTPException(400, "select at least one story")
+        sync_testing_backlog(project, workstream)
         episode, task = start_episode(
             store,
             project,

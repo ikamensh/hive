@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 
 DIGEST_FILES = ("mission.md", "iteration.md")
-DIGEST_DIRS = ("wiki",)
+DIGEST_DIRS = ("wiki", "input-log")
 # ~50k tokens. Not a context limit (models take far more) but an anti-bloat
 # tripwire: a spec home this big needs distillation, not silent acceptance.
 MAX_DIGEST_CHARS = 200_000

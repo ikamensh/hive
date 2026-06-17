@@ -8,8 +8,10 @@ from hive.models import (
     Finding,
     HumanTask,
     Project,
+    Question,
     Story,
     StoryFidelity,
+    StoryOracleStatus,
     StoryStatus,
     Task,
     TaskKind,
@@ -48,6 +50,36 @@ def spec_repo(tmp_path):
     _git(["add", "-A"], repo)
     _git(["commit", "-m", "spec"], repo)
     return repo
+
+
+def empty_spec_repo(tmp_path):
+    repo = tmp_path / "spec-source"
+    repo.mkdir()
+    _git(["init", "-b", "main"], repo)
+    _git(["config", "user.email", "test@example.invalid"], repo)
+    _git(["config", "user.name", "Hive Test"], repo)
+    (repo / "mission.md").write_text("# Mission\n\nMake Beacon reliable.\n")
+    (repo / "iteration.md").write_text("# Iteration\n\nHarden login and webhooks.\n")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-m", "spec"], repo)
+    return repo
+
+
+def add_login_story(repo):
+    (repo / "acceptance").mkdir(exist_ok=True)
+    (repo / "acceptance" / "login.md").write_text(
+        "# story: login [api]\n"
+        "As a user I can sign in so that I can access my dashboard.\n\n"
+        "## Rules\n"
+        "- Valid users reach the dashboard.\n\n"
+        "## Examples\n"
+        "- Given valid credentials\n"
+        "  When I sign in\n"
+        "  Then I see the dashboard\n"
+    )
+    _git(["add", "-A"], repo)
+    _git(["commit", "-m", "add login story"], repo)
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
 
 
 def app(tmp_path, repo):
@@ -188,7 +220,14 @@ def test_testing_episode_accepts_structured_results_without_markers(tmp_path, mo
         structured_result={
             "task_id": refresh["id"],
             "outcome": "done",
+            "active_story_count": 1,
             "stories_changed": ["webhook-retry"],
+            "created_story_keys": [],
+            "updated_story_keys": [],
+            "archived_story_keys": [],
+            "changed_files": [],
+            "commit_sha": "",
+            "questions": [],
         },
     )
 
@@ -253,6 +292,118 @@ def test_testing_episode_accepts_structured_results_without_markers(tmp_path, mo
     assert episode.status == "done"
 
 
+def test_testing_episode_blocks_when_refresh_leaves_no_stories(tmp_path):
+    repo = empty_spec_repo(tmp_path)
+    client, store = app(tmp_path, repo)
+    pid = _project_with_repo(client, repo)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    stream = next(w for w in client.get(f"/api/projects/{pid}").json()["workstreams"] if w["kind"] == "testing")
+
+    created = client.post(
+        f"/api/projects/{pid}/workstreams/{stream['id']}/test-episodes",
+        json={"scope": "full"},
+    ).json()
+    episode_id = created["episode"]["id"]
+
+    _pump(client, store)
+    refresh = _poll(client, rid)
+    _report(client, refresh["id"], "Refreshed acceptance.\nREFRESH: DONE")
+
+    episode = store.get(EpisodeModel, episode_id)
+    assert episode.status == "failed"
+    assert episode.counts["failure"] == "test refresh produced no active acceptance stories"
+    assert store.list(Story, project_id=pid) == []
+    assert store.list(Task, project_id=pid, kind=TaskKind.test_sweep) == []
+    todos = store.list(HumanTask, project_id=pid)
+    assert [todo.title for todo in todos] == ["Repair testing refresh for beacon"]
+    assert "not safe to sweep" in todos[0].instructions
+
+
+def test_testing_episode_marks_refresh_created_stories_as_draft(tmp_path):
+    repo = empty_spec_repo(tmp_path)
+    client, store = app(tmp_path, repo)
+    pid = _project_with_repo(client, repo)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    stream = next(w for w in client.get(f"/api/projects/{pid}").json()["workstreams"] if w["kind"] == "testing")
+
+    created = client.post(
+        f"/api/projects/{pid}/workstreams/{stream['id']}/test-episodes",
+        json={"scope": "full"},
+    ).json()
+    episode_id = created["episode"]["id"]
+
+    _pump(client, store)
+    refresh = _poll(client, rid)
+    sha = add_login_story(repo)
+    _report(
+        client,
+        refresh["id"],
+        "Created the first acceptance story.",
+        structured_result={
+            "task_id": refresh["id"],
+            "outcome": "done",
+            "active_story_count": 1,
+            "stories_changed": ["login"],
+            "created_story_keys": ["login"],
+            "updated_story_keys": [],
+            "archived_story_keys": [],
+            "changed_files": ["acceptance/login.md"],
+            "commit_sha": sha,
+            "questions": [],
+        },
+    )
+
+    story = store.list(Story, project_id=pid)[0]
+    episode = store.get(EpisodeModel, episode_id)
+    assert story.key == "login"
+    assert story.oracle_status == StoryOracleStatus.draft
+    assert "created by Hive" in story.oracle_status_reason
+    assert episode.status == "sweeping"
+    assert episode.counts["draft_stories"] == 1
+    _pump(client, store)
+    sweep = _poll(client, rid)
+    assert sweep["kind"] == "test_sweep"
+    assert "Story key: login" in sweep["instructions"]
+
+
+def test_testing_refresh_files_structured_questions(tmp_path):
+    repo = spec_repo(tmp_path)
+    client, store = app(tmp_path, repo)
+    pid = _project_with_repo(client, repo)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    stream = next(w for w in client.get(f"/api/projects/{pid}").json()["workstreams"] if w["kind"] == "testing")
+
+    client.post(
+        f"/api/projects/{pid}/workstreams/{stream['id']}/test-episodes",
+        json={"scope": "full"},
+    ).json()
+
+    _pump(client, store)
+    refresh = _poll(client, rid)
+    _report(
+        client,
+        refresh["id"],
+        "Refresh has a material question.",
+        structured_result={
+            "task_id": refresh["id"],
+            "outcome": "done",
+            "active_story_count": 1,
+            "stories_changed": [],
+            "created_story_keys": [],
+            "updated_story_keys": [],
+            "archived_story_keys": [],
+            "changed_files": [],
+            "commit_sha": "",
+            "questions": ["Should webhook retries include 4xx responses or only 5xx responses?"],
+        },
+    )
+
+    questions = store.list(Question, project_id=pid, workstream_id=stream["id"])
+    assert len(questions) == 1
+    assert "testing refresh" in questions[0].text
+    assert "4xx responses" in questions[0].text
+
+
 def test_artifact_upload_roundtrip(tmp_path):
     repo = spec_repo(tmp_path)
     client, store = app(tmp_path, repo)
@@ -310,7 +461,14 @@ def test_file_testing_issue_creates_custom_labels(monkeypatch):
         raise AssertionError(url)
 
     monkeypatch.setattr("hive.testing.httpx.post", fake_post)
-    story = Story(project_id="p", workstream_id="w", repo="https://github.com/acme/hive", key="login")
+    story = Story(
+        project_id="p",
+        workstream_id="w",
+        repo="https://github.com/acme/hive",
+        key="login",
+        oracle_status=StoryOracleStatus.draft,
+        oracle_status_reason="created by Hive's testing refresh from spec intention",
+    )
     finding = Finding(project_id="p", workstream_id="w", repo=story.repo, episode_id="e", story_key=story.key, summary="Login fails")
 
     number, url = file_or_update_finding_issue(story.repo, finding, story, "token")
@@ -320,6 +478,8 @@ def test_file_testing_issue_creates_custom_labels(monkeypatch):
     assert [body["name"] for request_url, body in calls if request_url.endswith("/labels")] == ["hive-test"]
     issue_body = next(body for request_url, body in calls if request_url.endswith("/issues"))
     assert issue_body["labels"] == ["hive-test", "bug"]
+    assert "## Oracle status" in issue_body["body"]
+    assert "created by Hive's testing refresh" in issue_body["body"]
 
 
 def _start_episode_to_sweep(client, store, pid, rid, stream_id):

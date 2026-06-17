@@ -28,4 +28,12 @@ Preserve human-edited stories when they are still compatible with the spec. If a
 Keep the commit small: only files under `acceptance/`, unless a question file/log is
 already part of the existing spec workflow. If no changes are needed, say so.
 
+Your structured result must match the final spec state after your changes:
+
+- `active_story_count`: number of non-archived story files under `acceptance/`.
+- `created_story_keys`, `updated_story_keys`, `archived_story_keys`: exact story keys touched.
+- `changed_files`: relative paths you changed. These should normally be under `acceptance/`.
+- `commit_sha`: the pushed commit SHA when `changed_files` is non-empty; otherwise `""`.
+- `questions`: material ambiguities that remain, phrased for a human.
+
 End your report with `REFRESH: DONE`.

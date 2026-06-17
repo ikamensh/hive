@@ -40,6 +40,7 @@ def test_sync_digest_commit_roundtrip(bare_repo, tmp_path):
     spec2 = SpecRepo(str(bare_repo), tmp_path / "work2")
     spec2.sync()
     assert "Use sqlite" in spec2.digest()
+    assert "raw answer" in spec2.digest()
 
 
 def test_sync_picks_up_remote_changes(bare_repo, tmp_path):

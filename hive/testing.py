@@ -29,9 +29,11 @@ from hive.models import (
     ProjectWorkstream,
     ProjectWorkstreamKind,
     ProjectWorkstreamStatus,
+    Question,
     Story,
     StoryCentrality,
     StoryFidelity,
+    StoryOracleStatus,
     StoryStatus,
     Task,
     TaskKind,
@@ -89,6 +91,66 @@ class StoryDraft:
     spec_ref: str
     tags: list[str]
     order: int
+
+
+@dataclass(frozen=True)
+class RefreshResultSummary:
+    active_story_count: int | None = None
+    stories_changed: tuple[str, ...] = ()
+    created_story_keys: tuple[str, ...] = ()
+    updated_story_keys: tuple[str, ...] = ()
+    archived_story_keys: tuple[str, ...] = ()
+    changed_files: tuple[str, ...] = ()
+    commit_sha: str = ""
+    questions: tuple[str, ...] = ()
+
+    @classmethod
+    def from_payload(cls, payload: dict | None) -> "RefreshResultSummary":
+        payload = payload or {}
+        count = payload.get("active_story_count")
+        if isinstance(count, bool) or not isinstance(count, int):
+            count = None
+        return cls(
+            active_story_count=count,
+            stories_changed=_strings(payload.get("stories_changed")),
+            created_story_keys=_strings(payload.get("created_story_keys")),
+            updated_story_keys=_strings(payload.get("updated_story_keys")),
+            archived_story_keys=_strings(payload.get("archived_story_keys")),
+            changed_files=_strings(payload.get("changed_files")),
+            commit_sha=str(payload.get("commit_sha") or "").strip(),
+            questions=_strings(payload.get("questions")),
+        )
+
+    @property
+    def draft_keys(self) -> set[str]:
+        return set(self.created_story_keys) | set(self.updated_story_keys)
+
+
+@dataclass(frozen=True)
+class ReconcileReport:
+    notes: list[str]
+    baseline: str
+    active_before: int
+    active_after: int
+    added_keys: list[str]
+    updated_keys: list[str]
+    archived_keys: list[str]
+
+
+@dataclass(frozen=True)
+class RefreshFinalization:
+    summary: RefreshResultSummary
+    episode: TestEpisode | None
+    report: ReconcileReport
+    tasks: list[Task]
+    questions: list[Question]
+    blocked_reason: str = ""
+
+
+def _strings(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(str(item).strip() for item in value if str(item).strip())
 
 
 def now_s() -> float:
@@ -229,13 +291,27 @@ def _status_after_reconcile(existing: Story | None, content_changed: bool, basel
     return existing.status
 
 
-def reconcile_stories(
+def _active_story_count(stories: Iterable[Story]) -> int:
+    return sum(1 for story in stories if story.status != StoryStatus.archived)
+
+
+def _mark_draft(story: Story, reason: str) -> None:
+    story.oracle_status = StoryOracleStatus.draft
+    story.oracle_status_reason = reason
+    story.blessed = False
+    story.blessed_at = 0.0
+
+
+def reconcile_story_backlog(
     store,
     project: Project,
     workstream: ProjectWorkstream,
     spec_path: Path,
-) -> tuple[list[str], str]:
-    """Mirror `acceptance/*.md` into Story rows. Returns change notes + baseline."""
+    *,
+    refresh_summary: RefreshResultSummary | None = None,
+) -> ReconcileReport:
+    """Mirror `acceptance/*.md` into Story rows and report the exact delta."""
+    refresh_summary = refresh_summary or RefreshResultSummary()
     baseline = baseline_digest(spec_path)
     drafts = load_story_drafts(spec_path)
     existing = {
@@ -247,8 +323,12 @@ def reconcile_stories(
             workstream_id=workstream.id,
         )
     }
+    active_before = _active_story_count(existing.values())
     seen = set()
     notes: list[str] = []
+    added_keys: list[str] = []
+    updated_keys: list[str] = []
+    archived_keys: list[str] = []
     for draft in drafts:
         seen.add(draft.key)
         story = existing.get(draft.key)
@@ -260,24 +340,26 @@ def reconcile_stories(
             or story.tags != draft.tags
         )
         if story is None:
-            store.put(
-                Story(
-                    workspace_id=project.workspace_id,
-                    project_id=project.id,
-                    workstream_id=workstream.id,
-                    repo=workstream.repo,
-                    key=draft.key,
-                    title=draft.title,
-                    intent=draft.intent,
-                    acceptance=draft.acceptance,
-                    spec_ref=draft.spec_ref,
-                    tags=draft.tags,
-                    centrality=_centrality(draft.tags),
-                    spec_baseline=baseline,
-                    order=draft.order,
-                )
+            story = Story(
+                workspace_id=project.workspace_id,
+                project_id=project.id,
+                workstream_id=workstream.id,
+                repo=workstream.repo,
+                key=draft.key,
+                title=draft.title,
+                intent=draft.intent,
+                acceptance=draft.acceptance,
+                spec_ref=draft.spec_ref,
+                tags=draft.tags,
+                centrality=_centrality(draft.tags),
+                spec_baseline=baseline,
+                order=draft.order,
             )
+            if draft.key in refresh_summary.draft_keys:
+                _mark_draft(story, "created by Hive's testing refresh from spec intention")
+            store.put(story)
             notes.append(f"added story {draft.key}")
+            added_keys.append(draft.key)
             continue
         story.repo = workstream.repo
         story.title = draft.title
@@ -288,11 +370,15 @@ def reconcile_stories(
         story.centrality = _centrality(draft.tags, story)
         story.spec_baseline = baseline
         story.status = _status_after_reconcile(story, content_changed, baseline)
+        if draft.key in refresh_summary.draft_keys:
+            reason = "updated by Hive's testing refresh from spec intention" if content_changed else story.oracle_status_reason
+            _mark_draft(story, reason)
         story.order = draft.order
         story.updated_at = now_s()
         store.put(story)
         if content_changed:
             notes.append(f"updated story {draft.key}")
+            updated_keys.append(draft.key)
     for key, story in existing.items():
         if key in seen or story.status == StoryStatus.archived:
             continue
@@ -300,7 +386,35 @@ def reconcile_stories(
         story.updated_at = now_s()
         store.put(story)
         notes.append(f"archived story {key}")
-    return notes, baseline
+        archived_keys.append(key)
+    active_after = _active_story_count(
+        store.list(
+            Story,
+            workspace_id=project.workspace_id,
+            project_id=project.id,
+            workstream_id=workstream.id,
+        )
+    )
+    return ReconcileReport(
+        notes=notes,
+        baseline=baseline,
+        active_before=active_before,
+        active_after=active_after,
+        added_keys=added_keys,
+        updated_keys=updated_keys,
+        archived_keys=archived_keys,
+    )
+
+
+def reconcile_stories(
+    store,
+    project: Project,
+    workstream: ProjectWorkstream,
+    spec_path: Path,
+) -> tuple[list[str], str]:
+    """Compatibility wrapper for callers that only need notes + baseline."""
+    report = reconcile_story_backlog(store, project, workstream, spec_path)
+    return report.notes, report.baseline
 
 
 def _priority_score(story: Story, now_epoch: float) -> tuple[int, float, int]:
@@ -523,42 +637,189 @@ def start_episode(
     )
 
 
-def finish_refresh(
+def _allowed_refresh_path(path: str) -> bool:
+    rel = path.strip().replace("\\", "/")
+    while rel.startswith("./"):
+        rel = rel[2:]
+    return rel.startswith("acceptance/") or rel.startswith("input-log/")
+
+
+def refresh_result_problem(summary: RefreshResultSummary, report: ReconcileReport) -> str:
+    if summary.active_story_count is not None and summary.active_story_count != report.active_after:
+        return (
+            "test refresh structured result reported "
+            f"{summary.active_story_count} active stories, but Hive reconciled {report.active_after}"
+        )
+    invalid_paths = [path for path in summary.changed_files if not _allowed_refresh_path(path)]
+    if invalid_paths:
+        return f"test refresh reported out-of-scope file changes: {', '.join(invalid_paths[:5])}"
+    if summary.changed_files and not summary.commit_sha:
+        return "test refresh reported changed files but did not report a pushed commit SHA"
+    return ""
+
+
+def refresh_blocked_reason(
+    summary: RefreshResultSummary,
+    report: ReconcileReport,
+    episode: TestEpisode | None,
+    selected: list[Story],
+) -> str:
+    if problem := refresh_result_problem(summary, report):
+        return problem
+    if report.active_after == 0:
+        return "test refresh produced no active acceptance stories"
+    if episode and episode.scope == TestEpisodeScope.selected and not selected:
+        return "none of the selected testing stories were present after refresh"
+    return ""
+
+
+def _refresh_counts(
+    report: ReconcileReport,
+    summary: RefreshResultSummary,
+    selected: list[Story],
+    tasks: list[Task],
+    questions_created: int = 0,
+) -> dict:
+    counts = {
+        "stories_reconciled": report.active_after,
+        "stories_selected": len(selected),
+        "sweeps_queued": len(tasks),
+        "spec_baseline": report.baseline,
+        "stories_added": len(report.added_keys),
+        "stories_updated": len(report.updated_keys),
+        "stories_archived": len(report.archived_keys),
+        "draft_stories": len(summary.draft_keys),
+        "refresh_questions": len(summary.questions),
+        "refresh_questions_created": questions_created,
+    }
+    if summary.commit_sha:
+        counts["refresh_commit_sha"] = summary.commit_sha
+    return counts
+
+
+def create_refresh_questions(
     store,
     project: Project,
     workstream: ProjectWorkstream,
-    episode: TestEpisode,
+    summary: RefreshResultSummary,
+) -> list[Question]:
+    existing = {
+        q.text
+        for q in store.list(
+            Question,
+            workspace_id=project.workspace_id,
+            project_id=project.id,
+            workstream_id=workstream.id,
+        )
+    }
+    created: list[Question] = []
+    for raw in summary.questions:
+        text = (
+            "Hive's testing refresh could not derive acceptance confidently without "
+            "this answer.\n\n"
+            f"{raw}"
+        )
+        if text in existing:
+            continue
+        existing.add(text)
+        created.append(
+            store.put(
+                Question(
+                    workspace_id=project.workspace_id,
+                    project_id=project.id,
+                    workstream_id=workstream.id,
+                    text=text,
+                )
+            )
+        )
+    return created
+
+
+def finalize_refresh(
+    store,
+    project: Project,
+    workstream: ProjectWorkstream,
     spec_path: Path,
-) -> tuple[TestEpisode, list[str], list[Task]]:
-    notes, baseline = reconcile_stories(store, project, workstream, spec_path)
+    *,
+    episode: TestEpisode | None = None,
+    refresh_result: dict | None = None,
+) -> RefreshFinalization:
+    summary = RefreshResultSummary.from_payload(refresh_result)
+    report = reconcile_story_backlog(store, project, workstream, spec_path, refresh_summary=summary)
+    questions = create_refresh_questions(store, project, workstream, summary)
     stories = store.list(
         Story,
         workspace_id=project.workspace_id,
         project_id=project.id,
         workstream_id=workstream.id,
     )
-    selected = select_episode_stories(
-        stories,
-        episode.scope,
-        episode.selected_story_keys,
-        episode.max_stories,
+    selected: list[Story] = []
+    tasks: list[Task] = []
+    if episode:
+        selected = select_episode_stories(
+            stories,
+            episode.scope,
+            episode.selected_story_keys,
+            episode.max_stories,
+        )
+
+    blocked_reason = refresh_blocked_reason(summary, report, episode, selected)
+    if blocked_reason:
+        if episode:
+            def fail(saved: TestEpisode) -> None:
+                saved.story_keys = []
+                saved.status = TestEpisodeStatus.failed
+                saved.finished_at = saved.finished_at or now_s()
+                saved.counts = {
+                    **saved.counts,
+                    **_refresh_counts(report, summary, selected, tasks, len(questions)),
+                    "failure": blocked_reason[:500],
+                }
+
+            episode = store.update(TestEpisode, episode.id, fail) or episode
+        return RefreshFinalization(
+            summary=summary,
+            episode=episode,
+            report=report,
+            tasks=tasks,
+            questions=questions,
+            blocked_reason=blocked_reason,
+        )
+
+    if episode:
+        tasks = queue_sweep_tasks(store, project, workstream, episode, selected)
+
+        def update(saved: TestEpisode) -> None:
+            saved.story_keys = [s.key for s in selected]
+            saved.status = TestEpisodeStatus.sweeping if tasks else TestEpisodeStatus.done
+            saved.finished_at = now_s() if not tasks else 0.0
+            saved.counts = {
+                **saved.counts,
+                **_refresh_counts(report, summary, selected, tasks, len(questions)),
+            }
+
+        episode = store.update(TestEpisode, episode.id, update) or episode
+    return RefreshFinalization(summary=summary, episode=episode, report=report, tasks=tasks, questions=questions)
+
+
+def finish_refresh(
+    store,
+    project: Project,
+    workstream: ProjectWorkstream,
+    episode: TestEpisode,
+    spec_path: Path,
+    refresh_result: dict | None = None,
+) -> tuple[TestEpisode, list[str], list[Task]]:
+    """Compatibility wrapper for the episode refresh finalization path."""
+    finalization = finalize_refresh(
+        store,
+        project,
+        workstream,
+        spec_path,
+        episode=episode,
+        refresh_result=refresh_result,
     )
-    tasks = queue_sweep_tasks(store, project, workstream, episode, selected)
-
-    def update(saved: TestEpisode) -> None:
-        saved.story_keys = [s.key for s in selected]
-        saved.status = TestEpisodeStatus.sweeping if tasks else TestEpisodeStatus.done
-        saved.finished_at = now_s() if not tasks else 0.0
-        saved.counts = {
-            **saved.counts,
-            "stories_reconciled": len([s for s in stories if s.status != StoryStatus.archived]),
-            "stories_selected": len(selected),
-            "sweeps_queued": len(tasks),
-            "spec_baseline": baseline,
-        }
-
-    updated = store.update(TestEpisode, episode.id, update) or episode
-    return updated, notes, tasks
+    return finalization.episode or episode, finalization.report.notes, finalization.tasks
 
 
 def result_payload(text: str) -> dict:
@@ -730,6 +991,13 @@ def _issue_body(finding: Finding, story: Story) -> str:
         "## Finding",
         finding.detail or finding.summary,
     ]
+    if story.oracle_status == StoryOracleStatus.draft:
+        parts += [
+            "",
+            "## Oracle status",
+            story.oracle_status_reason
+            or "This acceptance story was drafted by Hive's testing refresh and has not been human-blessed yet.",
+        ]
     if finding.evidence_blobs:
         parts += ["", "## Evidence", "\n".join(f"- `{name}`" for name in finding.evidence_blobs)]
     return "\n".join(parts)

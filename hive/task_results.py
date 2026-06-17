@@ -78,10 +78,9 @@ from hive.testing import (
     close_story_issue as default_close_story_issue,
     file_or_update_finding_issue as default_file_or_update_finding_issue,
     finding_quality_problem,
-    finish_refresh,
+    finalize_refresh,
     persist_sweep_findings,
     queue_confirm_task,
-    reconcile_stories,
     refresh_episode_counts,
     result_payload as test_payload,
 )
@@ -793,10 +792,29 @@ class TaskResultProcessor:
                 self.config.gh_token,
             )
             spec.sync()
-            if episode:
-                finish_refresh(self.store, project, workstream, episode, spec.path)
-            else:
-                reconcile_stories(self.store, project, workstream, spec.path)
+            finalization = finalize_refresh(
+                self.store,
+                project,
+                workstream,
+                spec.path,
+                episode=episode,
+                refresh_result=body.structured_result,
+            )
+            if finalization.blocked_reason:
+                notes = "\n".join(f"- {note}" for note in finalization.report.notes) or "(none)"
+                escalate(
+                    self.store,
+                    f"Repair testing refresh for {project.name}",
+                    instructions=(
+                        "Hive's test-refresh task finished, but the reconciled acceptance "
+                        "backlog is not safe to sweep yet.\n\n"
+                        f"Reason: {finalization.blocked_reason}\n"
+                        f"Task: `{task.id}`\n\n"
+                        f"Reconcile notes:\n{notes}"
+                    ),
+                    project_id=project.id,
+                    workspace_id=project.workspace_id,
+                )
         except Exception as exc:
             log.exception("test refresh finalization failed for task %s", task.id)
             self._fail_test_episode(episode, f"{type(exc).__name__}: {exc}")

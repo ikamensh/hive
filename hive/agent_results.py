@@ -56,7 +56,14 @@ class ReviewResult(AgentResultBase):
 
 class TestRefreshResult(AgentResultBase):
     outcome: Literal["done"]
-    stories_changed: list[str] = Field(default_factory=list)
+    active_story_count: int = Field(ge=0)
+    stories_changed: list[str]
+    created_story_keys: list[str]
+    updated_story_keys: list[str]
+    archived_story_keys: list[str]
+    changed_files: list[str]
+    commit_sha: str
+    questions: list[str]
 
 
 class SweepFindingResult(BaseModel):
