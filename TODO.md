@@ -8,7 +8,7 @@ runner trace upload / `hive trace`, and the iterate path in `api.py` +
 `wiki/architecture.md`.)
 
 ## Gap 10 — Spec critique in the loop
-`hive/critique.py` is currently reachable only via `scripts/spec_critique.py`.
+`hive/workstreams/critique.py` is currently reachable only via `scripts/spec_critique.py`.
 Wire it into the running system:
 - Orchestrator opens a new project's workstream 0 with a critique run; its
   findings seed the first batch of clarification questions.

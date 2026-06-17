@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from hive.github_repos import all_repos, clear_cache, parse_repo_ref, validate_repo
+from hive.integrations.github_repos import all_repos, clear_cache, parse_repo_ref, validate_repo
 
 
 class FakeResponse:
@@ -49,8 +49,8 @@ def test_all_repos_prefers_user_oauth_token(monkeypatch):
             ]
         )
 
-    monkeypatch.setattr("hive.github_repos.subprocess.run", fake_run)
-    monkeypatch.setattr("hive.github_repos.httpx.get", fake_get)
+    monkeypatch.setattr("hive.integrations.github_repos.subprocess.run", fake_run)
+    monkeypatch.setattr("hive.integrations.github_repos.httpx.get", fake_get)
 
     repos = all_repos(github_login="ikamensh", user_token="gho_user", force=True)
 
@@ -71,9 +71,9 @@ def test_all_repos_skips_gh_when_account_mismatch(monkeypatch):
             return proc
         raise AssertionError(f"unexpected gh call: {args}")
 
-    monkeypatch.setattr("hive.github_repos.subprocess.run", fake_run)
+    monkeypatch.setattr("hive.integrations.github_repos.subprocess.run", fake_run)
     monkeypatch.setattr(
-        "hive.github_repos.httpx.get",
+        "hive.integrations.github_repos.httpx.get",
         lambda *a, **k: FakeResponse(
             [
                 {
@@ -98,7 +98,7 @@ def test_all_repos_skips_gh_when_account_mismatch(monkeypatch):
 
 
 def test_all_repos_uses_gh_cli_and_caches(monkeypatch):
-    from hive.github_repos import clear_cache
+    from hive.integrations.github_repos import clear_cache
 
     clear_cache()
     sample = [
@@ -119,8 +119,8 @@ def test_all_repos_uses_gh_cli_and_caches(monkeypatch):
         proc.stderr = ""
         return proc
 
-    monkeypatch.setattr("hive.github_repos.subprocess.run", fake_run)
-    monkeypatch.setattr("hive.github_repos._gh_active_login", lambda: "")
+    monkeypatch.setattr("hive.integrations.github_repos.subprocess.run", fake_run)
+    monkeypatch.setattr("hive.integrations.github_repos._gh_active_login", lambda: "")
     all_repos(force=True)
     all_repos()
 
@@ -129,7 +129,7 @@ def test_all_repos_uses_gh_cli_and_caches(monkeypatch):
 
 def test_validate_repo_via_user_token(monkeypatch):
     monkeypatch.setattr(
-        "hive.github_repos.httpx.get",
+        "hive.integrations.github_repos.httpx.get",
         lambda *a, **k: FakeResponse(
             {
                 "full_name": "ikamensh/hive",
@@ -153,7 +153,7 @@ def test_validate_repo_not_found(monkeypatch):
         proc.stderr = "Could not resolve to a Repository"
         return proc
 
-    monkeypatch.setattr("hive.github_repos.subprocess.run", fake_run)
+    monkeypatch.setattr("hive.integrations.github_repos.subprocess.run", fake_run)
 
     with pytest.raises(LookupError, match="not found"):
         validate_repo("acme/missing")

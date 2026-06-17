@@ -6,6 +6,7 @@ CLI can fully replace the UI.
 """
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 from test_api_e2e import ScriptedOrchestrator, _pump, _register_usable_runner
 
@@ -17,9 +18,9 @@ from hive.cli import (
     prepare_run_env,
     run,
 )
-from hive.config import Config
-from hive.store import MemoryStore
-from hive.supervisor import Supervisor
+from hive.config.settings import Config
+from hive.persistence.store import MemoryStore
+from hive.control.supervisor import Supervisor
 
 RUNNER_HEADERS = {"X-Hive-Token": "test-token"}
 
@@ -252,7 +253,56 @@ def test_run_control_plane_caps_graceful_shutdown(monkeypatch, tmp_path, capsys)
 
     assert calls
     assert calls[0][1]["timeout_graceful_shutdown"] == UVICORN_GRACEFUL_SHUTDOWN_S
-    assert "hive control plane" in capsys.readouterr().out
+    assert "starting hive control plane" in capsys.readouterr().out
+
+
+def test_run_control_plane_leader_refusal_is_concise(monkeypatch, tmp_path, capsys):
+    import uvicorn
+
+    def fake_run(*args, **kwargs):
+        raise RuntimeError("another control plane (host:123) holds the leader lease for workspace default")
+
+    _fake_gh(monkeypatch, "")
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+    monkeypatch.setattr("hive.cli.load_stored_config", lambda: {})
+    monkeypatch.setenv("HIVE_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("HIVE_GCP_PROJECT", "proj")
+    monkeypatch.setenv("HIVE_GCS_BUCKET", "bucket")
+
+    from hive.cli import main
+
+    with pytest.raises(SystemExit) as exc:
+        main(["run", "--host", "127.0.0.1", "--port", "8765"])
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "Hive control plane did not start" in err
+    assert "leader lease" in err
+    assert "Traceback" not in err
+
+
+def test_unreachable_api_prints_concise_error(monkeypatch, capsys):
+    request = httpx.Request("GET", "http://127.0.0.1:65533/api/projects")
+
+    class BrokenClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, path):
+            raise httpx.ConnectError("connection refused", request=request)
+
+    monkeypatch.setenv("HIVE_URL", "http://127.0.0.1:65533")
+    monkeypatch.setattr(httpx, "Client", BrokenClient)
+
+    from hive.cli import main
+
+    with pytest.raises(SystemExit) as exc:
+        main(["projects"])
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "Hive API unreachable at http://127.0.0.1:65533" in err
+    assert "Traceback" not in err
 
 
 def test_doctor_storage_uses_managed_state_config(monkeypatch, capsys):
@@ -261,7 +311,7 @@ def test_doctor_storage_uses_managed_state_config(monkeypatch, capsys):
     monkeypatch.setenv("HIVE_RUNNER_TOKEN", "runner")
     monkeypatch.setattr("hive.cli.load_stored_config", lambda: {})
     monkeypatch.setattr(
-        "hive.storage.managed_state_doctor",
+        "hive.persistence.storage.managed_state_doctor",
         lambda config: {
             "ok": True,
             "gcp_project": config.gcp_project,
@@ -289,7 +339,7 @@ def test_migrate_local_state_command(monkeypatch, tmp_path, capsys):
         calls.append((store.root, blobs.root, kwargs))
         return {"ok": True, "documents": {}, "blobs": 0, "verified": kwargs["verify"]}
 
-    monkeypatch.setattr("hive.storage.migrate_local_state", fake_migrate)
+    monkeypatch.setattr("hive.persistence.storage.migrate_local_state", fake_migrate)
     monkeypatch.setattr("hive.cli.load_stored_config", lambda: {})
 
     from hive.cli import main

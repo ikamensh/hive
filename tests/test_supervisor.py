@@ -6,6 +6,8 @@ and orphaned tasks fail instead of hanging forever.
 """
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import threading
 import time
 
 from hive.models import (
@@ -24,12 +26,31 @@ from hive.models import (
     Workstream,
     WorkstreamStatus,
 )
-from hive.store import MemoryStore
-from hive.supervisor import Supervisor, compute_state
+from hive.persistence.store import MemoryStore
+from hive.control.supervisor import Supervisor, compute_state
 
 
 def make_supervisor(store) -> Supervisor:
     return Supervisor(store, orchestrate=lambda pid, events: None)
+
+
+class SlowClaimSupervisor(Supervisor):
+    def __init__(self, store) -> None:
+        super().__init__(store, orchestrate=lambda pid, events: None)
+        self._claim_test_lock = threading.Lock()
+        self._active_claims = 0
+        self.max_active_claims = 0
+
+    def _claim(self, task_id, runner):
+        with self._claim_test_lock:
+            self._active_claims += 1
+            self.max_active_claims = max(self.max_active_claims, self._active_claims)
+        try:
+            time.sleep(0.05)
+            return super()._claim(task_id, runner)
+        finally:
+            with self._claim_test_lock:
+                self._active_claims -= 1
 
 
 class EmptyIdRejectingStore(MemoryStore):
@@ -128,6 +149,27 @@ def test_dispatch_serializes_per_repo():
     assert sup.dispatch(project) == 1  # same repo: only one task starts
     running = store.list(Task, status=TaskStatus.running)
     assert len(running) == 1
+
+
+def test_concurrent_dispatch_still_serializes_per_repo():
+    store = MemoryStore()
+    project = seed(store)
+    runner = store.put(Runner(name="r2", backends=["cursor"]))
+    store.put(Resource(runner_id=runner.id, backend="cursor",
+                       usability_status=ResourceUsability.usable))
+    ws = store.put(Workstream(project_id=project.id, title="w"))
+    for i in range(2):
+        store.put(Task(project_id=project.id, workstream_id=ws.id,
+                       repo="https://example.com/app.git", instructions=f"t{i}"))
+    sup = SlowClaimSupervisor(store)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: sup.dispatch(project), range(2)))
+
+    assert sorted(results) == [0, 1]
+    assert sup.max_active_claims == 1
+    assert len(store.list(Task, status=TaskStatus.running)) == 1
+    assert len(store.list(Task, status=TaskStatus.pending)) == 1
 
 
 def test_dispatch_parallel_across_repos():

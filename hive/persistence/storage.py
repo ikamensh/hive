@@ -5,10 +5,10 @@ from __future__ import annotations
 import uuid
 import time
 
-from hive.blobstore import GcsBlobStore, LocalBlobStore
-from hive.config import Config
+from hive.persistence.blobstore import GcsBlobStore, LocalBlobStore
+from hive.config.settings import Config
 from hive.models import DEFAULT_WORKSPACE_ID, Workspace
-from hive.store import (
+from hive.persistence.store import (
     FileStore,
     FirestoreStore,
     StoreBase,

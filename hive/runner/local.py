@@ -8,8 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from hive.config import Config
-from hive.config_file import set_stored_config_value
+from hive.config.settings import Config
+from hive.config.file import set_stored_config_value
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -97,7 +97,7 @@ class LocalRunnerManager:
         self._log = self.log_path().open("ab")
         try:
             self._proc = subprocess.Popen(
-                [sys.executable, "-m", "hive.runner"],
+                [sys.executable, "-m", "hive.runner.daemon"],
                 env=env,
                 stdout=self._log,
                 stderr=subprocess.STDOUT,

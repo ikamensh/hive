@@ -6,8 +6,8 @@ import time
 
 from fastapi.testclient import TestClient
 
-from hive.backends import PROBE_MARKER
-from hive.config import Config
+from hive.runner.backends import PROBE_MARKER
+from hive.config.settings import Config
 from hive.models import (
     Machine,
     Project,
@@ -18,9 +18,9 @@ from hive.models import (
     TaskStatus,
     Workstream,
 )
-from hive.store import MemoryStore
-from hive.supervisor import Supervisor
-from hive.runner import checkout, validate_probe_result
+from hive.persistence.store import MemoryStore
+from hive.control.supervisor import Supervisor
+from hive.runner.daemon import checkout, validate_probe_result
 
 H = {"X-Hive-Token": "t"}
 CLAUDE_CODE_DISCOVERY = {
@@ -263,8 +263,8 @@ def test_fresh_issue_checkout_resets_existing_branch_and_preserves_backup(tmp_pa
     _git(["push", "origin", "main"], seed)
     new_main = _git(["rev-parse", "HEAD"], seed).stdout.strip()
 
-    monkeypatch.setattr("hive.runner.WORKDIR", tmp_path / "work")
-    monkeypatch.setattr("hive.runner.time.time", lambda: 123456)
+    monkeypatch.setattr("hive.runner.daemon.WORKDIR", tmp_path / "work")
+    monkeypatch.setattr("hive.runner.daemon.time.time", lambda: 123456)
 
     dirty_path = checkout(str(remote), "hive/issue-9")
     (dirty_path / "file.txt").write_text("dirty cancelled review\n")

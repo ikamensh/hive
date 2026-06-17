@@ -20,8 +20,8 @@ from dataclasses import asdict, dataclass
 
 import httpx
 
-from hive.github_repos import _GH_HEADERS, parse_repo_ref
-from hive.issues import RESOLVE_BACKEND
+from hive.integrations.github_repos import _GH_HEADERS, parse_repo_ref
+from hive.workstreams.issues import RESOLVE_BACKEND
 from hive.models import Resource, Runner, Task, TaskKind
 
 

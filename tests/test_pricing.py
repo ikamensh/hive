@@ -1,6 +1,6 @@
 """Token-pricing estimates that turn orchestrator usage into budget dollars."""
 
-from hive.pricing import estimate_cost
+from hive.llm.pricing import estimate_cost
 
 
 def test_longest_prefix_match_and_per_million_rate():

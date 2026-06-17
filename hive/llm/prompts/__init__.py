@@ -1,4 +1,4 @@
-"""Prompt store: versioned base prompts, loaded from hive/prompts/*.md.
+"""Prompt store: versioned base prompts, loaded from hive/llm/prompts/*.md.
 
 Each load returns (text, version) where version is a short content hash —
 recorded on tasks so episodes can be tied to exact prompt versions (future
@@ -11,7 +11,7 @@ import hashlib
 from functools import cache
 from pathlib import Path
 
-PROMPT_DIR = Path(__file__).parent / "prompts"
+PROMPT_DIR = Path(__file__).parent
 
 
 @cache

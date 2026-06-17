@@ -8,9 +8,9 @@ end-to-end through the API with GitHub mocked.
 import pytest
 from fastapi.testclient import TestClient
 
-from hive.blobstore import LocalBlobStore
-from hive.config import Config
-from hive.issues import (
+from hive.persistence.blobstore import LocalBlobStore
+from hive.config.settings import Config
+from hive.workstreams.issues import (
     activate_next,
     advance_issues,
     ensure_issue_workstream,
@@ -40,9 +40,9 @@ from hive.models import (
     parse_resolve,
     parse_review,
 )
-from hive.orchestrator import Tools
-from hive.store import MemoryStore
-from hive.supervisor import Supervisor, compute_state
+from hive.control.orchestrator import Tools
+from hive.persistence.store import MemoryStore
+from hive.control.supervisor import Supervisor, compute_state
 from tests.test_api_e2e import RUNNER_HEADERS, _pump, _register_usable_runner
 
 
@@ -202,12 +202,12 @@ def test_resolve_issue_close_is_idempotent_when_already_closed(monkeypatch):
                 raise AssertionError("unexpected raise_for_status")
 
     calls = []
-    monkeypatch.setattr("hive.issues.httpx.post", lambda *a, **k: Resp(201, {}))
+    monkeypatch.setattr("hive.workstreams.issues.httpx.post", lambda *a, **k: Resp(201, {}))
     monkeypatch.setattr(
-        "hive.issues.httpx.patch",
+        "hive.workstreams.issues.httpx.patch",
         lambda *a, **k: calls.append("patch") or Resp(422, {"message": "Validation Failed"}),
     )
-    monkeypatch.setattr("hive.issues.httpx.get", lambda *a, **k: Resp(200, {"state": "closed"}))
+    monkeypatch.setattr("hive.workstreams.issues.httpx.get", lambda *a, **k: Resp(200, {"state": "closed"}))
 
     resolve_issue_on_github("https://github.com/o/r", 4, "done", "token")
 
@@ -619,7 +619,7 @@ def test_scan_downloads_attachments_and_serves_to_runner(app, monkeypatch):
         def raise_for_status(self):
             pass
 
-    monkeypatch.setattr("hive.issues.httpx.get", lambda *a, **k: FakeResp())
+    monkeypatch.setattr("hive.workstreams.issues.httpx.get", lambda *a, **k: FakeResp())
     resp = client.post(f"/api/projects/{pid}/scan-issues").json()
 
     task = store.list(Task, project_id=pid)[0]
@@ -840,7 +840,7 @@ def _usable_codex(store, project):
 
 
 def test_preflight_checks(monkeypatch):
-    from hive.preflight import preflight_checks
+    from hive.workstreams.preflight import preflight_checks
 
     cfg = Config(gcp_project="", gcs_bucket="", gh_token="t", gemini_api_key="",
                  orch_model="", runner_token="x", data_dir=".")
@@ -848,13 +848,13 @@ def test_preflight_checks(monkeypatch):
 
     project = store.put(Project(name="s", spec_repo="https://github.com/o/r.git"))
     _usable_codex(store, project)
-    monkeypatch.setattr("hive.preflight.repo_permissions",
+    monkeypatch.setattr("hive.workstreams.preflight.repo_permissions",
                         lambda repo, token: {"full_name": "o/r", "push": True, "has_issues": True, "default_branch": "main"})
     checks = {c.name: c for c in preflight_checks(store, cfg, project)}
     assert all(c.ok for c in checks.values() if c.hard)
     assert checks["repo_write_access"].ok and checks["codex_runner_usable"].ok
 
-    monkeypatch.setattr("hive.preflight.repo_permissions",
+    monkeypatch.setattr("hive.workstreams.preflight.repo_permissions",
                         lambda repo, token: {"full_name": "o/r", "push": False, "has_issues": True, "default_branch": "main"})
     checks = {c.name: c for c in preflight_checks(store, cfg, project)}
     assert not checks["repo_write_access"].ok  # read-only token → hard fail
@@ -864,7 +864,7 @@ def test_preflight_endpoint_queues_runner_check(app, monkeypatch):
     client, store = app
     pid = _issues_project_via_api(client)
     rid = _register_usable_runner(client, name="codex-runner", backend="codex")
-    monkeypatch.setattr("hive.preflight.repo_permissions",
+    monkeypatch.setattr("hive.workstreams.preflight.repo_permissions",
                         lambda repo, token: {"full_name": "o/r", "push": True, "has_issues": True, "default_branch": "main"})
 
     resp = client.post(f"/api/projects/{pid}/issues-preflight").json()
@@ -880,7 +880,7 @@ def test_preflight_endpoint_queues_runner_check(app, monkeypatch):
 def test_scan_blocked_by_failing_preflight(app, monkeypatch):
     client, _ = app
     pid = _issues_project_via_api(client)
-    monkeypatch.setattr("hive.preflight.repo_permissions",
+    monkeypatch.setattr("hive.workstreams.preflight.repo_permissions",
                         lambda repo, token: {"full_name": "o/r", "push": False, "has_issues": True, "default_branch": "main"})
     resp = client.post(f"/api/projects/{pid}/scan-issues")
     assert resp.status_code == 409

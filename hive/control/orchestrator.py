@@ -13,8 +13,8 @@ import json
 import logging
 from pathlib import Path
 
-from hive.backends import BACKEND_NAMES
-from hive.issues import ensure_iteration_workstream
+from hive.runner.backends import BACKEND_NAMES
+from hive.workstreams.issues import ensure_iteration_workstream
 from hive.llm import LoopResult, ToolLoop, ToolSet, build_adapter
 from hive.models import (
     Autonomy,
@@ -35,16 +35,31 @@ from hive.models import (
     WorkstreamSource,
     WorkstreamStatus,
 )
-from hive.pricing import estimate_cost
-from hive.prompts import load as load_prompt
-from hive.specrepo import SpecRepo
+from hive.llm.pricing import estimate_cost
+from hive.llm.prompts import load as load_prompt
+from hive.integrations.specrepo import SpecRepo
 
-log = logging.getLogger("hive.orchestrator")
+log = logging.getLogger("hive.control.orchestrator")
 
 HISTORY_LIMIT = 80
 RESULT_SNIPPET = 4000
 MAX_FIX_ROUNDS = 3  # consecutive verify rejects before a workstream must park + ask
 MAX_REMOTE_CALLS = 25  # tool-call rounds per orchestrator invocation
+
+
+def _structured_question_problem(question_markdown: str) -> str:
+    lower = question_markdown.strip().lower()
+    missing = []
+    if "option" not in lower:
+        missing.append("options")
+    if "recommend" not in lower:
+        missing.append("a recommendation")
+    if missing:
+        return (
+            "error: ask_user requires structured markdown with context, the gap or "
+            f"contradiction, options, and a recommendation; missing {', '.join(missing)}."
+        )
+    return ""
 
 
 class Tools:
@@ -205,6 +220,8 @@ class Tools:
         """Ask the human a clarification question (markdown: context, the
         gap/contradiction, options, your recommendation). If workstream_id is
         given, that workstream is parked until the answer arrives."""
+        if problem := _structured_question_problem(question_markdown):
+            return problem
         q = self.store.put(
             Question(
                 workspace_id=self.project.workspace_id,

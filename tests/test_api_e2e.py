@@ -12,9 +12,9 @@ import subprocess
 import pytest
 from fastapi.testclient import TestClient
 
-from hive.backends import PROBE_MARKER
-from hive.blobstore import LocalBlobStore
-from hive.config import Config
+from hive.runner.backends import PROBE_MARKER
+from hive.persistence.blobstore import LocalBlobStore
+from hive.config.settings import Config
 from hive.llm.openai import OpenAIAdapter
 from hive.models import (
     AgentConversation,
@@ -31,9 +31,9 @@ from hive.models import (
     Verdict,
     Workstream,
 )
-from hive.orchestrator import Orchestrator, Tools
-from hive.store import MemoryStore
-from hive.supervisor import Supervisor
+from hive.control.orchestrator import Orchestrator, Tools
+from hive.persistence.store import MemoryStore
+from hive.control.supervisor import Supervisor
 
 RUNNER_HEADERS = {"X-Hive-Token": "test-token"}
 
@@ -102,7 +102,15 @@ class ScriptedOrchestrator:
             tools.create_task(work.workstream_id, "https://example.com/app.git", "verify it", kind="verify")
         elif any(t.kind == TaskKind.verify and t.status == "done" for t in tasks) and not questions:
             work = next(t for t in tasks if t.kind == TaskKind.work)
-            tools.ask_user("Should we also add B? My recommendation: yes.", work.workstream_id)
+            tools.ask_user(
+                "## Include B in this iteration?\n\n"
+                "The accepted verify covered A, but the spec leaves B adjacent to the same user journey.\n\n"
+                "**Options:**\n\n"
+                "1. Add B now while the code is warm.\n"
+                "2. Ship A only and schedule B for a later iteration.\n\n"
+                "**Recommendation:** add B now; it is cheap to include and avoids another partial pass.",
+                work.workstream_id,
+            )
 
 
 class ScriptedOpenAIAdapter(OpenAIAdapter):
@@ -860,8 +868,8 @@ def test_local_runner_autostart_endpoint_starts_runner(tmp_path):
 
 
 def test_local_runner_autostart_writes_machine_config(tmp_path, monkeypatch):
-    from hive.config_file import load_stored_config
-    from hive.local_runner import LocalRunnerManager
+    from hive.config.file import load_stored_config
+    from hive.runner.local import LocalRunnerManager
 
     config_file = tmp_path / "config.env"
     monkeypatch.setenv("HIVE_CONFIG_FILE", str(config_file))

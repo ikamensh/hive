@@ -1,7 +1,7 @@
 """Runner daemon: registers with the control plane, long-polls for tasks,
 executes them with a kodo agent in a local checkout, reports results.
 
-Run directly: `python -m hive.runner`. Configuration via environment:
+Run directly: `python -m hive.runner.daemon`. Configuration via environment:
 """
 
 from __future__ import annotations
@@ -24,15 +24,15 @@ from pathlib import Path
 
 import httpx
 
-from hive.backends import (
+from hive.runner.backends import (
     BACKEND_NAMES,
     PROBE_MARKER,
     detected_backend_names,
     discover_backends,
     make_session,
 )
-from hive.agent_results import call_agent, result_spec_for_task
-from hive.machine import machine_metadata
+from hive.runner.agent_results import call_agent, result_spec_for_task
+from hive.runner.machine import machine_metadata
 from hive.models import DEFAULT_WORKSPACE_ID
 
 MACHINE_METADATA = machine_metadata()
@@ -51,7 +51,7 @@ WORKDIR = Path(os.environ.get("HIVE_RUNNER_WORKDIR", "~/hive-work")).expanduser(
 TASK_TIMEOUT_S = float(os.environ.get("HIVE_TASK_TIMEOUT_S", "3600"))
 CANCEL_POLL_S = 5.0  # how often a running task checks for an operator cancel request
 
-log = logging.getLogger("hive.runner")
+log = logging.getLogger("hive.runner.daemon")
 
 EXHAUSTED_PATTERNS = re.compile(
     r"rate.?limit|quota|usage.?limit|plan.?limit|too many requests|429\b|credits?",
@@ -153,7 +153,7 @@ def _runner_github_token() -> str:
     if not preferred:
         return ""
     try:
-        from hive.github_repos import gh_token_for
+        from hive.integrations.github_repos import gh_token_for
     except Exception:
         return ""
     try:

@@ -1,6 +1,6 @@
 """Runner-side quota / rate-limit detection."""
 
-from hive.runner import EXHAUSTED_PATTERNS
+from hive.runner.daemon import EXHAUSTED_PATTERNS
 
 # Captured from a real `codex exec` failure when the 5h window is spent.
 CODEX_QUOTA_ERROR = (

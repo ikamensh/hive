@@ -19,7 +19,7 @@ import httpx
 from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from hive.config import Config
+from hive.config.settings import Config
 from hive.models import (
     DEFAULT_WORKSPACE_ID,
     Machine,

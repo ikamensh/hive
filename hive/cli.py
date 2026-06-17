@@ -17,7 +17,7 @@ import sys
 import time
 from pathlib import Path
 
-from hive.config_file import (
+from hive.config.file import (
     CONFIG_KEYS,
     config_path,
     load_stored_config,
@@ -38,7 +38,7 @@ def _mask(key: str, value: str) -> str:
 
 
 def _gh_token(preferred_user: str = "") -> str:
-    from hive.github_repos import gh_token_for
+    from hive.integrations.github_repos import gh_token_for
 
     return gh_token_for(preferred_user)
 
@@ -300,7 +300,7 @@ def _managed_state_missing(env: dict[str, str]) -> list[str]:
 def _run_control_plane(args: argparse.Namespace) -> None:
     import uvicorn
 
-    from hive.local_runner import local_control_plane_url
+    from hive.runner.local import local_control_plane_url
 
     os.environ.setdefault("HIVE_PUBLIC_URL", local_control_plane_url(args.host, args.port))
     for line in prepare_run_env(os.environ, load_stored_config()):
@@ -318,20 +318,26 @@ def _run_control_plane(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         raise SystemExit(2)
-    print(f"hive control plane → http://{args.host}:{args.port}\n")
-    uvicorn.run(
-        "hive.api:production_app",
-        factory=True,
-        host=args.host,
-        port=args.port,
-        reload=args.reload,
-        timeout_graceful_shutdown=UVICORN_GRACEFUL_SHUTDOWN_S,
-    )
+    print(f"starting hive control plane on {args.host}:{args.port}\n")
+    try:
+        uvicorn.run(
+            "hive.api:production_app",
+            factory=True,
+            host=args.host,
+            port=args.port,
+            reload=args.reload,
+            timeout_graceful_shutdown=UVICORN_GRACEFUL_SHUTDOWN_S,
+        )
+    except RuntimeError as exc:
+        if "leader lease" in str(exc):
+            print(f"Hive control plane did not start: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+        raise
 
 
 def _run_doctor(args: argparse.Namespace) -> None:
-    from hive.config import Config
-    from hive.storage import managed_state_doctor
+    from hive.config.settings import Config
+    from hive.persistence.storage import managed_state_doctor
 
     prepare_run_env(os.environ, load_stored_config())
     if args.doctor_command == "storage":
@@ -344,9 +350,9 @@ def _run_doctor(args: argparse.Namespace) -> None:
 
 
 def _run_migrate_local_state(args: argparse.Namespace) -> None:
-    from hive.blobstore import LocalBlobStore
-    from hive.storage import migrate_local_state
-    from hive.store import FileStore
+    from hive.persistence.blobstore import LocalBlobStore
+    from hive.persistence.storage import migrate_local_state
+    from hive.persistence.store import FileStore
 
     data_dir = Path(args.data_dir).expanduser()
     stored = load_stored_config()
@@ -447,8 +453,8 @@ def run(args: argparse.Namespace, client) -> dict | list:
     elif c == "cancel":
         r = client.post(f"/api/tasks/{args.task_id}/cancel")
     elif c == "agents":
-        from hive.backends import BACKEND_NAMES
-        from hive.runner import discovery_payload
+        from hive.runner.backends import BACKEND_NAMES
+        from hive.runner.daemon import discovery_payload
 
         detected, discoveries = discovery_payload()
         return {
@@ -510,16 +516,21 @@ def main(argv: list[str] | None = None) -> None:
         _run_migrate_local_state(args)
         return
     auth = os.environ.get("HIVE_BASIC_AUTH", "")
+    base_url = os.environ.get("HIVE_URL", "http://localhost:8000")
     client = httpx.Client(
-        base_url=os.environ.get("HIVE_URL", "http://localhost:8000"),
+        base_url=base_url,
         auth=tuple(auth.split(":", 1)) if auth else None,
         timeout=30.0,
     )
-    if args.command == "trace":
-        # Raw JSONL, not JSON-wrapped, so it pipes into kodo's viewer / jq.
-        print(client.get(f"/api/tasks/{args.task_id}/trace").raise_for_status().text)
-        return
-    print(json.dumps(run(args, client), indent=2))
+    try:
+        if args.command == "trace":
+            # Raw JSONL, not JSON-wrapped, so it pipes into kodo's viewer / jq.
+            print(client.get(f"/api/tasks/{args.task_id}/trace").raise_for_status().text)
+            return
+        print(json.dumps(run(args, client), indent=2))
+    except httpx.RequestError as exc:
+        print(f"Hive API unreachable at {base_url}: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":

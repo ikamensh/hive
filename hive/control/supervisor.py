@@ -13,11 +13,12 @@ import datetime
 import logging
 import os
 import socket
+import threading
 import time
 from collections import defaultdict
 from typing import Callable
 
-from hive.escalation import escalate
+from hive.control.escalation import escalate
 from hive.models import (
     AgentConversation,
     ConversationStatus,
@@ -35,7 +36,7 @@ from hive.models import (
     WorkstreamStatus,
 )
 
-log = logging.getLogger("hive.supervisor")
+log = logging.getLogger("hive.control.supervisor")
 
 RUNNER_OFFLINE_TASK_FAIL_S = 300.0
 LEASE_TTL_S = 60.0  # renewed every tick (15s); a dead leader is superseded within a minute
@@ -131,6 +132,7 @@ class Supervisor:
         self._wakeup = asyncio.Event()
         self._busy: set[str] = set()  # projects with an orchestrator invocation in flight
         self._last_heartbeat: dict[str, float] = {}
+        self._dispatch_lock = threading.RLock()
 
     def wake(self, project_id: str, event: str) -> None:
         self._events[project_id].append(event)
@@ -301,6 +303,10 @@ class Supervisor:
     def dispatch(self, project: Project) -> int:
         """Assign pending tasks to runners. Mutating tasks serialize per repo;
         test sweeps/confirmations are isolated by their own environments."""
+        with self._dispatch_lock:
+            return self._dispatch_unlocked(project)
+
+    def _dispatch_unlocked(self, project: Project) -> int:
         if self.over_budget(project):
             return 0  # daily soft cap reached; no new spend until UTC midnight
         tasks = self.store.list(Task, workspace_id=self.workspace_id, project_id=project.id)

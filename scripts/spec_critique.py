@@ -16,9 +16,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from hive.critique import critique, report_markdown
-from hive.model_intel import smartest
-from hive.specrepo import digest_dir
+from hive.workstreams.critique import critique, report_markdown
+from hive.llm.model_intel import smartest
+from hive.integrations.specrepo import digest_dir
 
 # -- inputs -------------------------------------------------------------------
 SPEC_DIR = Path(__file__).parent.parent  # hive is its own spec home

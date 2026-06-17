@@ -2,8 +2,8 @@ import subprocess
 
 from fastapi.testclient import TestClient
 
-from hive.blobstore import LocalBlobStore
-from hive.config import Config
+from hive.persistence.blobstore import LocalBlobStore
+from hive.config.settings import Config
 from hive.models import (
     Finding,
     FindingStatus,
@@ -19,9 +19,9 @@ from hive.models import (
     TaskStatus,
     TestEpisode as EpisodeModel,
 )
-from hive.store import MemoryStore
-from hive.supervisor import Supervisor
-from hive.testing import ensure_testing_workstream, file_or_update_finding_issue, reconcile_stories
+from hive.persistence.store import MemoryStore
+from hive.control.supervisor import Supervisor
+from hive.workstreams.testing import ensure_testing_workstream, file_or_update_finding_issue, reconcile_stories
 from tests.test_api_e2e import RUNNER_HEADERS, _pump, _register_usable_runner
 
 
@@ -461,7 +461,7 @@ def test_file_testing_issue_creates_custom_labels(monkeypatch):
             return Response(201, {"number": 12, "html_url": "https://github.com/acme/hive/issues/12"})
         raise AssertionError(url)
 
-    monkeypatch.setattr("hive.testing.httpx.post", fake_post)
+    monkeypatch.setattr("hive.workstreams.testing.httpx.post", fake_post)
     story = Story(
         project_id="p",
         workstream_id="w",

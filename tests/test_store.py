@@ -9,8 +9,8 @@ import time
 import pytest
 
 from hive.models import Question, QuestionStatus, Project, Resource, Task, TaskStatus, User
-from hive.store import FileStore, MemoryStore, StoreBase
-from hive.storage import copy_store
+from hive.persistence.store import FileStore, MemoryStore, StoreBase
+from hive.persistence.storage import copy_store
 
 
 def test_memory_store_is_a_storebase():

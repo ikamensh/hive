@@ -5,6 +5,7 @@ is capped before it must escalate to the human.
 
 from hive.models import (
     Project,
+    Question,
     Task,
     TaskKind,
     TaskStatus,
@@ -13,8 +14,8 @@ from hive.models import (
     WorkstreamStatus,
     parse_verdict,
 )
-from hive.orchestrator import MAX_FIX_ROUNDS, Tools
-from hive.store import MemoryStore
+from hive.control.orchestrator import MAX_FIX_ROUNDS, Tools
+from hive.persistence.store import MemoryStore
 
 
 def test_parse_verdict_reads_last_line():
@@ -86,3 +87,15 @@ def test_pr_mode_puts_work_on_a_branch():
     task = store.get(Task, task_id)
     assert task.branch == f"hive/{ws_id[:8]}"
     assert task.branch in task.instructions
+
+
+def test_ask_user_requires_options_and_recommendation():
+    store = MemoryStore()
+    tools, _project = _tools(store)
+    ws_id = tools.create_workstream("w", "d").split("=")[1]
+
+    result = tools.ask_user("Should the data live in Europe?", ws_id)
+
+    assert "error:" in result
+    assert store.list(Question) == []
+    assert store.get(Workstream, ws_id).status == WorkstreamStatus.active

@@ -5,10 +5,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi.testclient import TestClient
 
-from hive.config import Config
+from hive.config.settings import Config
 from hive.models import Machine, Project
-from hive.store import FileStore, MemoryStore
-from hive.supervisor import Supervisor
+from hive.persistence.store import FileStore, MemoryStore
+from hive.control.supervisor import Supervisor
 
 
 class FakeResponse:
@@ -125,11 +125,11 @@ def test_github_login_accepts_allowlisted_user(monkeypatch):
     start = client.get("/api/auth/github/start", follow_redirects=False)
     state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
     monkeypatch.setattr(
-        "hive.auth.httpx.post",
+        "hive.integrations.auth.httpx.post",
         lambda *a, **k: FakeResponse({"access_token": "gho_test"}),
     )
     monkeypatch.setattr(
-        "hive.auth.httpx.get",
+        "hive.integrations.auth.httpx.get",
         lambda *a, **k: FakeResponse({"login": "ikamensh", "name": "Ikamen"}),
     )
 
@@ -156,11 +156,11 @@ def test_github_callback_stores_access_token(monkeypatch):
     start = client.get("/api/auth/github/start", follow_redirects=False)
     state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
     monkeypatch.setattr(
-        "hive.auth.httpx.post",
+        "hive.integrations.auth.httpx.post",
         lambda *a, **k: FakeResponse({"access_token": "gho_test"}),
     )
     monkeypatch.setattr(
-        "hive.auth.httpx.get",
+        "hive.integrations.auth.httpx.get",
         lambda *a, **k: FakeResponse({"login": "ikamensh", "name": "Ikamen"}),
     )
 
@@ -176,7 +176,7 @@ def test_github_callback_stores_access_token(monkeypatch):
 
 
 def test_github_repos_uses_server_token_when_gh_unavailable(monkeypatch):
-    from hive.github_repos import clear_cache
+    from hive.integrations.github_repos import clear_cache
 
     clear_cache()
     store = MemoryStore()
@@ -199,9 +199,9 @@ def test_github_repos_uses_server_token_when_gh_unavailable(monkeypatch):
         }
     ]
 
-    monkeypatch.setattr("hive.github_repos.subprocess.run", gh_fail)
+    monkeypatch.setattr("hive.integrations.github_repos.subprocess.run", gh_fail)
     monkeypatch.setattr(
-        "hive.github_repos.httpx.get",
+        "hive.integrations.github_repos.httpx.get",
         lambda *a, **k: FakeResponse(sample),
     )
 
@@ -212,7 +212,7 @@ def test_github_repos_uses_server_token_when_gh_unavailable(monkeypatch):
 
 
 def test_github_validate_repo(monkeypatch):
-    from hive.github_repos import clear_cache
+    from hive.integrations.github_repos import clear_cache
 
     clear_cache()
     store = MemoryStore()
@@ -240,7 +240,7 @@ def test_github_validate_repo(monkeypatch):
         proc.stderr = proc.stderr if hasattr(proc, "stderr") else ""
         return proc
 
-    monkeypatch.setattr("hive.github_repos.subprocess.run", fake_run)
+    monkeypatch.setattr("hive.integrations.github_repos.subprocess.run", fake_run)
 
     response = client.get("/api/github/repos/validate?ref=acme/demo")
 
@@ -249,7 +249,7 @@ def test_github_validate_repo(monkeypatch):
 
 
 def test_github_repos_without_gh_or_token(monkeypatch):
-    from hive.github_repos import clear_cache
+    from hive.integrations.github_repos import clear_cache
 
     clear_cache()
     store = MemoryStore()
@@ -262,8 +262,8 @@ def test_github_repos_without_gh_or_token(monkeypatch):
         proc.stderr = "not logged in"
         return proc
 
-    monkeypatch.setattr("hive.github_repos.subprocess.run", gh_fail)
-    monkeypatch.setattr("hive.github_repos._gh_token", lambda: "")
+    monkeypatch.setattr("hive.integrations.github_repos.subprocess.run", gh_fail)
+    monkeypatch.setattr("hive.integrations.github_repos._gh_token", lambda: "")
 
     response = client.get("/api/github/repos")
 
@@ -284,11 +284,11 @@ def test_github_login_rejects_non_allowlisted_user(monkeypatch):
     start = client.get("/api/auth/github/start", follow_redirects=False)
     state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
     monkeypatch.setattr(
-        "hive.auth.httpx.post",
+        "hive.integrations.auth.httpx.post",
         lambda *a, **k: FakeResponse({"access_token": "gho_test"}),
     )
     monkeypatch.setattr(
-        "hive.auth.httpx.get",
+        "hive.integrations.auth.httpx.get",
         lambda *a, **k: FakeResponse({"login": "someone-else", "name": "Nope"}),
     )
 

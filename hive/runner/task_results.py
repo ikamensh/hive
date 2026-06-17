@@ -15,16 +15,16 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from hive.agent_results import (
+from hive.runner.agent_results import (
     test_repro_outcome as structured_test_repro_outcome,
     test_sweep_outcome as structured_test_sweep_outcome,
     test_ux_outcome as structured_test_ux_outcome,
     verdict_from_structured,
 )
-from hive.backends import REGISTRY
-from hive.config import Config
-from hive.escalation import escalate
-from hive.issues import (
+from hive.runner.backends import REGISTRY
+from hive.config.settings import Config
+from hive.control.escalation import escalate
+from hive.workstreams.issues import (
     LANDING_FAILED_PREFIX,
     MergeConflictError,
     advance_issues,
@@ -73,8 +73,8 @@ from hive.models import (
     parse_test_ux,
     parse_verdict,
 )
-from hive.specrepo import SpecRepo
-from hive.testing import (
+from hive.integrations.specrepo import SpecRepo
+from hive.workstreams.testing import (
     close_story_issue as default_close_story_issue,
     file_or_update_finding_issue as default_file_or_update_finding_issue,
     finding_quality_problem,
@@ -85,7 +85,7 @@ from hive.testing import (
     result_payload as test_payload,
 )
 
-log = logging.getLogger("hive.task_results")
+log = logging.getLogger("hive.runner.task_results")
 
 RATE_LIMIT_COOLDOWN_S = 3600.0
 HUMAN_FIX_PATTERNS = re.compile(

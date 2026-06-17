@@ -25,7 +25,7 @@ from pathlib import Path
 
 import httpx
 
-from hive.github_repos import _GH_HEADERS, parse_repo_ref
+from hive.integrations.github_repos import _GH_HEADERS, parse_repo_ref
 from hive.models import (
     IssueRun,
     IssueRunScope,
@@ -41,9 +41,9 @@ from hive.models import (
     WorkstreamSource,
     WorkstreamStatus,
 )
-from hive.prompts import load as load_prompt
+from hive.llm.prompts import load as load_prompt
 
-log = logging.getLogger("hive.issues")
+log = logging.getLogger("hive.workstreams.issues")
 
 # Dormant ordered variant: an issue-workstream is "in flight" (no other may be
 # activated) while in these statuses. Unused by the active per-issue pipeline.
@@ -352,7 +352,7 @@ def project_workstreams(store, project: Project) -> list[ProjectWorkstream]:
         except ValueError:
             pass
         try:
-            from hive.testing import ensure_testing_workstream
+            from hive.workstreams.testing import ensure_testing_workstream
 
             repos = project.member_repos or [project.spec_repo]
             for repo in dict.fromkeys([r.strip() for r in repos if r.strip()]):

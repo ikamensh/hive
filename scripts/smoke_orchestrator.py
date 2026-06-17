@@ -12,11 +12,11 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from hive.blobstore import LocalBlobStore
-from hive.config import Config
+from hive.persistence.blobstore import LocalBlobStore
+from hive.config.settings import Config
 from hive.models import Project, Question, Task, TaskStatus, Workstream
-from hive.orchestrator import Orchestrator
-from hive.store import MemoryStore
+from hive.control.orchestrator import Orchestrator
+from hive.persistence.store import MemoryStore
 
 MODEL = os.environ.get("HIVE_ORCH_MODEL", "")
 PROVIDER = os.environ.get("HIVE_ORCH_PROVIDER", "auto")

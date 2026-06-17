@@ -1,7 +1,7 @@
 import subprocess
 
-from hive.backends import PROBE_MARKER
-from hive.runner import validate_probe_result
+from hive.runner.backends import PROBE_MARKER
+from hive.runner.daemon import validate_probe_result
 
 
 def _git_repo(path):
