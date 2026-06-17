@@ -343,6 +343,8 @@ const findings: Finding[] = [
     kind: "bug",
     severity: "high",
     summary: "Deep-link redirect is lost after login",
+    expected: "After login the user returns to the deep link they requested (/reports/usage).",
+    actual: "After login the user lands on / instead of the requested deep link.",
     detail: "Opening /reports/usage while signed out lands on / after authentication.",
     oracle: "The login-redirect acceptance example requires returning to the deep link.",
     evidence_blobs: ["login-redirect-console.txt"],

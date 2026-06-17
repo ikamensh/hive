@@ -242,6 +242,8 @@ export interface Finding {
   kind: "bug" | "ux_smell";
   severity: string;
   summary: string;
+  expected: string;
+  actual: string;
   detail: string;
   oracle: string;
   evidence_blobs: string[];

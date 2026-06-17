@@ -51,6 +51,7 @@ DEFAULT_TEST_BACKEND = "codex"
 DEFAULT_EPISODE_SIZE = 5
 ARTIFACT_DIR = ".hive/artifacts"
 ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9._/-]+$")
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 STORY_HEADING = re.compile(r"^\s*#\s*story:\s*([A-Za-z0-9._-]+)(?:\s*\[([^\]]+)\])?", re.I | re.M)
 SECTION_HEADING = re.compile(r"^##\s+(.+?)\s*$", re.M)
 USER_IMPACT_WORDS = {
@@ -568,7 +569,9 @@ def queue_confirm_task(
             f"Severity: {finding.severity}",
             f"Summary: {finding.summary}",
             f"Oracle: {finding.oracle}",
-            f"Details:\n{finding.detail}",
+            f"Expected: {finding.expected}",
+            f"Actual: {finding.actual}",
+            f"Steps to reproduce:\n{finding.detail}",
         ]
     )
     task = store.put(
@@ -849,15 +852,17 @@ def _finding_signature(story_key: str, kind: str, summary: str, oracle: str) -> 
 def finding_quality_problem(item: dict) -> str:
     """Return why a sweep finding is too weak to enter the denoise funnel."""
     summary = str(item.get("summary") or "").strip()
+    expected = str(item.get("expected") or "").strip()
+    actual = str(item.get("actual") or "").strip()
     detail = str(item.get("detail") or item.get("repro_steps") or "").strip()
     oracle = str(item.get("oracle") or "").strip()
     if not summary:
         return "missing summary"
-    if len(detail) < 30:
+    if len(actual + detail) < 30:
         return "missing concrete reproduction detail"
     if len(oracle) < 12:
         return "missing oracle"
-    text = f"{summary} {detail} {oracle}".lower()
+    text = f"{summary} {expected} {actual} {detail} {oracle}".lower()
     has_impact = any(word in text for word in USER_IMPACT_WORDS)
     weak_nitpick = any(word in text for word in WEAK_NITPICK_WORDS)
     if weak_nitpick and not has_impact:
@@ -908,7 +913,9 @@ def persist_sweep_findings(
         if isinstance(evidence, str):
             evidence = [evidence]
         evidence = [str(e) for e in evidence if str(e).strip()]
-        evidence_blobs = evidence or task.artifact_blobs
+        # When the agent forgets to curate evidence, fall back to screenshots only --
+        # never dump the whole artifact scratch tree (toolchains, json, html) into the issue.
+        evidence_blobs = evidence or [b for b in task.artifact_blobs if b.lower().endswith(IMAGE_SUFFIXES)]
         finding = existing or Finding(
             workspace_id=project.workspace_id,
             project_id=project.id,
@@ -925,6 +932,8 @@ def persist_sweep_findings(
         finding.kind = kind
         finding.severity = str(item.get("severity") or finding.severity)
         finding.summary = summary
+        finding.expected = str(item.get("expected") or finding.expected)
+        finding.actual = str(item.get("actual") or finding.actual)
         finding.detail = str(item.get("detail") or item.get("repro_steps") or finding.detail)
         finding.oracle = oracle
         finding.evidence_blobs = list(dict.fromkeys([*finding.evidence_blobs, *evidence_blobs]))
@@ -988,10 +997,15 @@ def _issue_body(finding: Finding, story: Story) -> str:
         "",
         "## Story intent",
         story.intent or "(not recorded)",
-        "",
-        "## Finding",
-        finding.detail or finding.summary,
     ]
+    if finding.expected:
+        parts += ["", "## What should happen", finding.expected]
+    if finding.actual:
+        parts += ["", "## What happened instead", finding.actual]
+    if finding.detail:
+        parts += ["", "## Steps to reproduce", finding.detail]
+    if not (finding.expected or finding.actual or finding.detail):
+        parts += ["", "## Finding", finding.summary]
     if story.oracle_status == StoryOracleStatus.draft:
         parts += [
             "",

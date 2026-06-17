@@ -693,7 +693,9 @@ class Finding(BaseModel):
     kind: FindingKind = FindingKind.bug
     severity: str = "medium"
     summary: str
-    detail: str = ""
+    expected: str = ""  # what should have happened, per the rule/example
+    actual: str = ""  # what happened instead
+    detail: str = ""  # steps to reproduce
     oracle: str = ""
     evidence_blobs: list[str] = []
     status: FindingStatus = FindingStatus.suspected

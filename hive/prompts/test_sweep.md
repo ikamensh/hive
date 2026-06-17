@@ -20,7 +20,9 @@ Include one JSON block:
       "kind": "bug",
       "severity": "high",
       "summary": "Short user-facing failure",
-      "detail": "Repro steps and observed behavior",
+      "expected": "What should have happened, per the rule/example",
+      "actual": "What happened instead",
+      "detail": "Steps to reproduce",
       "oracle": "Which rule/example/heuristic failed",
       "evidence_blobs": ["screenshot.png"]
     }

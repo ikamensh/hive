@@ -470,7 +470,17 @@ def test_file_testing_issue_creates_custom_labels(monkeypatch):
         oracle_status=StoryOracleStatus.draft,
         oracle_status_reason="created by Hive's testing refresh from spec intention",
     )
-    finding = Finding(project_id="p", workstream_id="w", repo=story.repo, episode_id="e", story_key=story.key, summary="Login fails")
+    finding = Finding(
+        project_id="p",
+        workstream_id="w",
+        repo=story.repo,
+        episode_id="e",
+        story_key=story.key,
+        summary="Login fails",
+        expected="The user lands on the dashboard after submitting valid credentials.",
+        actual="The user is bounced back to the login form with no error message.",
+        detail="1. Open /login 2. Submit valid credentials 3. Observe redirect to /login",
+    )
 
     number, url = file_or_update_finding_issue(story.repo, finding, story, "token")
 
@@ -479,8 +489,13 @@ def test_file_testing_issue_creates_custom_labels(monkeypatch):
     assert [body["name"] for request_url, body in calls if request_url.endswith("/labels")] == ["hive-test"]
     issue_body = next(body for request_url, body in calls if request_url.endswith("/issues"))
     assert issue_body["labels"] == ["hive-test", "bug"]
-    assert "## Oracle status" in issue_body["body"]
-    assert "created by Hive's testing refresh" in issue_body["body"]
+    body = issue_body["body"]
+    assert "## What should happen" in body
+    assert "## What happened instead" in body
+    assert "## Steps to reproduce" in body
+    assert finding.expected in body and finding.actual in body
+    assert "## Oracle status" in body
+    assert "created by Hive's testing refresh" in body
 
 
 def _start_episode_to_sweep(client, store, pid, rid, stream_id):
@@ -610,6 +625,43 @@ def test_sweep_finding_prefers_explicit_evidence_over_all_task_artifacts(tmp_pat
 
     finding = store.list(Finding, project_id=pid)[0]
     assert finding.evidence_blobs == ["specific.log"]
+
+
+def test_sweep_finding_without_evidence_falls_back_to_screenshots_only(tmp_path):
+    # Regression for issue #8: when the agent omits evidence_blobs, the issue body
+    # dumped the entire artifact scratch tree (an installed playwright toolchain),
+    # producing a ~180-line Evidence list. The fallback must keep screenshots only.
+    repo = spec_repo(tmp_path)
+    client, store = app(tmp_path, repo)
+    pid = _project_with_repo(client, repo)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    stream = next(w for w in client.get(f"/api/projects/{pid}").json()["workstreams"] if w["kind"] == "testing")
+
+    _episode_id, sweep = _start_episode_to_sweep(client, store, pid, rid, stream["id"])
+    task = store.get(Task, sweep["id"])
+    task.artifact_blobs = [
+        "before.png",
+        "after.png",
+        "project.json",
+        "root.html",
+        "tools/node_modules/playwright/index.js",
+    ]
+    store.put(task)
+    _report(
+        client,
+        sweep["id"],
+        "Found a retry bug.\n"
+        "SWEEP: FINDINGS\n"
+        "```json\n"
+        '{"fidelity":"local","findings":[{"kind":"bug","severity":"high",'
+        '"summary":"Webhook retries stop after one attempt",'
+        '"detail":"Return 500 from the webhook endpoint and observe only one retry.",'
+        '"oracle":"Failed webhooks must retry with backoff"}]}\n'
+        "```",
+    )
+
+    finding = store.list(Finding, project_id=pid)[0]
+    assert finding.evidence_blobs == ["before.png", "after.png"]
 
 
 def test_weak_sweep_findings_are_not_filed(tmp_path):
