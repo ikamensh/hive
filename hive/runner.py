@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import importlib.util
 import logging
 import os
 import re
@@ -56,6 +57,18 @@ EXHAUSTED_PATTERNS = re.compile(
     r"rate.?limit|quota|usage.?limit|plan.?limit|too many requests|429\b|subscription|billing",
     re.IGNORECASE,
 )
+SKIP_ARTIFACT_PARTS = {
+    ".cache",
+    ".git",
+    ".next",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+}
 GITHUB_URL = re.compile(
     r"^(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)"
     r"(?P<repo>[\w.-]+/[\w.-]+?)(?:\.git)?/?$",
@@ -68,12 +81,27 @@ class CheckoutError(RuntimeError):
 
 
 def detect_backends() -> list[str]:
-    return detected_backend_names()
+    return discovery_payload()[0]
 
 
 def discovery_payload() -> tuple[list[str], list[dict]]:
     discoveries = discover_backends()
-    return detected_backend_names(discoveries), [asdict(d) for d in discoveries]
+    filtered = _filter_backend_discoveries(discoveries)
+    return detected_backend_names(filtered), [asdict(d) for d in discoveries]
+
+
+def _filter_backend_discoveries(discoveries):
+    requested = [name.strip() for name in os.environ.get("HIVE_RUNNER_BACKENDS", "").split(",") if name.strip()]
+    if not requested:
+        return discoveries
+    unknown = sorted(set(requested) - set(BACKEND_NAMES))
+    if unknown:
+        raise ValueError(
+            "unknown HIVE_RUNNER_BACKENDS entries "
+            f"{', '.join(unknown)}; known backends: {', '.join(BACKEND_NAMES)}"
+        )
+    allowed = set(requested)
+    return [discovery for discovery in discoveries if discovery.name in allowed]
 
 
 def detect_capabilities() -> list[str]:
@@ -85,14 +113,29 @@ def detect_capabilities() -> list[str]:
                 capabilities.append("docker")
         except (OSError, subprocess.SubprocessError):
             pass
-    try:
-        import importlib.util
+    if _has_browser_driver():
+        capabilities.append("browser")
+    return capabilities
 
+
+def _has_browser_driver() -> bool:
+    try:
         if importlib.util.find_spec("playwright") is not None:
-            capabilities.append("browser")
+            return True
     except Exception:
         pass
-    return capabilities
+    if not shutil.which("npx"):
+        return False
+    try:
+        probe = subprocess.run(
+            ["npx", "--no-install", "playwright", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return probe.returncode == 0
 
 
 def _github_repo(repo_url: str) -> str:
@@ -122,16 +165,27 @@ def _runner_github_token() -> str:
 def _git_auth_overlay(token: str) -> dict[str, str]:
     if not token:
         return {}
+    target_key = "http.https://github.com/.extraheader"
+    existing: list[tuple[str, str]] = []
     try:
-        index = int(os.environ.get("GIT_CONFIG_COUNT", "0") or "0")
+        count = int(os.environ.get("GIT_CONFIG_COUNT", "0") or "0")
     except ValueError:
-        index = 0
+        count = 0
+    for i in range(count):
+        key = os.environ.get(f"GIT_CONFIG_KEY_{i}", "")
+        value = os.environ.get(f"GIT_CONFIG_VALUE_{i}", "")
+        if not key or key == target_key:
+            continue
+        existing.append((key, value))
     basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-    return {
-        "GIT_CONFIG_COUNT": str(index + 1),
-        f"GIT_CONFIG_KEY_{index}": "http.https://github.com/.extraheader",
-        f"GIT_CONFIG_VALUE_{index}": f"AUTHORIZATION: basic {basic}",
-    }
+    # GitHub CLI can install a global extraheader. An empty value resets the
+    # multi-valued header list before Hive adds the one it wants.
+    entries = [*existing, (target_key, ""), (target_key, f"AUTHORIZATION: basic {basic}")]
+    overlay = {"GIT_CONFIG_COUNT": str(len(entries))}
+    for i, (key, value) in enumerate(entries):
+        overlay[f"GIT_CONFIG_KEY_{i}"] = key
+        overlay[f"GIT_CONFIG_VALUE_{i}"] = value
+    return overlay
 
 
 def _checkout_plan(repo_url: str) -> tuple[str, dict[str, str]]:
@@ -434,6 +488,20 @@ def prepare_issue_workspace(project_dir: Path, task: dict, headers: dict, auth) 
             log.warning("attachment fetch failed (%s): %s", name, exc)
 
 
+def _reset_task_scratch(project_dir: Path) -> None:
+    scratch = project_dir / ".hive"
+    shutil.rmtree(scratch / "artifacts", ignore_errors=True)
+    result = scratch / "result.json"
+    if result.exists():
+        result.unlink()
+    if scratch.is_dir():
+        for path in scratch.glob("issue-*"):
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+
+
 def _upload_trace(task_id: str, log_file, headers: dict, auth) -> None:
     """Best-effort: ship the kodo JSONL run trace to the control plane so the
     operator can inspect what the agent actually did."""
@@ -456,6 +524,9 @@ def _upload_artifacts(task_id: str, project_dir: Path, headers: dict, auth) -> l
     uploaded: list[str] = []
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
         name = path.relative_to(root).as_posix()
+        if any(part in SKIP_ARTIFACT_PARTS for part in Path(name).parts):
+            log.info("skipping generated artifact dependency/cache file %s", name)
+            continue
         try:
             response = client.post(f"/api/tasks/{task_id}/artifacts/{name}", content=path.read_bytes())
             response.raise_for_status()
@@ -479,6 +550,7 @@ def execute(task: dict, headers: dict, auth) -> dict:
         return {"text": str(exc), "is_error": True}
     except subprocess.SubprocessError as exc:
         return {"text": f"checkout failed: {exc}", "is_error": True}
+    _reset_task_scratch(project_dir)
     if task["kind"] == "preflight":
         with _git_auth_environment(task["repo"]):
             return run_preflight(project_dir)

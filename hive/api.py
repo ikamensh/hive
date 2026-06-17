@@ -1119,15 +1119,25 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             project_id=run.project_id,
             run_id=run.id,
         ):
-            if task.status != TaskStatus.pending:
-                continue
-            task.status = TaskStatus.cancelled
-            task.result_text = "Cancelled by operator when the issue run was cancelled."
-            task.finished_at = time.time()
-            store.put(task)
-            if task.kind in (TaskKind.resolve, TaskKind.review):
-                cancel_issue_work(store, task)
-            cancelled_tasks += 1
+            if task.status == TaskStatus.pending:
+                task.status = TaskStatus.cancelled
+                task.result_text = "Cancelled by operator when the issue run was cancelled."
+                task.finished_at = time.time()
+                store.put(task)
+                if task.kind in (TaskKind.resolve, TaskKind.review):
+                    cancel_issue_work(store, task)
+                cancelled_tasks += 1
+            elif task.status == TaskStatus.running:
+                if task.delivered:
+                    task.cancel_requested = True
+                else:
+                    task.status = TaskStatus.cancelled
+                    task.result_text = "Cancelled by operator before delivery to a runner."
+                    task.finished_at = time.time()
+                    if task.kind in (TaskKind.resolve, TaskKind.review):
+                        cancel_issue_work(store, task)
+                store.put(task)
+                cancelled_tasks += 1
 
         run = refresh_issue_run(store, project, run)
 
@@ -1157,6 +1167,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             backend=body.backend or config.test_refresh_backend,
             model=body.model or config.test_refresh_model,
         )
+        supervisor.wake(project_id, f"Testing refresh task {task.id} was queued.")
         return {"task": task.model_dump()}
 
     @app.post("/api/projects/{project_id}/workstreams/{workstream_id}/test-episodes")
@@ -1186,6 +1197,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             confirm_backend=body.confirm_backend or config.test_confirm_backend,
             confirm_model=body.confirm_model or config.test_confirm_model,
         )
+        supervisor.wake(project_id, f"Testing episode {episode.id} was created.")
         return {"episode": episode.model_dump(), "refresh_task": task.model_dump()}
 
     @app.post("/api/test-episodes/{episode_id}/cancel")

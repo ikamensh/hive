@@ -675,6 +675,7 @@ class FindingKind(StrEnum):
 class FindingStatus(StrEnum):
     suspected = "suspected"
     confirmed = "confirmed"
+    blocked = "blocked"
     rejected = "rejected"
     constrained = "constrained"
     duplicate = "duplicate"

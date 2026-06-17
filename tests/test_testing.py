@@ -6,6 +6,7 @@ from hive.blobstore import LocalBlobStore
 from hive.config import Config
 from hive.models import (
     Finding,
+    FindingStatus,
     HumanTask,
     Project,
     Question,
@@ -513,6 +514,102 @@ def test_malformed_sweep_findings_block_story_and_file_todo(tmp_path):
     todos = store.list(HumanTask, project_id=pid)
     assert [t.title for t in todos] == ["Repair testing sweep output for webhook-retry"]
     assert "missing or malformed findings JSON" in todos[0].instructions
+
+
+def test_blocked_sweep_files_actionable_todo(tmp_path):
+    repo = spec_repo(tmp_path)
+    client, store = app(tmp_path, repo)
+    pid = _project_with_repo(client, repo)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    stream = next(w for w in client.get(f"/api/projects/{pid}").json()["workstreams"] if w["kind"] == "testing")
+
+    _episode_id, sweep = _start_episode_to_sweep(client, store, pid, rid, stream["id"])
+    task = store.get(Task, sweep["id"])
+    task.artifact_blobs = ["setup.log"]
+    store.put(task)
+    _report(
+        client,
+        sweep["id"],
+        "Could not start the app.\nSWEEP: BLOCKED",
+        structured_result={
+            "task_id": sweep["id"],
+            "outcome": "blocked",
+            "summary": "local app failed to start",
+            "fidelity": "local",
+            "findings": [],
+        },
+    )
+
+    story = store.list(Story, project_id=pid)[0]
+    assert story.status == StoryStatus.blocked
+    todos = store.list(HumanTask, project_id=pid)
+    assert [t.title for t in todos] == ["Unblock testing sweep for webhook-retry"]
+    assert "local app failed to start" in todos[0].instructions
+    assert "`setup.log`" in todos[0].instructions
+
+
+def test_confirmation_error_blocks_finding_instead_of_rejecting(tmp_path):
+    repo = spec_repo(tmp_path)
+    client, store = app(tmp_path, repo)
+    pid = _project_with_repo(client, repo)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    stream = next(w for w in client.get(f"/api/projects/{pid}").json()["workstreams"] if w["kind"] == "testing")
+
+    _episode_id, sweep = _start_episode_to_sweep(client, store, pid, rid, stream["id"])
+    _report(
+        client,
+        sweep["id"],
+        "Found a retry bug.\n"
+        "SWEEP: FINDINGS\n"
+        "```json\n"
+        '{"fidelity":"local","findings":[{"kind":"bug","severity":"high",'
+        '"summary":"Webhook retries stop after one attempt",'
+        '"detail":"Return 500 from the webhook endpoint and observe that Hive records only one retry attempt.",'
+        '"oracle":"Failed webhooks must retry with backoff"}]}\n'
+        "```",
+    )
+    finding = store.list(Finding, project_id=pid)[0]
+    _pump(client, store)
+    repro = _poll(client, rid)
+
+    _report(client, repro["id"], "checkout failed: duplicate Authorization header", is_error=True)
+
+    finding = store.get(Finding, finding.id)
+    story = store.list(Story, project_id=pid)[0]
+    assert finding.status == FindingStatus.blocked
+    assert story.status == StoryStatus.blocked
+    todos = store.list(HumanTask, project_id=pid)
+    assert [t.title for t in todos] == ["Unblock testing confirmation for webhook-retry"]
+    assert "blocked, not rejected" in todos[0].instructions
+
+
+def test_sweep_finding_prefers_explicit_evidence_over_all_task_artifacts(tmp_path):
+    repo = spec_repo(tmp_path)
+    client, store = app(tmp_path, repo)
+    pid = _project_with_repo(client, repo)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    stream = next(w for w in client.get(f"/api/projects/{pid}").json()["workstreams"] if w["kind"] == "testing")
+
+    _episode_id, sweep = _start_episode_to_sweep(client, store, pid, rid, stream["id"])
+    task = store.get(Task, sweep["id"])
+    task.artifact_blobs = ["specific.log", "node_modules/tool/index.js", "everything.log"]
+    store.put(task)
+    _report(
+        client,
+        sweep["id"],
+        "Found a retry bug.\n"
+        "SWEEP: FINDINGS\n"
+        "```json\n"
+        '{"fidelity":"local","findings":[{"kind":"bug","severity":"high",'
+        '"summary":"Webhook retries stop after one attempt",'
+        '"detail":"Return 500 from the webhook endpoint and observe that Hive records only one retry attempt.",'
+        '"oracle":"Failed webhooks must retry with backoff",'
+        '"evidence_blobs":["specific.log"]}]}\n'
+        "```",
+    )
+
+    finding = store.list(Finding, project_id=pid)[0]
+    assert finding.evidence_blobs == ["specific.log"]
 
 
 def test_weak_sweep_findings_are_not_filed(tmp_path):

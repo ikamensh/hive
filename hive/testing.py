@@ -908,6 +908,7 @@ def persist_sweep_findings(
         if isinstance(evidence, str):
             evidence = [evidence]
         evidence = [str(e) for e in evidence if str(e).strip()]
+        evidence_blobs = evidence or task.artifact_blobs
         finding = existing or Finding(
             workspace_id=project.workspace_id,
             project_id=project.id,
@@ -926,7 +927,7 @@ def persist_sweep_findings(
         finding.summary = summary
         finding.detail = str(item.get("detail") or item.get("repro_steps") or finding.detail)
         finding.oracle = oracle
-        finding.evidence_blobs = list(dict.fromkeys([*finding.evidence_blobs, *evidence, *task.artifact_blobs]))
+        finding.evidence_blobs = list(dict.fromkeys([*finding.evidence_blobs, *evidence_blobs]))
         finding.status = FindingStatus.suspected
         finding.sweep_task_id = task.id
         finding.updated_at = now_s()

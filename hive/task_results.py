@@ -768,6 +768,41 @@ class TaskResultProcessor:
         if episode:
             refresh_episode_counts(self.store, project, episode)
 
+    def _block_story_on_sweep_blocked(
+        self,
+        project: Project,
+        story: Story,
+        task: Task,
+        episode: TestEpisode | None,
+        payload: dict,
+        output: str,
+    ) -> None:
+        story.status = StoryStatus.blocked
+        story.last_episode_id = task.run_id
+        story.last_result_task_id = task.id
+        story.updated_at = time.time()
+        self.store.put(story)
+        summary = str(payload.get("summary") or "").strip()
+        evidence = task.artifact_blobs or []
+        evidence_lines = "\n".join(f"- `{name}`" for name in evidence) or "(none uploaded)"
+        escalate(
+            self.store,
+            f"Unblock testing sweep for {story.key}",
+            instructions=(
+                "Hive's testing sweep could not reach a pass/fail verdict. The story "
+                "was blocked rather than filing a weak issue.\n\n"
+                f"Story: `{story.key}`\n"
+                f"Task: `{task.id}`\n"
+                f"Reason: {summary or 'sweep reported SWEEP: BLOCKED'}\n\n"
+                f"Evidence artifacts:\n{evidence_lines}\n\n"
+                f"Task output:\n\n```\n{output.strip()[:2000]}\n```"
+            ),
+            project_id=project.id,
+            workspace_id=project.workspace_id,
+        )
+        if episode:
+            refresh_episode_counts(self.store, project, episode)
+
     def _handle_test_refresh_result(self, task: Task, body: TaskResult) -> None:
         project = self.store.get(Project, task.project_id)
         workstream = self.store.get(ProjectWorkstream, task.workstream_id)
@@ -855,6 +890,8 @@ class TaskResultProcessor:
             self._mark_story_passing(project, story, task, episode, payload)
         elif outcome == TestSweepOutcome.findings:
             self._handle_sweep_findings(project, story, task, episode, payload, body.text)
+        elif outcome == TestSweepOutcome.blocked:
+            self._block_story_on_sweep_blocked(project, story, task, episode, payload, body.text)
         else:
             story.status = StoryStatus.blocked
             story.last_episode_id = task.run_id
@@ -992,6 +1029,42 @@ class TaskResultProcessor:
         story.updated_at = time.time()
         self.store.put(story)
 
+    def _block_test_confirmation(
+        self,
+        project: Project,
+        story: Story,
+        finding: Finding,
+        task: Task,
+        episode: TestEpisode | None,
+        output: str,
+    ) -> None:
+        finding.status = FindingStatus.blocked
+        finding.detail = (finding.detail + "\n\nConfirmation task blocked:\n" + output).strip()
+        finding.updated_at = time.time()
+        self.store.put(finding)
+        story.status = StoryStatus.blocked
+        story.last_episode_id = task.run_id
+        story.last_result_task_id = task.id
+        story.updated_at = time.time()
+        self.store.put(story)
+        escalate(
+            self.store,
+            f"Unblock testing confirmation for {story.key}",
+            instructions=(
+                "Hive found a suspected testing issue, but the independent confirmation "
+                "task failed before it could decide whether the finding is real. The "
+                "finding was blocked, not rejected.\n\n"
+                f"Story: `{story.key}`\n"
+                f"Finding: {finding.summary}\n"
+                f"Task: `{task.id}`\n\n"
+                f"Task output:\n\n```\n{output.strip()[:2000]}\n```"
+            ),
+            project_id=project.id,
+            workspace_id=project.workspace_id,
+        )
+        if episode:
+            refresh_episode_counts(self.store, project, episode)
+
     def _handle_test_confirm_result(self, task: Task, body: TaskResult) -> None:
         project = self.store.get(Project, task.project_id)
         finding = self.store.get(Finding, task.workstream_id)
@@ -1004,12 +1077,7 @@ class TaskResultProcessor:
                 refresh_episode_counts(self.store, project, episode)
             return
         if body.is_error:
-            finding.status = FindingStatus.rejected
-            finding.detail = (finding.detail + "\n\nConfirmation task errored:\n" + body.text).strip()
-            finding.updated_at = time.time()
-            self.store.put(finding)
-            if episode:
-                refresh_episode_counts(self.store, project, episode)
+            self._block_test_confirmation(project, story, finding, task, episode, body.text)
             return
         if task.kind == TaskKind.test_reproduce:
             outcome = _test_repro_outcome(body)

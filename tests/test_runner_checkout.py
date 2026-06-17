@@ -2,11 +2,133 @@ import subprocess
 
 import pytest
 
+from hive.backends import BackendDiscovery
 from hive import runner
 
 
 def _completed(args, stdout=""):
     return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+
+
+def _discovery(name, installed=True):
+    return BackendDiscovery(name=name, installed=installed, status="ok")
+
+
+def test_discovery_payload_can_limit_advertised_backends(monkeypatch):
+    monkeypatch.setenv("HIVE_RUNNER_BACKENDS", "codex")
+    monkeypatch.setattr(
+        runner,
+        "discover_backends",
+        lambda: [_discovery("claude"), _discovery("codex"), _discovery("gemini-cli")],
+    )
+
+    detected, discoveries = runner.discovery_payload()
+
+    assert detected == ["codex"]
+    assert [d["name"] for d in discoveries] == ["claude", "codex", "gemini-cli"]
+
+
+def test_discovery_payload_rejects_unknown_backend_filter(monkeypatch):
+    monkeypatch.setenv("HIVE_RUNNER_BACKENDS", "codex,nope")
+    monkeypatch.setattr(runner, "discover_backends", lambda: [_discovery("codex")])
+
+    with pytest.raises(ValueError, match="unknown HIVE_RUNNER_BACKENDS"):
+        runner.discovery_payload()
+
+
+def test_detect_capabilities_recognizes_node_playwright(monkeypatch):
+    def fake_which(name):
+        return "/usr/bin/npx" if name == "npx" else None
+
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        return _completed(args, "Version 1.61.0\n")
+
+    monkeypatch.setattr(runner.shutil, "which", fake_which)
+    monkeypatch.setattr(runner.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    assert runner.detect_capabilities() == ["browser"]
+    assert calls == [["npx", "--no-install", "playwright", "--version"]]
+
+
+def test_detect_capabilities_skips_browser_without_driver(monkeypatch):
+    monkeypatch.setattr(runner.shutil, "which", lambda name: None)
+    monkeypatch.setattr(runner.importlib.util, "find_spec", lambda name: None)
+
+    assert runner.detect_capabilities() == []
+
+
+def test_upload_artifacts_skips_dependency_trees(monkeypatch, tmp_path):
+    root = tmp_path / ".hive" / "artifacts"
+    root.mkdir(parents=True)
+    (root / "evidence.log").write_text("ok")
+    dependency = root / "browser-runner" / "node_modules" / "playwright-core"
+    dependency.mkdir(parents=True)
+    (dependency / "index.js").write_text("generated")
+    build = root / "dist"
+    build.mkdir()
+    (build / "bundle.js").write_text("generated")
+    posted = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def post(self, url, content):
+            posted.append((url, content))
+            return FakeResponse()
+
+    monkeypatch.setattr(runner.httpx, "Client", FakeClient)
+
+    uploaded = runner._upload_artifacts("task-1", tmp_path, {}, None)
+
+    assert uploaded == ["evidence.log"]
+    assert [url for url, _content in posted] == ["/api/tasks/task-1/artifacts/evidence.log"]
+
+
+def test_reset_task_scratch_removes_previous_runner_state(tmp_path):
+    scratch = tmp_path / ".hive"
+    artifacts = scratch / "artifacts"
+    artifacts.mkdir(parents=True)
+    (artifacts / "old.log").write_text("stale")
+    issue = scratch / "issue-123"
+    issue.mkdir()
+    (issue / "ISSUE.md").write_text("stale issue")
+    (scratch / "result.json").write_text("{}")
+    (scratch / "operator-note.md").write_text("keep")
+
+    runner._reset_task_scratch(tmp_path)
+
+    assert not artifacts.exists()
+    assert not issue.exists()
+    assert not (scratch / "result.json").exists()
+    assert (scratch / "operator-note.md").read_text() == "keep"
+
+
+def test_git_auth_overlay_replaces_inherited_github_extraheader(monkeypatch):
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.name")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "Hive Runner")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "http.https://github.com/.extraheader")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_1", "AUTHORIZATION: basic old")
+
+    overlay = runner._git_auth_overlay("ghp_new")
+
+    assert overlay["GIT_CONFIG_COUNT"] == "3"
+    assert overlay["GIT_CONFIG_KEY_0"] == "user.name"
+    assert overlay["GIT_CONFIG_VALUE_0"] == "Hive Runner"
+    assert overlay["GIT_CONFIG_KEY_1"] == "http.https://github.com/.extraheader"
+    assert overlay["GIT_CONFIG_VALUE_1"] == ""
+    assert overlay["GIT_CONFIG_KEY_2"] == "http.https://github.com/.extraheader"
+    assert "ghp_new" not in overlay["GIT_CONFIG_VALUE_2"]
+    assert overlay["GIT_CONFIG_VALUE_2"] != "AUTHORIZATION: basic old"
 
 
 def test_checkout_uses_https_token_auth_for_github_ssh_urls(monkeypatch, tmp_path):
@@ -21,9 +143,11 @@ def test_checkout_uses_https_token_auth_for_github_ssh_urls(monkeypatch, tmp_pat
             assert "ghp_runner" not in args
             (tmp_path / "work" / "hive").mkdir(parents=True)
             env = kwargs["env"]
-            assert env["GIT_CONFIG_COUNT"] == "1"
+            assert env["GIT_CONFIG_COUNT"] == "2"
             assert env["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
-            assert "ghp_runner" not in env["GIT_CONFIG_VALUE_0"]
+            assert env["GIT_CONFIG_VALUE_0"] == ""
+            assert env["GIT_CONFIG_KEY_1"] == "http.https://github.com/.extraheader"
+            assert "ghp_runner" not in env["GIT_CONFIG_VALUE_1"]
         if args[:2] == ["git", "symbolic-ref"]:
             return _completed(args, "origin/main\n")
         return _completed(args)
