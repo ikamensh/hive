@@ -206,7 +206,8 @@ Ready to approve means:
 These are the five lean readiness checks — capability, actor, acceptance,
 boundary, authority — in intake form. The first four were already implicit in
 the mission/iteration/steps/assumptions criteria; the authority line is the only
-addition, and it is satisfied once the project has an authority contract.
+addition, and it is satisfied by the global `must_ask` default (plus any project
+override).
 
 If material questions remain, the intake panel shows them with the current best
 brief. The user can answer, correct the brief, or proceed with assumptions.

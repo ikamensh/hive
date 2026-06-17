@@ -14,16 +14,17 @@ parallel framework.
 
 1. **Clarity.** At any moment the human can see what they specified versus what
    Hive decided on its own, and reverse any Hive decision.
-2. **Leverage.** Hive does not ask the human about anything it is authorized to
-   decide. Human input is reserved for choices that are product-sensitive,
-   expensive to reverse, or genuinely ambiguous in a way Hive cannot resolve.
+2. **Leverage.** Hive decides by default and logs it. Human input is reserved
+   for the `must_ask` categories the human reserved, and for a danger Hive
+   spots and can name in an otherwise-unlisted decision.
 
 The readiness question follows from these. It is **not** "is everything
 specified?" It is:
 
 > Is enough known for this increment, and is each remaining unknown either
-> (a) irrelevant to this increment, (b) authorized to Hive by the authority
-> contract, (c) explicitly assumed and logged, or (d) isolated as a question?
+> (a) irrelevant to this increment, (b) decided by Hive and logged, (c) a
+> `must_ask` category, or (d) a danger Hive named — the last two becoming
+> questions?
 
 ## The three primitives
 
@@ -79,23 +80,27 @@ The UI ("Needs you" / a spec view) filters on `source_type` to show, e.g.,
 *"you decided 4 · Hive assumed 7 (6 reversible)"*. That filterable count is the
 concrete realization of north star 1.
 
-### 2. Agent authority — a hard boundary that bounds the dial
+### 2. Agent authority — one `must_ask` list, decide everything else
 
-The only autonomy control today is the scalar `guess_propensity`
-(→ `ClarificationPolicy`). The missing piece is a **category boundary**: which
-decisions are off-limits regardless of how eager the dial is, and which are
-always Hive's.
+The model is **bias-to-act, not enumerate-permissions**: Hive may decide
+anything by default and logs it. There is exactly one explicit list — `must_ask`
+— plus an escape hatch for dangers nobody listed. There is deliberately **no
+`may_decide` list**: trying to enumerate what Hive is allowed to do is bloat and
+is wrong by omission (the work it can do is open-ended). Two ways a decision
+leaves the default-act path:
+
+1. **Declared `must_ask` categories** — the human's standing line on *whose call
+   it is*, independent of how reversible the choice is. A `must_ask` set is
+   baked in as a **global default floor** (below); a project adds to it only
+   when it diverges.
+2. **A danger Hive names** — if Hive spots a clear risk in a decision that is
+   *not* on any list, it stops and asks, and the question **must state the
+   concrete danger**. "I'm unsure" is not a valid escalation; "this would let a
+   non-member read another org's data" is. This mirrors the rule that you only
+   stop to ask when you can name the specific blocker.
 
 ```markdown
-## Agent authority (project default — mission.md)
-
-may_decide:
-  - internal API and module shape
-  - database table/column names and migration shape
-  - test structure and coverage
-  - local refactors that keep the implementation clean
-  - ordinary validation and conventional HTTP status codes
-  - minor UX details consistent with existing conventions
+## Agent authority — must_ask (global default floor)
 
 must_ask:
   - who is authorized to perform an action (permission/auth model)
@@ -104,26 +109,32 @@ must_ask:
   - public API contracts and breaking changes
   - legal/compliance wording and notices
   - security-sensitive defaults (e.g. token handling, account-existence leaks)
-  - major user-visible flow changes
+
+## Agent authority (project override — mission.md, usually empty)
+
+also_must_ask:        # project-specific, e.g. fintech
+  - rounding / interest computation
+  - KYC and consent wording
 ```
 
-The relationship to `guess_propensity` removes any redundancy:
+The floor lives in the agent/verifier prompt, so most projects author nothing.
+`must_ask` captures what `severity × reversibility` cannot: a permission or
+plan-limit change is often trivially reversible in code yet is still the human's
+call. `iteration.md` may add an **Authority** section to grant extra latitude for
+a low-stakes slice ("this iteration may decide the invitation-email copy") or to
+tighten a sensitive one.
 
-- **`must_ask`** categories are *never* guessed, at any dial setting.
-- **`may_decide`** categories are *always* Hive's, logged as `code_derived`/
-  `inferred` decisions, never surfaced as questions.
-- **`guess_propensity`** governs only the **gray zone** — everything on neither
-  list — choosing guess-and-flag (→ ledger entry) vs. ask (→ inbox question).
+`guess_propensity` no longer arbitrates a gray zone — the default is to act. It
+now tunes only **how readily Hive self-escalates a danger it spotted** versus
+proceeding and logging an `agent_proposed` decision: a cautious dial asks on
+weaker dangers, a permissive one only on strong ones.
 
-So authority draws the boundary; the dial operates inside it. The durable
-`must_ask` set is project-invariant and lives once in `mission.md`. `iteration.md`
-may add an **Authority** override section to grant extra latitude for a low-stakes
-slice ("this iteration may also decide invitation-email copy") or tighten it for a
-sensitive one.
-
-When Hive makes a `must_ask` decision it would otherwise have to guess, it parks
-the work item and files a structured question (with options and a recommendation,
-per `acceptance/clarification-attention-queue.md`) instead of proceeding.
+When a decision is `must_ask` or a named danger, Hive parks the work item and
+files a structured question (context, the danger or gap, options, recommendation,
+per `acceptance/clarification-attention-queue.md`) instead of proceeding. Because
+`must_ask` is a behavioral guarantee — Hive cannot deterministically detect every
+sensitive decision — the verifier's unauthorized-scope check is the backstop that
+catches a `must_ask` decision made silently in a diff.
 
 ### 3. Lean readiness gate — one new check over what intake already verifies
 
@@ -134,19 +145,18 @@ work item." The lean form is five checks:
 2. **Actor** — who can do it?
 3. **Acceptance** — how do we know it works?
 4. **Boundary** — what is explicitly out of scope?
-5. **Authority** — what may Hive decide by itself?
+5. **Authority** — is anything this increment needs a `must_ask` category?
 
 Checks 1–4 are already Hive's intake-readiness criteria
 (`wiki/project-intake.md` §Readiness): mission stated, iteration stated in
 verifiable terms, likely steps exist, out-of-scope explicit. **Authority is the
-only genuinely new check** — and it is satisfied as soon as the project has an
-authority contract (primitive 2). So the lean gate is intake-readiness plus one
-line, not a separate rubric.
+only genuinely new check** — satisfied by default (decide everything) unless the
+increment touches a `must_ask` category, which becomes a question. So the lean
+gate is intake-readiness plus one line, not a separate rubric.
 
-If a check fails, the planner either asks a short, material question (gray-zone or
-`must_ask`) or makes a reversible assumption and logs it (`may_decide` or
-gray-zone under a permissive dial) — it does not block on detail Hive is
-authorized to decide.
+If a check fails, the planner asks only when the decision is `must_ask` or a
+danger it can name; otherwise it decides, logs an `agent_proposed` entry, and
+proceeds — it does not block on detail it is free to decide.
 
 ## Workflow
 
@@ -162,14 +172,14 @@ Spec critique  ──►  inbox questions (top findings) + guess-and-flag entrie
    ▼
 Readiness gate (5 checks) per work item
    │  pass ──► orchestrator plans, builds; verifier attacks (anti-bloat)
-   │  fail ──► ask (must_ask / gray zone) OR assume-and-log (may_decide)
+   │  fail ──► ask (must_ask or named danger) OR decide-and-log (everything else)
    ▼
 Decisions accumulate; the human/AI boundary stays visible and reversible.
 ```
 
-The human gives intent and boundaries. Hive turns that into work, makes the
-reversible and authorized decisions on its own logic, asks only material
-product questions, builds, and records every decision with its provenance.
+The human gives intent and the `must_ask` line. Hive turns that into work,
+decides everything else on its own logic, asks only on `must_ask` or a danger it
+can name, builds, and records every decision with its provenance.
 
 ## Scope
 
@@ -177,8 +187,9 @@ product questions, builds, and records every decision with its provenance.
 
 - `wiki/decisions.md` ledger with provenance fields, written by intake and
   critique, read by the orchestrator, surfaced and reversible in the UI.
-- Agent authority contract: project default in `mission.md`, optional per-
-  iteration override in `iteration.md`, enforced as a `must_ask` park.
+- Agent authority: a global `must_ask` default in the agent/verifier prompt,
+  optional `mission.md`/`iteration.md` overrides, enforced as a `must_ask` park
+  plus the verifier's unauthorized-scope backstop. No `may_decide` list.
 - The Authority check folded into intake-readiness — completing the lean gate.
 
 **Design notes (build only when a demo run proves the need):**
