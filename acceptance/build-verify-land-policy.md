@@ -6,7 +6,7 @@ As an operator I can watch Hive build, verify, and land work according to policy
 - Tasks for different repos may run in parallel when resources allow.
 - Every work task is followed by an independent verify task that checks actual behavior against acceptance criteria and rejects unjustified bloat.
 - A rejected verify queues a fix or parks with a clear question after the bounded retry limit.
-- PR mode lands work on a workstream branch with a PR, while direct-push mode lands on the target branch according to the configured policy and still requires verification before the goal can complete.
+- PR mode lands work on a workstream branch with a PR, while direct-push mode follows the configured landing policy and still requires accepted verification before the goal can complete.
 - `idle: goal complete` is reachable only when there are no active tasks, pending tasks, open questions, or unaccepted completed workstreams.
 
 ## Examples
@@ -19,3 +19,6 @@ As an operator I can watch Hive build, verify, and land work according to policy
 - Given the project autonomy is set to PR mode
   When a worker finishes a change
   Then the result is visible on a Hive workstream branch or PR instead of silently landing as an unchecked default-branch change
+
+## Questions
+- `iteration.md` says direct-push mode requires verification before pushing to the target branch, while `wiki/architecture.md` says `direct_push` lands on the default branch immediately and verification is an after-the-fact safety net. Which ordering should acceptance enforce?

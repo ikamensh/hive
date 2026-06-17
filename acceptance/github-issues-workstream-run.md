@@ -2,6 +2,7 @@
 As an operator I can trigger a GitHub issues workstream run so that Hive fixes selected repository issues one at a time without unsafe landing.
 
 ## Rules
+- Issue solving is triggered from a GitHub issues workstream inside a project, not by creating a separate issue-mode project.
 - Before a run, Hive preflights the repo, GitHub token write access, runner git push ability, and runner `gh` commenting auth.
 - A scan fetches open issue titles, bodies, comments, and embedded image attachments, then snapshots the selected issue numbers or all issues open at trigger time.
 - New upstream issues discovered after a run starts do not join that run unless I start another run.
@@ -10,6 +11,9 @@ As an operator I can trigger a GitHub issues workstream run so that Hive fixes s
 - A fixed issue gets a fresh independent review; accept merges into the default branch and closes the issue, while reject or landing failure leaves the default branch untouched and needs attention.
 
 ## Examples
+- Given a project has a GitHub issues workstream for a member repo
+  When I open the project Issues view
+  Then I can preflight, sync, or start a manual issue run without changing the project's source mode
 - Given I select issues 2 through 4 for a run
   When issue 5 is opened upstream during the scan
   Then issue 5 is visible in the workstream but is not started as part of the selected run
