@@ -54,7 +54,7 @@ CANCEL_POLL_S = 5.0  # how often a running task checks for an operator cancel re
 log = logging.getLogger("hive.runner")
 
 EXHAUSTED_PATTERNS = re.compile(
-    r"rate.?limit|quota|usage.?limit|plan.?limit|too many requests|429\b|subscription|billing",
+    r"rate.?limit|quota|usage.?limit|plan.?limit|too many requests|429\b|credits?",
     re.IGNORECASE,
 )
 SKIP_ARTIFACT_PARTS = {

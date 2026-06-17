@@ -19,6 +19,11 @@ CODEX_RETRY_LIMIT = (
     "request id: 9bd33f31fd269bb1-HNL"
 )
 
+CLAUDE_SUBSCRIPTION_DISABLED = (
+    "Your organization has disabled Claude subscription access for Claude Code · "
+    "Use an Anthropic API key instead, or ask your admin to enable access"
+)
+
 
 def _resource_exhausted(text: str, *, is_error: bool = True) -> bool:
     """Mirror the flag the runner sets on task results."""
@@ -35,6 +40,10 @@ def test_codex_rate_limit_json_detected():
 
 def test_codex_retry_limit_detected():
     assert _resource_exhausted(CODEX_RETRY_LIMIT)
+
+
+def test_claude_subscription_access_disabled_is_not_temporary_quota():
+    assert not _resource_exhausted(CLAUDE_SUBSCRIPTION_DISABLED)
 
 
 def test_success_not_exhausted():

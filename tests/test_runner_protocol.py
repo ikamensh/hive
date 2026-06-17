@@ -2,6 +2,7 @@
 left alone on heartbeat registration."""
 
 import subprocess
+import time
 
 from fastapi.testclient import TestClient
 
@@ -22,6 +23,20 @@ from hive.supervisor import Supervisor
 from hive.runner import checkout, validate_probe_result
 
 H = {"X-Hive-Token": "t"}
+CLAUDE_CODE_DISCOVERY = {
+    "name": "claude",
+    "installed": True,
+    "status": "ok",
+    "path": "/opt/homebrew/bin/claude",
+    "version": "2.1.145 (Claude Code)",
+}
+CODEX_CLI_DISCOVERY = {
+    "name": "codex",
+    "installed": True,
+    "status": "ok",
+    "path": "/opt/homebrew/bin/codex",
+    "version": "codex-cli 0.139.0",
+}
 
 
 def make_client(store):
@@ -104,6 +119,75 @@ def test_register_auto_probes_new_resource_and_records_discovery():
         headers=H,
     )
     assert store.get(Resource, resource.id).usability_status == ResourceUsability.usable
+
+
+def test_boot_auto_probes_stale_claude_and_codex_states_after_healthy_discovery():
+    store = MemoryStore()
+    client = make_client(store)
+    rid = client.post(
+        "/api/runners/register",
+        json={
+            "name": "raven",
+            "backends": ["claude", "codex"],
+            "discoveries": [CLAUDE_CODE_DISCOVERY, CODEX_CLI_DISCOVERY],
+        },
+        headers=H,
+    ).json()["runner_id"]
+    resources = {resource.backend: resource for resource in store.list(Resource)}
+    claude = resources["claude"]
+    claude.usability_status = ResourceUsability.usable
+    claude.cooldown_until = time.time() + 3600
+    claude.last_exhaustion_text = (
+        "Your organization has disabled Claude subscription access for Claude Code"
+    )
+    store.put(claude)
+    codex = resources["codex"]
+    codex.usability_status = ResourceUsability.failed
+    codex.last_probe_text = (
+        "warning: `--full-auto` is deprecated; use `--sandbox workspace-write` instead."
+    )
+    store.put(codex)
+
+    client.post(
+        "/api/runners/register",
+        json={
+            "name": "raven",
+            "backends": ["claude", "codex"],
+            "boot": True,
+            "auto_probe": True,
+            "discoveries": [CLAUDE_CODE_DISCOVERY, CODEX_CLI_DISCOVERY],
+        },
+        headers=H,
+    )
+
+    probes = store.list(Task)
+    assert {task.backend for task in probes} == {"claude", "codex"}
+    assert all(task.kind == TaskKind.probe and task.runner_id == rid for task in probes)
+    assert {
+        resource.backend: resource.usability_status
+        for resource in store.list(Resource)
+    } == {"claude": ResourceUsability.probing, "codex": ResourceUsability.probing}
+
+    for task in probes:
+        client.post(f"/api/tasks/{task.id}/result", json={"text": PROBE_MARKER}, headers=H)
+
+    payload = client.get("/api/resources").json()["resources"]
+    by_backend = {resource["backend"]: resource for resource in payload}
+    assert by_backend["claude"]["available"] is True
+    assert by_backend["claude"]["cooldown_until"] == 0
+    assert by_backend["codex"]["available"] is True
+
+    client.post(
+        "/api/runners/register",
+        json={
+            "name": "raven",
+            "backends": ["claude", "codex"],
+            "auto_probe": True,
+            "discoveries": [CLAUDE_CODE_DISCOVERY, CODEX_CLI_DISCOVERY],
+        },
+        headers=H,
+    )
+    assert len(store.list(Task)) == 2
 
 
 def test_register_records_machine_metadata():

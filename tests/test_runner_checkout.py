@@ -2,16 +2,52 @@ import subprocess
 
 import pytest
 
-from hive.backends import BackendDiscovery
+from hive import backends
+from hive.backends import BackendDiscovery, REGISTRY, discover_backend
 from hive import runner
 
 
-def _completed(args, stdout=""):
-    return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+def _completed(args, stdout="", stderr="", returncode=0):
+    return subprocess.CompletedProcess(args, returncode, stdout=stdout, stderr=stderr)
 
 
 def _discovery(name, installed=True):
     return BackendDiscovery(name=name, installed=installed, status="ok")
+
+
+@pytest.mark.parametrize(
+    ("backend", "binary", "version"),
+    [
+        ("claude", "claude", "2.1.145 (Claude Code)"),
+        ("codex", "codex", "codex-cli 0.139.0"),
+    ],
+)
+def test_discover_backend_recognizes_realistic_claude_and_codex_versions(
+    monkeypatch,
+    backend,
+    binary,
+    version,
+):
+    calls = []
+
+    def fake_which(name):
+        return f"/opt/homebrew/bin/{name}" if name == binary else None
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        return _completed(args, stdout=f"{version}\n")
+
+    monkeypatch.setattr(backends.shutil, "which", fake_which)
+    monkeypatch.setattr(backends.subprocess, "run", fake_run)
+
+    discovery = discover_backend(REGISTRY[backend])
+
+    assert discovery.installed is True
+    assert discovery.status == "ok"
+    assert discovery.path == f"/opt/homebrew/bin/{binary}"
+    assert discovery.version == version
+    assert discovery.message == ""
+    assert calls[0][0] == list(REGISTRY[backend].preflight)
 
 
 def test_discovery_payload_can_limit_advertised_backends(monkeypatch):
