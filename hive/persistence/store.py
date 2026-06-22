@@ -141,6 +141,10 @@ class StoreBase(ABC):
         self, holder: str, ttl_s: float, workspace_id: str = DEFAULT_WORKSPACE_ID
     ) -> str: ...
 
+    @abstractmethod
+    def release_leader(self, holder: str, workspace_id: str = DEFAULT_WORKSPACE_ID) -> bool:
+        """Release the leader lease iff `holder` still owns it."""
+
     # -- derived queries (depend only on list) -------------------------------
 
     def open_questions(self, project_id: str) -> list[Question]:
@@ -234,6 +238,22 @@ class MemoryStore(StoreBase):
             else:
                 self._leases[workspace_id] = lease
             return holder
+
+    def release_leader(self, holder: str, workspace_id: str = DEFAULT_WORKSPACE_ID) -> bool:
+        with self._lock:
+            if workspace_id == DEFAULT_WORKSPACE_ID:
+                lease = self._lease
+                if not lease or lease["holder"] != holder:
+                    return False
+                self._lease = None
+                return True
+            if not hasattr(self, "_leases"):
+                self._leases = {}
+            lease = self._leases.get(workspace_id)
+            if not lease or lease["holder"] != holder:
+                return False
+            self._leases.pop(workspace_id, None)
+            return True
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
@@ -330,6 +350,12 @@ class FileStore(MemoryStore):
         else:
             _atomic_write_json(self._settings_path(f"leader_lease_{workspace_id}.json"), lease)
 
+    def _delete_lease(self, workspace_id: str) -> None:
+        if workspace_id == DEFAULT_WORKSPACE_ID:
+            self._settings_path("leader_lease.json").unlink(missing_ok=True)
+        else:
+            self._settings_path(f"leader_lease_{workspace_id}.json").unlink(missing_ok=True)
+
     def put(self, obj: M) -> M:
         with self._lock:
             collection = _COLLECTIONS[type(obj)]
@@ -384,6 +410,23 @@ class FileStore(MemoryStore):
                 self._leases[workspace_id] = lease
             self._persist_lease(workspace_id, lease)
             return holder
+
+    def release_leader(self, holder: str, workspace_id: str = DEFAULT_WORKSPACE_ID) -> bool:
+        with self._lock:
+            if workspace_id == DEFAULT_WORKSPACE_ID:
+                lease = self._lease
+                if not lease or lease["holder"] != holder:
+                    return False
+                self._lease = None
+            else:
+                if not hasattr(self, "_leases"):
+                    self._leases = {}
+                lease = self._leases.get(workspace_id)
+                if not lease or lease["holder"] != holder:
+                    return False
+                self._leases.pop(workspace_id, None)
+            self._delete_lease(workspace_id)
+            return True
 
 
 class FirestoreStore(StoreBase):
@@ -482,5 +525,27 @@ class FirestoreStore(StoreBase):
                 return lease["holder"]
             txn.set(ref, {"holder": holder, "expires": time.time() + ttl_s})
             return holder
+
+        return attempt(transaction)
+
+    def release_leader(self, holder: str, workspace_id: str = DEFAULT_WORKSPACE_ID) -> bool:
+        from google.cloud import firestore
+
+        ref = (
+            self._db.collection("workspaces")
+            .document(workspace_id)
+            .collection("settings")
+            .document("leader_lease")
+        )
+        transaction = self._db.transaction()
+
+        @firestore.transactional
+        def attempt(txn) -> bool:
+            snap = ref.get(transaction=txn)
+            lease = snap.to_dict() if snap.exists else None
+            if not lease or lease.get("holder") != holder:
+                return False
+            txn.delete(ref)
+            return True
 
         return attempt(transaction)

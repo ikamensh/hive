@@ -181,6 +181,22 @@ def test_spa_bundle_is_not_browser_cached(tmp_path):
         assert response.headers["cache-control"] == "no-store"
 
 
+def test_lifespan_releases_leader_for_immediate_restart(tmp_path):
+    store = MemoryStore()
+    sup1 = Supervisor(store, ScriptedOrchestrator(store).invoke, machine_name="first")
+    config = Config(
+        gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
+        orch_model="", runner_token="test-token", data_dir=tmp_path,
+    )
+    from hive.api import create_app
+
+    with TestClient(create_app(store, sup1, config)):
+        pass
+
+    sup2 = Supervisor(store, ScriptedOrchestrator(store).invoke, machine_name="second")
+    sup2.acquire_leadership()
+
+
 def test_full_loop(harness):
     client, store, orch = harness
 

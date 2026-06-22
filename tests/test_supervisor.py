@@ -255,6 +255,17 @@ def test_leader_lease_excludes_second_control_plane():
     sup2.acquire_leadership()
 
 
+def test_graceful_leader_release_allows_immediate_restart():
+    store = MemoryStore()
+    sup1, sup2 = make_supervisor(store), make_supervisor(store)
+    sup2.holder = "other-host:1"
+
+    sup1.acquire_leadership()
+    sup1.release_leadership()
+
+    sup2.acquire_leadership()
+
+
 def test_over_budget_blocks_dispatch_and_state():
     store = MemoryStore()
     project = seed(store, with_runner=True)

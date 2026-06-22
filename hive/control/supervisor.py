@@ -149,6 +149,14 @@ class Supervisor:
                 f"stop it or wait {LEASE_TTL_S:.0f}s for its lease to expire"
             )
 
+    def release_leadership(self) -> bool:
+        """Release this process's lease on graceful shutdown.
+
+        Crashed or fenced-out processes still rely on the TTL path; this only
+        clears the lease when the current holder still owns it.
+        """
+        return self.store.release_leader(self.holder, self.workspace_id)
+
     # -- state & dispatch (pure store operations, callable from anywhere) ----
 
     def available_backends(self) -> set[str]:

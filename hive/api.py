@@ -700,9 +700,12 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         try:
             yield
         finally:
+            loop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await loop_task
             if local_runner is not None:
                 local_runner.stop()
-            loop_task.cancel()
+            supervisor.release_leadership()
 
     app.router.lifespan_context = lifespan
     app.state.supervisor = supervisor
