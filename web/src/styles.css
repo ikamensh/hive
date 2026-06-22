@@ -2615,6 +2615,7 @@ a.needs-scope:hover { color: var(--accent); }
 .needs-card-actions .ghost-link { margin-right: auto; }
 .ghost-link { font-size: 0.85rem; color: var(--ink-faint); text-decoration: none; }
 .ghost-link:hover { color: var(--accent); }
+.needs-more { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line-soft); font-size: 0.9rem; }
 .needs-done { margin-top: 22px; }
 
 /* keep the count badge by the title when a "view all" link follows it */

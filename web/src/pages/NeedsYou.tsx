@@ -103,7 +103,10 @@ export default function NeedsYou() {
   const questions = overview.data?.attention.questions ?? [];
   const openTodos = (todos ?? []).filter((t) => t.status === "open");
   const doneTodos = (todos ?? []).filter((t) => t.status === "done");
-  const total = questions.length + openTodos.length;
+  const shown = questions.length + openTodos.length;
+  // attention.count is the authoritative open total; the embedded lists are capped.
+  const total = overview.data?.attention.count ?? shown;
+  const hidden = Math.max(0, total - shown);
 
   const scopeName = (projectId: string) =>
     projectId === "" ? "org-wide" : projects?.find((p) => p.id === projectId)?.name ?? projectId;
@@ -124,7 +127,7 @@ export default function NeedsYou() {
         Open questions and human-only todos across every project — answer or clear them here.
       </p>
 
-      {todos && total === 0 && (
+      {overview.data && total === 0 && (
         <p className="muted needs-empty">Nothing needs you right now — the hive is unblocked.</p>
       )}
 
@@ -148,6 +151,12 @@ export default function NeedsYou() {
             <TodoItem key={t.id} todo={t} scope={scopeName(t.project_id)} onDone={refreshAll} />
           ))}
         </section>
+      )}
+
+      {hidden > 0 && (
+        <p className="muted needs-more">
+          +{hidden} more not shown — clear a few above and the rest will surface.
+        </p>
       )}
 
       {doneTodos.length > 0 && (
