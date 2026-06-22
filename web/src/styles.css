@@ -1032,15 +1032,19 @@ textarea:focus {
   gap: 10px;
   align-items: end;
 }
-.trusted-scouts {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.scout-status {
+  margin: 0;
+  font-size: 13px;
 }
-.trusted-scouts > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.scout-status.scout-ready {
+  color: var(--green);
+}
+.scout-status.scout-blocked {
+  color: var(--ink-faint);
+}
+.scout-status a {
+  color: inherit;
+  text-decoration: underline;
 }
 .intake-brief {
   display: flex;

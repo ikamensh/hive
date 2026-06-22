@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
 import { RepoListEditor, RepoUrlInput } from "../../components/RepoPicker";
 import {
   AUTONOMY_OPTIONS,
@@ -14,7 +15,6 @@ import type {
   Mode,
   Project,
   ProjectPatch,
-  ResourceInfo,
 } from "../../types";
 
 export function buildSetupPatch(fields: {
@@ -34,13 +34,6 @@ export function buildSetupPatch(fields: {
     guess_propensity: fields.guess,
     daily_budget_usd: Number.isFinite(budget) && budget >= 0 ? budget : 0,
   };
-}
-
-function scoutStateLabel(resource: ResourceInfo): string {
-  if (resource.available) return "ready";
-  if (resource.enabled === false) return "disabled";
-  if (resource.cooldown_until > Date.now() / 1000) return "cooldown";
-  return resource.usability_status === "usable" ? "unavailable" : resource.usability_status;
 }
 
 function intakeSection(text: string, heading: string): string {
@@ -73,7 +66,7 @@ function intakeBriefReady(text: string): boolean {
 export function ProjectSetup({
   project,
   conversation,
-  trustedScouts,
+  availableScoutBackends,
   onSave,
   onCreateRepo,
   onStartIntake,
@@ -81,7 +74,7 @@ export function ProjectSetup({
 }: {
   project: Project;
   conversation: AgentConversation | null;
-  trustedScouts: ResourceInfo[];
+  availableScoutBackends: string[];
   onSave: (patch: ProjectPatch) => Promise<void>;
   onCreateRepo: (repoName: string) => Promise<void>;
   onStartIntake: (patch: ProjectPatch, backend?: string) => Promise<void>;
@@ -106,7 +99,6 @@ export function ProjectSetup({
   const intakeDone = conversation?.status === "done";
   const intakeFailed = conversation?.status === "failed";
   const intakeReady = intakeBriefReady(conversation?.latest_brief ?? "");
-  const availableScouts = trustedScouts.filter((resource) => resource.available);
   const scoutLabel = (backend: string) => (backend === "codex" ? "codex" : "claude");
 
   const save = async () => {
@@ -230,21 +222,17 @@ export function ProjectSetup({
             placeholder="0"
           />
         </label>
-        <div className="trusted-scouts">
-          <span className="field-label">trusted scouts</span>
-          <div>
-            {trustedScouts.length === 0 && <span className="chip chip-failed">unavailable</span>}
-            {trustedScouts.map((resource) => (
-              <span
-                className={`chip ${resource.available ? "chip-open" : "chip-failed"}`}
-                key={resource.id}
-                title={resource.disabled_reason || resource.last_exhaustion_text || resource.last_probe_text}
-              >
-                {resource.backend === "codex" ? "codex" : "claude"} - {scoutStateLabel(resource)}
-              </span>
-            ))}
-          </div>
-        </div>
+        {!conversation && (
+          availableScoutBackends.length > 0 ? (
+            <p className="scout-status scout-ready">
+              scout ready — intake will run on {scoutLabel(availableScoutBackends[0])}
+            </p>
+          ) : (
+            <p className="scout-status scout-blocked">
+              no trusted scout available — probe or fix an agent in <Link to="/resources">resources</Link>
+            </p>
+          )
+        )}
         {error && <p className="form-error">{error}</p>}
         {conversation && (
           <div className={`intake-brief intake-${conversation.status}`}>
@@ -254,26 +242,28 @@ export function ProjectSetup({
             </header>
             {intakeFailed && (
               <p className="form-error">
-                Intake with {scoutLabel(conversation.backend)} could not complete. Fix the scout (see trusted
-                scouts above), or retry with another one.
+                Intake with {scoutLabel(conversation.backend)} could not complete. Retry below, or probe
+                or fix an agent in <Link to="/resources">resources</Link>.
               </p>
             )}
             {conversation.latest_brief ? <Markdown text={conversation.latest_brief} /> : <p className="muted">waiting for the scout brief</p>}
             {intakeFailed ? (
               <div className="intake-actions">
                 <div className="setup-actions">
-                  {availableScouts.map((resource) => (
+                  {availableScoutBackends.map((backend) => (
                     <button
                       type="button"
-                      key={resource.id}
-                      onClick={() => retryIntake(resource.backend)}
+                      key={backend}
+                      onClick={() => retryIntake(backend)}
                       disabled={busy}
                     >
-                      retry with {scoutLabel(resource.backend)}
+                      retry with {scoutLabel(backend)}
                     </button>
                   ))}
-                  {availableScouts.length === 0 && (
-                    <span className="chip chip-failed">no usable scout — probe or fix one above</span>
+                  {availableScoutBackends.length === 0 && (
+                    <span className="chip chip-failed">
+                      no usable scout — probe or fix an agent in <Link to="/resources">resources</Link>
+                    </span>
                   )}
                 </div>
               </div>

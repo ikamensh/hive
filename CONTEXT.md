@@ -21,5 +21,13 @@ A technical access link that lets Hive use one machine for work. A runner belong
 _Avoid_: Server, machine, agent
 
 **Agent**:
-A model-backed coding tool available on a machine for Hive to assign work to. Agents are shown under machines because their availability depends on that machine's access, credentials, and local setup.
-_Avoid_: Runner, resource, subscription
+A model-backed coding tool available on a machine for Hive to assign work to. Agents are shown under machines because their availability depends on that machine's access, credentials, and local setup. An agent is the individual unit; "resource" is only a category word for capacity in aggregate and must never name a single one.
+_Avoid_: Runner, resource (for an individual), subscription
+
+**Scout**:
+An agent acting in the intake role — aligning a project's mission, next iteration, and assumptions before planning begins. "Scout" names what the agent is doing, not a separate kind of agent; the same machine-bound agent that does project work can serve as a scout.
+_Avoid_: intake bot, planner
+
+**Trusted scout**:
+A backend+model combination Hive permits to run intake. Intake is high-leverage, so only a curated set qualifies, not every available agent. "Trusted" qualifies the backend (e.g. codex gpt-5.5, claude opus), never a specific machine's install — so trust is a single yes/no policy, not a per-machine status.
+_Avoid_: verified agent, approved runner
