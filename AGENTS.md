@@ -1,3 +1,7 @@
+# Project state and priorities
+
+The project is in the early design phase; all the code is subject to fundamental rework and improvement. We therefore do not care about backward compatibility or stability, we need to move fast and make the current version maximally useful, logical and simple.
+
 # Implementation notes
 
 Architecture rationale lives in `wiki/architecture.md`; this file is the code map.
