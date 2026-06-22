@@ -84,7 +84,7 @@ export function ProjectSetup({
   trustedScouts: ResourceInfo[];
   onSave: (patch: ProjectPatch) => Promise<void>;
   onCreateRepo: (repoName: string) => Promise<void>;
-  onStartIntake: (patch: ProjectPatch) => Promise<void>;
+  onStartIntake: (patch: ProjectPatch, backend?: string) => Promise<void>;
   onConversationMessage: (conversationId: string, action: "message" | "proceed" | "approve", message?: string) => Promise<void>;
 }) {
   const [specRepo, setSpecRepo] = useState(project.spec_repo);
@@ -104,7 +104,10 @@ export function ProjectSetup({
   const draft = !project.spec_repo.trim();
   const intakeRunning = conversation?.status === "running" || conversation?.status === "finalizing";
   const intakeDone = conversation?.status === "done";
+  const intakeFailed = conversation?.status === "failed";
   const intakeReady = intakeBriefReady(conversation?.latest_brief ?? "");
+  const availableScouts = trustedScouts.filter((resource) => resource.available);
+  const scoutLabel = (backend: string) => (backend === "codex" ? "codex" : "claude");
 
   const save = async () => {
     setBusy(true);
@@ -129,6 +132,17 @@ export function ProjectSetup({
       await onStartIntake(buildSetupPatch(fields));
     } catch (e) {
       setError((e as Error).message || "intake failed to start");
+    }
+    setBusy(false);
+  };
+
+  const retryIntake = async (backend = "") => {
+    setBusy(true);
+    setError("");
+    try {
+      await onStartIntake(buildSetupPatch(fields), backend);
+    } catch (e) {
+      setError((e as Error).message || "could not retry intake");
     }
     setBusy(false);
   };
@@ -238,28 +252,54 @@ export function ProjectSetup({
               <span className={`chip chip-${conversation.status}`}>{conversation.status}</span>
               <span className="muted">{conversation.backend} {conversation.model}</span>
             </header>
+            {intakeFailed && (
+              <p className="form-error">
+                Intake with {scoutLabel(conversation.backend)} could not complete. Fix the scout (see trusted
+                scouts above), or retry with another one.
+              </p>
+            )}
             {conversation.latest_brief ? <Markdown text={conversation.latest_brief} /> : <p className="muted">waiting for the scout brief</p>}
-            {!intakeDone && (
+            {intakeFailed ? (
               <div className="intake-actions">
-                <textarea
-                  value={intakeMessage}
-                  onChange={(e) => setIntakeMessage(e.target.value)}
-                  rows={4}
-                  placeholder="Answer or correct the scout..."
-                  disabled={busy || intakeRunning}
-                />
                 <div className="setup-actions">
-                  <button type="button" className="ghost" onClick={() => sendConversation("message")} disabled={busy || intakeRunning || !intakeMessage.trim()}>
-                    send answer
-                  </button>
-                  <button type="button" className="ghost" onClick={() => sendConversation("proceed")} disabled={busy || intakeRunning}>
-                    proceed with assumptions
-                  </button>
-                  <button type="button" onClick={() => sendConversation("approve")} disabled={busy || intakeRunning || !intakeReady}>
-                    approve and finalize
-                  </button>
+                  {availableScouts.map((resource) => (
+                    <button
+                      type="button"
+                      key={resource.id}
+                      onClick={() => retryIntake(resource.backend)}
+                      disabled={busy}
+                    >
+                      retry with {scoutLabel(resource.backend)}
+                    </button>
+                  ))}
+                  {availableScouts.length === 0 && (
+                    <span className="chip chip-failed">no usable scout — probe or fix one above</span>
+                  )}
                 </div>
               </div>
+            ) : (
+              !intakeDone && (
+                <div className="intake-actions">
+                  <textarea
+                    value={intakeMessage}
+                    onChange={(e) => setIntakeMessage(e.target.value)}
+                    rows={4}
+                    placeholder="Answer or correct the scout..."
+                    disabled={busy || intakeRunning}
+                  />
+                  <div className="setup-actions">
+                    <button type="button" className="ghost" onClick={() => sendConversation("message")} disabled={busy || intakeRunning || !intakeMessage.trim()}>
+                      send answer
+                    </button>
+                    <button type="button" className="ghost" onClick={() => sendConversation("proceed")} disabled={busy || intakeRunning}>
+                      proceed with assumptions
+                    </button>
+                    <button type="button" onClick={() => sendConversation("approve")} disabled={busy || intakeRunning || !intakeReady}>
+                      approve and finalize
+                    </button>
+                  </div>
+                </div>
+              )
             )}
           </div>
         )}
@@ -271,7 +311,7 @@ export function ProjectSetup({
             type="submit"
             disabled={busy || !specRepo.trim() || intakeRunning || intakeDone || Boolean(conversation)}
           >
-            {busy ? "starting..." : conversation ? "intake started" : "start intake"}
+            {busy ? "starting..." : intakeFailed ? "intake failed" : conversation ? "intake started" : "start intake"}
           </button>
         </div>
       </form>

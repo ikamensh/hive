@@ -28,6 +28,40 @@ SUBSCRIPTION_WARNING_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# A spent rate-limit/quota window: the credential works, the backend is just
+# throttled for a while. Hive cools the resource down and retries later.
+EXHAUSTION_PATTERNS = re.compile(
+    r"rate.?limit|quota|usage.?limit|plan.?limit|too many requests|429\b|credits?",
+    re.IGNORECASE,
+)
+# A login/policy block: the credential is rejected or the account is not allowed
+# to run this agent (e.g. "organization has disabled Claude subscription access",
+# "use an Anthropic API key", expired login, forbidden). Unlike exhaustion this
+# does not heal on its own — a human must fix the login/policy — so Hive marks the
+# resource failed and files an operator todo instead of a silent cooldown.
+AUTH_BLOCK_PATTERNS = re.compile(
+    r"subscription access|use an? .*api key|ask your admin|not authenticated|"
+    r"unauthori[sz]ed|forbidden|invalid api key|expired|log ?in|credential",
+    re.IGNORECASE,
+)
+
+
+def classify_failure(text: str, *, is_error: bool) -> str:
+    """Classify a finished agent result for capacity accounting.
+
+    Returns ``"auth"`` for a login/policy block (needs a human), ``"exhausted"``
+    for a transient rate-limit/quota window, or ``""`` otherwise. Auth wins over
+    exhaustion: a message that trips both (e.g. "rate limited; please re-login")
+    is the safer-to-escalate case, so we treat it as an auth block.
+    """
+    if not is_error:
+        return ""
+    if AUTH_BLOCK_PATTERNS.search(text):
+        return "auth"
+    if EXHAUSTION_PATTERNS.search(text):
+        return "exhausted"
+    return ""
+
 
 def _claude(model: str, resume_session: str = ""):
     from kodo.sessions.claude import ClaudeSession

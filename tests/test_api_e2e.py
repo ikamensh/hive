@@ -1023,6 +1023,119 @@ def test_intake_approval_requires_ready_brief(harness):
     assert proceed.json()["task"]["conversation_turn"] == "proceed"
 
 
+CLAUDE_SUBSCRIPTION_DISABLED = (
+    "Your organization has disabled Claude subscription access for Claude Code · "
+    "Use an Anthropic API key instead, or ask your admin to enable access"
+)
+
+
+def _probe_backend_usable(client, rid, backend):
+    """Probe the (rid, backend) resource to usable and return its id."""
+    resource = next(
+        r for r in client.get("/api/resources").json()["resources"]
+        if r["runner_id"] == rid and r["backend"] == backend
+    )
+    client.post(f"/api/resources/{resource['id']}/probe")
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    client.post(f"/api/tasks/{task['id']}/result", json={"text": PROBE_MARKER}, headers=RUNNER_HEADERS)
+    return resource["id"]
+
+
+def test_intake_auth_block_marks_backend_failed_escalates_and_retries(harness):
+    """The exact incident: the claude scout is blocked by an org/subscription
+    policy. That backend must be marked failed (not a transient cooldown), an
+    operator todo filed, and the user able to retry intake on another scout."""
+    client, store, _orch = harness
+    project = client.post("/api/projects", json={"name": "hive"}).json()
+    pid = project["id"]
+    _configure_project(client, pid, "https://github.com/ikamensh/hive")
+    rid = client.post(
+        "/api/runners/register",
+        json={"name": "raven", "backends": ["claude", "codex"]},
+        headers=RUNNER_HEADERS,
+    ).json()["runner_id"]
+    claude_res = _probe_backend_usable(client, rid, "claude")
+    _probe_backend_usable(client, rid, "codex")
+
+    # User picks claude explicitly (they have a subscription and expect it to work).
+    conversation = client.post(f"/api/projects/{pid}/intake/start", json={"backend": "claude"}).json()
+    assert conversation["backend"] == "claude"
+
+    _pump(client, store)
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert task["kind"] == "intake" and task["backend"] == "claude"
+    client.post(
+        f"/api/tasks/{task['id']}/result",
+        json={"text": CLAUDE_SUBSCRIPTION_DISABLED, "is_error": True, "auth_blocked": True},
+        headers=RUNNER_HEADERS,
+    )
+
+    failed = store.get(AgentConversation, conversation["id"])
+    assert failed.status == "failed"
+    assert "subscription access" in failed.latest_brief
+
+    # The blocked credential is failed, not a silently-expiring cooldown.
+    res = store.get(Resource, claude_res)
+    assert res.usability_status == "failed"
+    assert not res.available()
+    assert res.cooldown_until == 0
+
+    # An operator todo names the fix, scoped org-wide (the login, not this project).
+    todo = next(t for t in store.list(HumanTask) if t.title == "Fix claude login on raven")
+    assert todo.project_id == ""
+    assert "subscription access" in todo.instructions
+
+    # Retry without a backend now auto-falls back to the still-usable codex scout.
+    retry = client.post(f"/api/projects/{pid}/intake/start", json={}).json()
+    assert retry["id"] != conversation["id"]
+    assert retry["backend"] == "codex"
+    assert retry["status"] in ("open", "running")
+    assert store.get(Project, pid).intake_conversation_id == retry["id"]
+
+
+def test_intake_failed_conversation_is_restartable(harness):
+    """A failed intake conversation must not 409 the user into a dead end: a
+    fresh start mints a new conversation; messaging the dead one is rejected
+    with a pointer to retry."""
+    client, store, _orch = harness
+    project = client.post("/api/projects", json={"name": "restart"}).json()
+    pid = project["id"]
+    _configure_project(client, pid, "https://example.com/spec.git")
+    rid = _register_usable_runner(client, backend="codex")
+
+    conversation = client.post(f"/api/projects/{pid}/intake/start").json()
+    _pump(client, store)
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    client.post(
+        f"/api/tasks/{task['id']}/result",
+        json={"text": "scout crashed", "is_error": True},
+        headers=RUNNER_HEADERS,
+    )
+    assert store.get(AgentConversation, conversation["id"]).status == "failed"
+
+    # Messaging a failed conversation is a clear 409 pointing at the retry path.
+    rejected = client.post(f"/api/conversations/{conversation['id']}/message", json={"action": "proceed"})
+    assert rejected.status_code == 409
+    assert "retry" in rejected.json()["detail"]
+
+    # Restarting mints a fresh conversation the project now points at.
+    restarted = client.post(f"/api/projects/{pid}/intake/start").json()
+    assert restarted["id"] != conversation["id"]
+    assert restarted["status"] in ("open", "running")
+    assert store.get(Project, pid).intake_conversation_id == restarted["id"]
+
+
+def test_intake_start_rejects_unknown_backend(harness):
+    client, store, _orch = harness
+    project = client.post("/api/projects", json={"name": "badbackend"}).json()
+    pid = project["id"]
+    _configure_project(client, pid, "https://example.com/spec.git")
+    _register_usable_runner(client, backend="codex")
+    bad = client.post(f"/api/projects/{pid}/intake/start", json={"backend": "gemini-cli"})
+    assert bad.status_code == 400
+    assert "trusted scout" in bad.json()["detail"]
+
+
 def _pump(client, store, rounds: int = 4):
     """Run supervisor steps synchronously: dispatch + drain orchestrator wakes.
 

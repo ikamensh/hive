@@ -115,6 +115,7 @@ class TaskResult(BaseModel):
     structured_result: dict = Field(default_factory=dict)
     structured_result_error: str = ""
     resource_exhausted: bool = False  # rate limit / quota detected by runner
+    auth_blocked: bool = False  # login/policy block detected by runner (needs a human)
     cancelled: bool = False  # runner stopped the task on an operator cancel request
     session_handle: str = ""  # backend session id/chat id for conversation continuation
 
@@ -367,6 +368,8 @@ class TaskResultProcessor:
                 resource.last_probe_text = body.text[:2000]
                 if body.cancelled:
                     resource.usability_status = ResourceUsability.unknown
+                elif body.auth_blocked:
+                    resource.usability_status = ResourceUsability.failed
                 elif body.resource_exhausted:
                     resource.usability_status = ResourceUsability.usable
                 elif body.is_error:
@@ -374,6 +377,14 @@ class TaskResultProcessor:
                 else:
                     resource.usability_status = ResourceUsability.usable
                     resource.clear_exhaustion()
+            elif body.auth_blocked:
+                # A login/policy block on any task (not just a probe) proves the
+                # credential is broken for all work on this resource. Mark it
+                # failed so dispatch stops choosing it until a re-probe proves the
+                # human fixed the login; clear any stale cooldown that would
+                # otherwise let it silently look "usable" again.
+                resource.usability_status = ResourceUsability.failed
+                resource.clear_exhaustion()
             if body.resource_exhausted:
                 resource.mark_exhausted(
                     until=time.time() + RATE_LIMIT_COOLDOWN_S,
@@ -461,6 +472,41 @@ class TaskResultProcessor:
             elif conversation.status == ConversationStatus.open:
                 project.state = ProjectState.intake
                 self.store.put(project)
+            elif conversation.status == ConversationStatus.failed:
+                self._escalate_intake_failure(task, body, project)
+
+    def _escalate_intake_failure(self, task: Task, body: TaskResult, project: Project) -> None:
+        """Intake hit a wall. File an operator todo so the project isn't a silent
+        dead-end. An auth/policy block reuses the same "Fix <backend> login"
+        title as a failed probe, so a later successful re-probe auto-closes it
+        (see `complete_resource_login_todos`); other failures get a retry todo."""
+        runner = self.store.get(Runner, task.runner_id) if task.runner_id else None
+        runner_name = runner.name if runner else (task.runner_id or "the runner")
+        hint = REGISTRY[task.backend].login_hint if task.backend in REGISTRY else ""
+        detail = (body.text or "").strip()[:1500]
+        if body.auth_blocked:
+            title = f"Fix {task.backend} login on {runner_name}"
+            instructions = (
+                f"The `{task.backend}` intake scout for **{project.name}** was blocked by a "
+                f"login/policy error on runner `{runner_name}`:\n\n```\n{detail}\n```\n\n"
+                f"{hint + chr(10) + chr(10) if hint else ''}"
+                "Hive marked that backend unusable and will re-check it on the next probe. "
+                "You can also retry intake with a different trusted scout from the project setup."
+            )
+        else:
+            title = f"Intake scout failed for {project.name}"
+            instructions = (
+                f"The `{task.backend}` intake scout for **{project.name}** failed:\n\n"
+                f"```\n{detail}\n```\n\n"
+                "Retry intake from the project setup (optionally with a different trusted scout)."
+            )
+        escalate(
+            self.store,
+            title,
+            instructions=instructions,
+            project_id="" if body.auth_blocked else project.id,
+            workspace_id=project.workspace_id,
+        )
 
     def _land_resolve(self, task: Task, body: TaskResult) -> None:
         if body.is_error:

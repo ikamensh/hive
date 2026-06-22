@@ -150,6 +150,10 @@ class IntakeMessage(BaseModel):
     action: str = "message"  # message | proceed | approve
 
 
+class IntakeStart(BaseModel):
+    backend: str = ""  # optional: pin the trusted scout (else best available is chosen)
+
+
 class ProjectRepoCreate(BaseModel):
     name: str = ""
     private: bool = True
@@ -422,19 +426,38 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         url = project.spec_repo
         return bool(config.gh_token.strip()) or url.startswith("file://") or Path(url).exists()
 
-    def trusted_intake_capacity(workspace_id: str) -> tuple[str, str, str]:
-        """Return (backend, model, runner_id) for the first trusted intake scout
-        capacity. Intake is high leverage, so no weaker fallback in MVP."""
+    TRUSTED_SCOUTS = (("codex", "gpt-5.5"), ("claude", "opus"))
+
+    def trusted_intake_capacity(
+        workspace_id: str, prefer_backend: str = ""
+    ) -> tuple[str, str, str]:
+        """Return (backend, model, runner_id) for an available trusted intake
+        scout. Intake is high leverage, so only trusted backends qualify.
+
+        `prefer_backend` pins the choice when that backend is available (the user
+        explicitly picked it on retry); otherwise the first available backend in
+        preference order is used, so a project is never stuck because the default
+        scout is blocked while another trusted one is ready.
+        """
         online = {r.id: r for r in store.list(Runner, workspace_id=workspace_id) if r.online()}
-        preferences = [("codex", "gpt-5.5"), ("claude", "opus")]
-        for backend, model in preferences:
+        ordered = sorted(
+            TRUSTED_SCOUTS, key=lambda bm: (bm[0] != prefer_backend, TRUSTED_SCOUTS.index(bm))
+        )
+        if prefer_backend and prefer_backend not in dict(TRUSTED_SCOUTS):
+            raise HTTPException(
+                400,
+                f"unknown trusted scout {prefer_backend!r}; choose one of "
+                f"{', '.join(b for b, _ in TRUSTED_SCOUTS)}",
+            )
+        for backend, model in ordered:
             for resource in store.list(Resource, workspace_id=workspace_id, backend=backend):
                 runner = online.get(resource.runner_id)
                 if runner and backend in runner.backends and resource.available():
                     return backend, model, runner.id
         raise HTTPException(
             409,
-            "intake requires a usable trusted scout backend (codex gpt-5.5 or claude opus)",
+            "intake requires a usable trusted scout backend (codex gpt-5.5 or claude opus); "
+            "probe or fix a trusted scout, then retry",
         )
 
     def intake_context(conversation: AgentConversation) -> str:
@@ -892,7 +915,11 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return project.model_dump()
 
     @app.post("/api/projects/{project_id}/intake/start")
-    def start_intake(project_id: str, ctx: AuthContext = Depends(current)):
+    def start_intake(
+        project_id: str,
+        body: IntakeStart = IntakeStart(),
+        ctx: AuthContext = Depends(current),
+    ):
         project = require_project(project_id, ctx)
         if project.autonomy != Autonomy.direct_push:
             raise HTTPException(400, "intake currently supports direct_push projects only")
@@ -900,13 +927,16 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             raise HTTPException(400, "spec_repo must be set before intake")
         if project.intake_conversation_id:
             existing = store.get(AgentConversation, project.intake_conversation_id)
+            # An active conversation already owns intake — return it. A failed or
+            # done one is a fresh start: mint a new conversation below (the retry
+            # path the UI uses to recover from a blocked scout).
             if existing and existing.status in (
                 ConversationStatus.open,
                 ConversationStatus.running,
                 ConversationStatus.finalizing,
             ):
                 return existing.model_dump()
-        backend, model, _runner_id = trusted_intake_capacity(ctx.workspace_id)
+        backend, model, _runner_id = trusted_intake_capacity(ctx.workspace_id, body.backend.strip())
         conversation = store.put(
             AgentConversation(
                 workspace_id=ctx.workspace_id,
@@ -969,8 +999,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         project = require_project(conversation.project_id, ctx)
         if conversation.role != "intake":
             raise HTTPException(400, "unsupported conversation role")
-        if conversation.status in (ConversationStatus.done, ConversationStatus.failed):
-            raise HTTPException(409, f"conversation is {conversation.status}")
+        if conversation.status == ConversationStatus.failed:
+            raise HTTPException(409, "intake conversation failed; start a new intake to retry")
+        if conversation.status == ConversationStatus.done:
+            raise HTTPException(409, "intake conversation is done")
         action = body.action.strip().lower() or "message"
         if action not in {"message", "proceed", "approve"}:
             raise HTTPException(400, "action must be message, proceed, or approve")

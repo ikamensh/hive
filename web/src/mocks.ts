@@ -939,19 +939,22 @@ export const api = {
     return structuredClone({ project, repo });
   },
 
-  startIntake: async (id: string): Promise<AgentConversation> => {
+  startIntake: async (id: string, backend = ""): Promise<AgentConversation> => {
     const project = projects.find((p) => p.id === id);
     if (!project) throw new Error("not found");
     if (!project.spec_repo.trim()) throw new Error("spec_repo required");
-    const existing = conversations.find((c) => c.id === project.intake_conversation_id && c.status !== "done");
+    const active = ["open", "running", "finalizing"];
+    const existing = conversations.find(
+      (c) => c.id === project.intake_conversation_id && active.includes(c.status),
+    );
     if (existing) return structuredClone(existing);
     const conversation: AgentConversation = {
       id: `conv-${Math.random().toString(36).slice(2, 8)}`,
       project_id: id,
       role: "intake",
       repo: project.spec_repo,
-      backend: "claude",
-      model: "opus",
+      backend: backend || "claude",
+      model: backend === "codex" ? "gpt-5.5" : "opus",
       status: "running",
       session_handle: "",
       latest_brief: "",

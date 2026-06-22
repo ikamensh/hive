@@ -1,5 +1,6 @@
 """Runner-side quota / rate-limit detection."""
 
+from hive.runner.backends import classify_failure
 from hive.runner.daemon import EXHAUSTED_PATTERNS
 
 # Captured from a real `codex exec` failure when the 5h window is spent.
@@ -48,3 +49,36 @@ def test_claude_subscription_access_disabled_is_not_temporary_quota():
 
 def test_success_not_exhausted():
     assert not _resource_exhausted("implemented feature, tests pass", is_error=False)
+
+
+# `classify_failure` is the single decision the runner makes about a failed
+# result: a login/policy block needs a human (auth), a spent quota window heals
+# on its own (exhausted), everything else is just a failure.
+
+
+def test_claude_subscription_block_classifies_as_auth():
+    # The exact message that wedged the hive intake: a policy block, not a quota.
+    assert classify_failure(CLAUDE_SUBSCRIPTION_DISABLED, is_error=True) == "auth"
+
+
+def test_codex_quota_classifies_as_exhausted_not_auth():
+    assert classify_failure(CODEX_QUOTA_ERROR, is_error=True) == "exhausted"
+    assert classify_failure(CODEX_RATE_LIMIT_JSON, is_error=True) == "exhausted"
+
+
+def test_auth_wins_when_message_trips_both():
+    # A throttle note that also asks to re-login must escalate, not silently cool down.
+    assert classify_failure("rate limited; please re-login to continue", is_error=True) == "auth"
+
+
+def test_login_required_classifies_as_auth():
+    assert classify_failure("codex login required", is_error=True) == "auth"
+    assert classify_failure("Error: not authenticated. Run `claude login`.", is_error=True) == "auth"
+
+
+def test_plain_failure_is_neither():
+    assert classify_failure("AssertionError: expected 2 got 3", is_error=True) == ""
+
+
+def test_success_is_never_classified():
+    assert classify_failure(CLAUDE_SUBSCRIPTION_DISABLED, is_error=False) == ""

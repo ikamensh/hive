@@ -108,8 +108,11 @@ const realApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  startIntake: (id: string) =>
-    http<AgentConversation>(`/api/projects/${id}/intake/start`, { method: "POST" }),
+  startIntake: (id: string, backend = "") =>
+    http<AgentConversation>(`/api/projects/${id}/intake/start`, {
+      method: "POST",
+      body: JSON.stringify({ backend }),
+    }),
   conversationMessage: (id: string, body: IntakeMessage) =>
     http<{ conversation: AgentConversation; task: Task }>(`/api/conversations/${id}/message`, {
       method: "POST",

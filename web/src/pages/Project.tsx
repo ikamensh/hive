@@ -97,9 +97,9 @@ export default function ProjectPage() {
     refresh();
   };
 
-  const startIntake = async (p: ProjectPatch) => {
+  const startIntake = async (p: ProjectPatch, backend = "") => {
     await api.patchProject(id, p);
-    await api.startIntake(id);
+    await api.startIntake(id, backend);
     refresh();
   };
 

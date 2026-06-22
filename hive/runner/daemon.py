@@ -26,7 +26,9 @@ import httpx
 
 from hive.runner.backends import (
     BACKEND_NAMES,
+    EXHAUSTION_PATTERNS,
     PROBE_MARKER,
+    classify_failure,
     detected_backend_names,
     discover_backends,
     make_session,
@@ -53,10 +55,7 @@ CANCEL_POLL_S = 5.0  # how often a running task checks for an operator cancel re
 
 log = logging.getLogger("hive.runner.daemon")
 
-EXHAUSTED_PATTERNS = re.compile(
-    r"rate.?limit|quota|usage.?limit|plan.?limit|too many requests|429\b|credits?",
-    re.IGNORECASE,
-)
+EXHAUSTED_PATTERNS = EXHAUSTION_PATTERNS  # re-export so callers/tests keep one import site
 SKIP_ARTIFACT_PARTS = {
     ".cache",
     ".git",
@@ -619,6 +618,7 @@ def execute(task: dict, headers: dict, auth) -> dict:
             session_handle = ""
     elif session_id:
         session_handle = str(session_id)
+    failure = classify_failure(text, is_error=is_error)
     return {
         "text": text,
         "is_error": is_error,
@@ -627,7 +627,8 @@ def execute(task: dict, headers: dict, auth) -> dict:
         "output_tokens": result.output_tokens,
         "structured_result": result.structured_result,
         "structured_result_error": result.structured_result_error,
-        "resource_exhausted": bool(is_error and EXHAUSTED_PATTERNS.search(text)),
+        "resource_exhausted": failure == "exhausted",
+        "auth_blocked": failure == "auth",
         "session_handle": session_handle,
     }
 
