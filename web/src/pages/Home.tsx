@@ -121,7 +121,7 @@ function ProjectRow({
 
 function MachineCard({ m }: { m: OverviewMachine }) {
   return (
-    <Link to="/resources" className={`cap-machine ${m.online ? "online" : "offline"}`}>
+    <Link to="/machines" className={`cap-machine ${m.online ? "online" : "offline"}`}>
       <span className="cap-head">
         <i className={`dot ${m.online ? "" : "off"}`} />
         <span className="cap-name">{m.name}</span>
@@ -239,14 +239,14 @@ export default function Home() {
           label="agents"
           value={<>{t.agents_ready}<span> / {t.agents_total}</span></>}
           sub="ready"
-          to="/resources"
+          to="/machines"
         />
         <Kpi
           icon="server"
           label="machines"
           value={<>{t.machines_online}<span> / {t.machines_total}</span></>}
           sub="online"
-          to="/resources"
+          to="/machines"
         />
         <Kpi
           icon="alert-circle"
@@ -340,12 +340,12 @@ export default function Home() {
           <h2>
             <i className="ti ti-cpu" aria-hidden /> capacity · machines &amp; agents
           </h2>
-          <Link to="/resources" className="panel-link">
+          <Link to="/machines" className="panel-link">
             manage →
           </Link>
         </div>
         {data.capacity.machines.length === 0 ? (
-          <p className="muted">No machines enrolled. Enroll a machine on the resources page.</p>
+          <p className="muted">No machines enrolled. Enroll a machine on the machines page.</p>
         ) : (
           <div className="cap-list">
             {data.capacity.machines.map((m) => (

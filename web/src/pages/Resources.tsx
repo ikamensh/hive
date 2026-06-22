@@ -195,7 +195,7 @@ export default function Resources() {
   return (
     <div className="page page-resources">
       <div className="page-head">
-        <h1>Resources</h1>
+        <h1>Machines</h1>
         {localRunner?.supported && (
           <LocalRunnerAction
             localRunner={localRunner}
@@ -210,7 +210,6 @@ export default function Resources() {
       {data && (
         <>
           {runnerError && <p className="form-error runner-error">{runnerError}</p>}
-          <h2 className="col-title">machines & agents</h2>
           <div className="runner-grid machine-grid">
             {machineCards.length === 0 && (
               <section className="runner-empty">

@@ -176,7 +176,7 @@ export default function App() {
             home
           </NavLink>
           <NavLink to="/needs-you">needs you</NavLink>
-          <NavLink to="/resources">resources</NavLink>
+          <NavLink to="/machines">machines</NavLink>
         </nav>
         {auth.data && <AccountMenu auth={auth.data} loggingOut={loggingOut} onSignOut={signOut} />}
         <button

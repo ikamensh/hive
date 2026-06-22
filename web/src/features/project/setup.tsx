@@ -229,7 +229,7 @@ export function ProjectSetup({
             </p>
           ) : (
             <p className="scout-status scout-blocked">
-              no trusted scout available — probe or fix an agent in <Link to="/resources">resources</Link>
+              no trusted scout available — probe or fix an agent in <Link to="/machines">machines</Link>
             </p>
           )
         )}
@@ -243,7 +243,7 @@ export function ProjectSetup({
             {intakeFailed && (
               <p className="form-error">
                 Intake with {scoutLabel(conversation.backend)} could not complete. Retry below, or probe
-                or fix an agent in <Link to="/resources">resources</Link>.
+                or fix an agent in <Link to="/machines">machines</Link>.
               </p>
             )}
             {conversation.latest_brief ? <Markdown text={conversation.latest_brief} /> : <p className="muted">waiting for the scout brief</p>}
@@ -262,7 +262,7 @@ export function ProjectSetup({
                   ))}
                   {availableScoutBackends.length === 0 && (
                     <span className="chip chip-failed">
-                      no usable scout — probe or fix an agent in <Link to="/resources">resources</Link>
+                      no usable scout — probe or fix an agent in <Link to="/machines">machines</Link>
                     </span>
                   )}
                 </div>
