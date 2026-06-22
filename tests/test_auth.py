@@ -60,6 +60,19 @@ def test_dev_auth_bootstraps_user_workspace_and_machine():
     assert [m.name for m in machines] == ["control-test"]
 
 
+def test_dev_auth_disables_github_oauth_routes():
+    store = MemoryStore()
+    client, _config = make_client(store)
+
+    start = client.get("/api/auth/github/start", follow_redirects=False)
+    callback = client.get("/api/auth/github/callback?code=abc&state=bad", follow_redirects=False)
+
+    assert start.status_code == 404
+    assert callback.status_code == 404
+    assert start.json()["detail"] == "GitHub auth is not enabled"
+    assert callback.json()["detail"] == "GitHub auth is not enabled"
+
+
 def test_dev_auth_concurrent_file_store(tmp_path):
     """FileStore remains available for tests; production runtime uses managed state."""
     from hive.api import create_app

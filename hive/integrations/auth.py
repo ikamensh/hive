@@ -268,6 +268,8 @@ class AuthManager:
             raise HTTPException(400, "bad oauth state")
 
     def github_start(self) -> RedirectResponse:
+        if self.config.auth_mode != "github":
+            raise HTTPException(404, "GitHub auth is not enabled")
         self.validate_config()
         from urllib.parse import urlencode
 
@@ -282,6 +284,8 @@ class AuthManager:
         return RedirectResponse(f"https://github.com/login/oauth/authorize?{params}")
 
     def github_callback(self, code: str, state: str) -> RedirectResponse:
+        if self.config.auth_mode != "github":
+            raise HTTPException(404, "GitHub auth is not enabled")
         self.validate_config()
         self.verify_state(state)
         token_response = httpx.post(

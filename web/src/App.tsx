@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useOutletContext } from "react-router-dom";
-import { api, usePoll } from "./api";
+import { ApiError, api, usePoll } from "./api";
 import { useTheme } from "./theme";
 import type { AuthInfo, Overview, StorageInfo } from "./types";
 
@@ -84,6 +84,7 @@ export default function App() {
   });
   const { theme, toggle } = useTheme();
   const attention = poll.data?.totals.needs_you ?? 0;
+  const authNeedsLogin = auth.error instanceof ApiError && auth.error.status === 401;
 
   const signOut = async () => {
     setLoggingOut(true);
@@ -96,6 +97,29 @@ export default function App() {
   };
 
   if (!auth.data && auth.failed) {
+    if (!authNeedsLogin) {
+      return (
+        <div className="login-shell">
+          <section className="login-panel">
+            <div className="brand login-brand">
+              <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden>
+                <path
+                  d="M12 1.5 21 6.75v10.5L12 22.5 3 17.25V6.75z"
+                  fill="none"
+                  stroke="var(--accent)"
+                  strokeWidth="1.8"
+                />
+                <path d="M12 6.5 16.5 9.25v5.5L12 17.5 7.5 14.75v-5.5z" fill="var(--accent-2)" opacity="0.7" />
+              </svg>
+              <span className="brand-word">hive</span>
+            </div>
+            <h1>Control plane unreachable</h1>
+            <p className="modal-hint">Retrying...</p>
+          </section>
+        </div>
+      );
+    }
+
     return (
       <div className="login-shell">
         <section className="login-panel">

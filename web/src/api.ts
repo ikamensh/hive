@@ -237,6 +237,7 @@ export function usePoll<T>(
   const { enabled = true, cacheKey } = opts;
   const [data, setData] = useState<T | null>(() => readCache<T>(cacheKey));
   const [failed, setFailed] = useState(false);
+  const [error, setError] = useState<unknown>(null);
   const fnRef = useRef(fn);
   fnRef.current = fn;
 
@@ -244,6 +245,7 @@ export function usePoll<T>(
     (d: T) => {
       setData(d);
       setFailed(false);
+      setError(null);
       writeCache(cacheKey, d);
     },
     [cacheKey],
@@ -252,8 +254,9 @@ export function usePoll<T>(
   const refresh = useCallback(async () => {
     try {
       store(await fnRef.current());
-    } catch {
+    } catch (err) {
       setFailed(true);
+      setError(err);
     }
   }, [store]);
 
@@ -264,8 +267,11 @@ export function usePoll<T>(
       try {
         const d = await fnRef.current();
         if (alive) store(d);
-      } catch {
-        if (alive) setFailed(true);
+      } catch (err) {
+        if (alive) {
+          setFailed(true);
+          setError(err);
+        }
       }
     };
     tick();
@@ -277,7 +283,7 @@ export function usePoll<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, enabled, intervalMs]);
 
-  return { data, failed, refresh };
+  return { data, failed, error, refresh };
 }
 
 // ---- formatting helpers ----------------------------------------------------
