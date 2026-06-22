@@ -2,7 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import App from "./App";
-import Projects from "./pages/Projects";
+import Home from "./pages/Home";
 import ProjectPage from "./pages/Project";
 import Resources from "./pages/Resources";
 import Settings from "./pages/Settings";
@@ -13,7 +13,7 @@ const router = createBrowserRouter([
     path: "/",
     element: <App />,
     children: [
-      { index: true, element: <Projects /> },
+      { index: true, element: <Home /> },
       { path: "p/:id", element: <ProjectPage /> },
       { path: "resources", element: <Resources /> },
       { path: "settings", element: <Settings /> },

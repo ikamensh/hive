@@ -8,6 +8,7 @@ import type {
   HumanTodo,
   IntakeMessage,
   IssueRun,
+  Overview,
   Project,
   ProjectCreate,
   ProjectDetail,
@@ -886,6 +887,63 @@ export const api = {
     },
   }),
   logout: async (): Promise<void> => {},
+
+  overview: async (): Promise<Overview> =>
+    structuredClone({
+      projects: [
+        { id: "p-relay", name: "relay", spec_repo: "git@github.com:acme/relay.git", state: "working", paused: false, created_at: now - 86400 * 5, daily_budget_usd: 40, spend_today: 8.2, counts: { active: 2, running: 1, questions: 0, blockers: 0, streams: 3 } },
+        { id: "p-atlas", name: "atlas", spec_repo: "git@github.com:acme/atlas-spec.git", state: "needs_attention", paused: false, created_at: now - 86400 * 9, daily_budget_usd: 25, spend_today: 3.1, counts: { active: 1, running: 0, questions: 1, blockers: 1, streams: 4 } },
+        { id: "p-probe", name: "probe", spec_repo: "git@github.com:acme/probe.git", state: "blocked_resources", paused: false, created_at: now - 86400 * 2, daily_budget_usd: 15, spend_today: 0, counts: { active: 0, running: 0, questions: 0, blockers: 0, streams: 1 } },
+        { id: "p-beacon", name: "beacon", spec_repo: "git@github.com:acme/beacon.git", state: "needs_attention", paused: false, created_at: now - 86400, daily_budget_usd: 0, spend_today: 1.4, counts: { active: 1, running: 0, questions: 1, blockers: 0, streams: 2 } },
+        { id: "p-ledger", name: "ledger", spec_repo: "git@github.com:acme/ledger-spec.git", state: "idle_goal_complete", paused: false, created_at: now - 86400 * 20, daily_budget_usd: 0, spend_today: 0, counts: { active: 0, running: 0, questions: 0, blockers: 0, streams: 2 } },
+      ],
+      capacity: {
+        machines_total: 2,
+        machines_online: 1,
+        agents_total: 4,
+        agents_ready: 1,
+        machines: [
+          {
+            id: "m-hex1", name: "hex-1", hostname: "hex-1", kind: "runner", device_kind: "server", online: true, last_seen: now - 12,
+            agents: [
+              { id: "res-1", backend: "claude", status: "ready", available: true, cooldown_until: 0, runner_id: "r-hex1" },
+              { id: "res-2", backend: "codex", status: "cooldown", available: false, cooldown_until: now + 2700, runner_id: "r-hex1" },
+            ],
+          },
+          {
+            id: "m-hex2", name: "hex-2", hostname: "hex-2", kind: "runner", device_kind: "laptop", online: false, last_seen: now - 60 * 47,
+            agents: [
+              { id: "res-3", backend: "cursor", status: "offline", available: false, cooldown_until: 0, runner_id: "r-hex2" },
+              { id: "res-4", backend: "gemini-cli", status: "offline", available: false, cooldown_until: 0, runner_id: "r-hex2" },
+            ],
+          },
+        ],
+      },
+      live_tasks: [
+        { id: "t-relay-1", project_id: "p-relay", project_name: "relay", backend: "claude", model: "", kind: "work", started_at: now - 95, issue_number: 0 },
+      ],
+      attention: {
+        count: 4,
+        questions: [
+          { id: "q-atlas", project_id: "p-atlas", project_name: "atlas", text: "Should signups default to email verification on, or off for the beta?", created_at: now - 600 },
+          { id: "q-beacon", project_id: "p-beacon", project_name: "beacon", text: "Which currency should the ledger export use as its base?", created_at: now - 4000 },
+        ],
+        human_todos: structuredClone(humanTodos)
+          .filter((t) => t.status === "open")
+          .map((t) => ({ id: t.id, project_id: t.project_id, project_name: t.project_id === "p-probe" ? "probe" : "", title: t.title, instructions: t.instructions, created_at: t.created_at })),
+      },
+      subscriptions: structuredClone(subscriptions),
+      totals: {
+        tasks_running: 1,
+        agents_ready: 1,
+        agents_total: 4,
+        machines_online: 1,
+        machines_total: 2,
+        needs_you: 4,
+        spend_today: 12.7,
+        budget_today: 80,
+      },
+    }),
 
   projects: async (): Promise<Project[]> => structuredClone(projects),
 

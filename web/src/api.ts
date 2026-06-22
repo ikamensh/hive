@@ -7,6 +7,7 @@ import type {
   IntakeMessage,
   IssueRun,
   IssueRunResult,
+  Overview,
   Project,
   ProjectCreate,
   ProjectDetail,
@@ -90,6 +91,7 @@ const realApi = {
   logout: async () => {
     await http("/api/auth/logout", { method: "POST" });
   },
+  overview: () => http<Overview>("/api/overview"),
   projects: () => http<Project[]>("/api/projects"),
   createProject: (body: ProjectCreate) =>
     http<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
@@ -198,31 +200,70 @@ const realApi = {
 
 export const api: typeof realApi = import.meta.env.VITE_MOCK === "1" ? (mockApi as typeof realApi) : realApi;
 
-/** Poll `fn` every `intervalMs`; re-runs when `deps` change. `refresh()` forces an immediate re-fetch (use after mutations). */
-export function usePoll<T>(fn: () => Promise<T>, deps: unknown[], intervalMs = 4000) {
-  const [data, setData] = useState<T | null>(null);
+function readCache<T>(key?: string): T | null {
+  if (!key) return null;
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(key: string | undefined, value: unknown) {
+  if (!key) return;
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* quota / private mode — caching is best-effort */
+  }
+}
+
+/**
+ * Poll `fn` every `intervalMs`; re-runs when `deps` change. `refresh()` forces an
+ * immediate re-fetch (use after mutations).
+ *
+ * `enabled: false` holds polling (and leaves `data` null) until a prerequisite —
+ * e.g. auth — is ready, so callers never see a premature empty payload.
+ * `cacheKey` seeds the first render from localStorage and persists each success
+ * (stale-while-revalidate), so a reload paints last state instantly.
+ */
+export function usePoll<T>(
+  fn: () => Promise<T>,
+  deps: unknown[],
+  intervalMs = 4000,
+  opts: { enabled?: boolean; cacheKey?: string } = {},
+) {
+  const { enabled = true, cacheKey } = opts;
+  const [data, setData] = useState<T | null>(() => readCache<T>(cacheKey));
   const [failed, setFailed] = useState(false);
   const fnRef = useRef(fn);
   fnRef.current = fn;
 
+  const store = useCallback(
+    (d: T) => {
+      setData(d);
+      setFailed(false);
+      writeCache(cacheKey, d);
+    },
+    [cacheKey],
+  );
+
   const refresh = useCallback(async () => {
     try {
-      setData(await fnRef.current());
-      setFailed(false);
+      store(await fnRef.current());
     } catch {
       setFailed(true);
     }
-  }, []);
+  }, [store]);
 
   useEffect(() => {
+    if (!enabled) return;
     let alive = true;
     const tick = async () => {
       try {
         const d = await fnRef.current();
-        if (alive) {
-          setData(d);
-          setFailed(false);
-        }
+        if (alive) store(d);
       } catch {
         if (alive) setFailed(true);
       }
@@ -234,7 +275,7 @@ export function usePoll<T>(fn: () => Promise<T>, deps: unknown[], intervalMs = 4
       clearInterval(id);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
+  }, [...deps, enabled, intervalMs]);
 
   return { data, failed, refresh };
 }

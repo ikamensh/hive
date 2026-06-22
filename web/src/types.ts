@@ -418,6 +418,117 @@ export interface HumanTodo {
 
 export type HumanTask = HumanTodo;
 
+// ---- home dashboard (mirrors hive/control/overview.py) ---------------------
+
+export interface OverviewProject {
+  id: string;
+  name: string;
+  spec_repo: string;
+  state: ProjectState;
+  paused: boolean;
+  created_at: number;
+  daily_budget_usd: number;
+  spend_today: number;
+  counts: {
+    active: number;
+    running: number;
+    questions: number;
+    blockers: number;
+    streams: number;
+  };
+}
+
+export type AgentStatus =
+  | "ready"
+  | "cooldown"
+  | "probing"
+  | "probe"
+  | "failed"
+  | "offline"
+  | "disabled";
+
+export interface OverviewAgent {
+  id: string;
+  backend: string;
+  status: AgentStatus;
+  available: boolean;
+  cooldown_until: number;
+  runner_id: string;
+}
+
+export interface OverviewMachine {
+  id: string;
+  name: string;
+  hostname: string;
+  kind: string;
+  device_kind: string;
+  online: boolean;
+  last_seen: number;
+  agents: OverviewAgent[];
+}
+
+export interface OverviewCapacity {
+  machines: OverviewMachine[];
+  machines_total: number;
+  machines_online: number;
+  agents_total: number;
+  agents_ready: number;
+}
+
+export interface OverviewLiveTask {
+  id: string;
+  project_id: string;
+  project_name: string;
+  backend: string;
+  model: string;
+  kind: Task["kind"];
+  started_at: number;
+  issue_number: number;
+}
+
+export interface OverviewQuestion {
+  id: string;
+  project_id: string;
+  project_name: string;
+  text: string;
+  created_at: number;
+}
+
+export interface OverviewTodo {
+  id: string;
+  project_id: string;
+  project_name: string;
+  title: string;
+  instructions: string;
+  created_at: number;
+}
+
+export interface OverviewAttention {
+  count: number;
+  questions: OverviewQuestion[];
+  human_todos: OverviewTodo[];
+}
+
+export interface OverviewTotals {
+  tasks_running: number;
+  agents_ready: number;
+  agents_total: number;
+  machines_online: number;
+  machines_total: number;
+  needs_you: number;
+  spend_today: number;
+  budget_today: number;
+}
+
+export interface Overview {
+  projects: OverviewProject[];
+  capacity: OverviewCapacity;
+  live_tasks: OverviewLiveTask[];
+  attention: OverviewAttention;
+  subscriptions: Subscription[];
+  totals: OverviewTotals;
+}
+
 export interface ProjectCreate {
   name: string;
 }

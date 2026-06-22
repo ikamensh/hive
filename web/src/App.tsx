@@ -2,40 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useOutletContext } from "react-router-dom";
 import { api, usePoll } from "./api";
 import { useTheme } from "./theme";
-import type { AuthInfo, ProjectDetail, ResourcesPayload, StorageInfo } from "./types";
-
-export interface Overview {
-  details: ProjectDetail[];
-  openQuestions: number;
-  openTodos: number;
-  resources: ResourcesPayload;
-}
-
-async function fetchOverview(): Promise<Overview> {
-  const [projects, resources, humanTodos] = await Promise.all([
-    api.projects(),
-    api.resources(),
-    api.humanTodos(),
-  ]);
-  const details = await Promise.all(projects.map((p) => api.project(p.id)));
-  const openQuestions = details.reduce(
-    (n, d) => n + d.questions.filter((q) => q.status === "open").length,
-    0,
-  );
-  const openTodos = humanTodos.filter((t) => t.status === "open").length;
-  return { details, openQuestions, openTodos, resources };
-}
+import type { AuthInfo, Overview, StorageInfo } from "./types";
 
 export function useOverview() {
   return useOutletContext<ReturnType<typeof usePoll<Overview>>>();
 }
-
-const emptyOverview: Overview = {
-  details: [],
-  openQuestions: 0,
-  openTodos: 0,
-  resources: { machines: [], runners: [], resources: [] },
-};
 
 function storageLabel(storage: StorageInfo): string {
   if (storage.fully_managed) return "persistence: managed";
@@ -107,14 +78,12 @@ function AccountMenu({
 export default function App() {
   const [loggingOut, setLoggingOut] = useState(false);
   const auth = usePoll(() => api.me(), [], 30000);
-  const poll = usePoll(
-    () => (auth.data ? fetchOverview() : Promise.resolve(emptyOverview)),
-    [auth.data?.workspace.id],
-  );
+  const poll = usePoll(() => api.overview(), [auth.data?.workspace.id], 4000, {
+    enabled: !!auth.data,
+    cacheKey: "hive-overview",
+  });
   const { theme, toggle } = useTheme();
-  const open = poll.data?.openQuestions ?? 0;
-  const todos = poll.data?.openTodos ?? 0;
-  const attention = open + todos;
+  const attention = poll.data?.totals.needs_you ?? 0;
 
   const signOut = async () => {
     setLoggingOut(true);
@@ -180,7 +149,7 @@ export default function App() {
         </div>
         <nav>
           <NavLink to="/" end>
-            projects
+            home
           </NavLink>
           <NavLink to="/resources">resources</NavLink>
         </nav>
@@ -213,7 +182,7 @@ export default function App() {
         </button>
         <div
           className={`q-counter ${attention > 0 ? "hot" : ""}`}
-          title={`${open} open questions, ${todos} human todos`}
+          title="open questions + human todos"
         >
           <span className="q-num">{poll.data ? attention : "–"}</span>
           <span className="q-label">need attention</span>
