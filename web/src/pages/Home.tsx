@@ -112,7 +112,12 @@ function ProjectRow({
           attentionCount={counts.questions + counts.blockers}
           cooldownHint={p.state === "blocked_resources" ? cooldownHint : undefined}
         />
-        <span className="hp-spend">{p.spend_today > 0 ? money(p.spend_today) : "—"}</span>
+        <span
+          className={`hp-spend${p.spend_today > 0 ? "" : " hp-spend-empty"}`}
+          title="spend today"
+        >
+          {p.spend_today > 0 ? money(p.spend_today) : "—"}
+        </span>
       </Link>
       <ProjectActions project={p} onPatch={onPatch} compact />
     </article>
