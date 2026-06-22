@@ -378,7 +378,7 @@ export interface ResourceInfo {
   disabled_reason?: string;
 }
 
-/** A machine (or homeless runner) with its runners and agents, grouped server-side. */
+/** A machine with its runners and agents, grouped server-side. */
 export interface MachineGroup {
   machine: MachineInfo;
   online: boolean;

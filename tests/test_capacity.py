@@ -25,21 +25,22 @@ def _usable(runner_id: str, backend: str = "claude", **kw) -> Resource:
 def test_every_resource_lands_in_exactly_one_card():
     machine = Machine(name="m1")
     on_machine = Runner(machine_id=machine.id, name="r1", backends=["claude"])
-    homeless = Runner(name="r2", backends=["codex"])
+    unlinked = Runner(name="r2", backends=["codex"])
     resources = [
         _usable(on_machine.id, "claude"),
-        _usable(homeless.id, "codex"),
+        _usable(unlinked.id, "codex"),
         _usable("ghost-runner", "cursor"),  # orphan: no runner record
     ]
-    groups = group_machines([machine], [on_machine, homeless], resources)
+    groups = group_machines([machine], [on_machine, unlinked], resources)
 
     grouped_ids = [res.id for g in groups for res in g.resources]
     assert sorted(grouped_ids) == sorted(r.id for r in resources)  # nothing lost or duplicated
 
     names = {g.machine.name for g in groups}
     assert machine.name in names  # the real machine
-    assert "r2" in names  # homeless runner gets a virtual card
+    assert "r2" in names  # unlinked runner gets a diagnostic card
     assert "unassigned" in names  # orphan resource gets a card
+    assert next(g.machine for g in groups if g.machine.name == "r2").kind == "unlinked"
 
 
 def test_serializers_agree_on_readiness():

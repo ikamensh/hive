@@ -79,12 +79,13 @@ In MVP the only channel is the web UI inbox (user visits the page, sees work sta
 - Failed verification loops back to the worker at most N times (~3, enforced: `create_task` refuses another work task once a workstream has 3 verify rejects without an accept since), then the workstream parks with a question ("can't get this to pass, here's why").
 - A red main build (when CI exists) is an event that triggers a fix task.
 
-## 5. Distribution: runners
+## 5. Distribution: machines and runners
 
-- A **runner** is a small daemon on any machine (the control-plane VM itself, the user's laptop, a GCP VM). It registers with the control plane and advertises **capabilities**: installed agent CLIs, loaded credentials and their licensing mode, auth freshness, machine specs.
+- A **machine** is the capacity unit the user recognizes: either a cloud server expected to stay online or a personal computer that may sleep, travel, or disconnect.
+- A **runner** is the technical access link on a machine. It registers with the control plane and advertises **capabilities**: installed agent CLIs, loaded credentials and their licensing mode, auth freshness, machine specs. The product should not present runner as a peer type to cloud server or personal computer; normally there is one runner per machine.
 - **Push semantics, pull transport**: the orchestrator assigns "task → runner X"; physically the runner long-polls for assignments and streams results back. Works behind NAT, no inbound ports. Timeouts/rejections surface to the orchestrator, which adapts (retry elsewhere, replan).
 - **Escalation channel** (first-class): any agent can file "missing credential / infra problem / harness limitation" → orchestrator grants, rejects, or escalates to the human inbox. These complaints are also valuable logs for improving the harness.
-- Post-MVP: hive provisions runners itself (spin up a VM, install backends, inject credentials from the vault).
+- Post-MVP: hive provisions cloud-server machines itself (spin up a VM, install backends, inject credentials from the vault, enroll it).
 
 ## 6. AI resources
 
@@ -93,12 +94,12 @@ In MVP the only channel is the web UI inbox (user visits the page, sees work sta
 - **User resource policy**: e.g. "prefer subscriptions, fall back to API keys up to $X/day" or rich-user mode "just use API keys on cloud VMs."
 - Estimates come from **observed usage** (per-task token/cost reports — kodo parses these per backend) and **error-driven cooldowns** (429/out-of-quota marks a resource exhausted with a reset ETA). No dashboard scraping, no per-provider quota API integrations.
 - **Budget enforcement is best-effort**: hive stops at the soft limit it tracks; the hard backstop is the budget set in the provider's console.
-- **Auth freshness is a human task**: "refresh login on runner X or that capacity is lost" appears in the same inbox as questions.
+- **Auth freshness is a human task**: "refresh login on machine X or that capacity is lost" appears in the same inbox as questions.
 
 ## 7. Credentials & secrets
 
 - Credentials are **entrusted to hive centrally** (GCP Secret Manager as the vault) rather than scattered on machines. Target: orchestrator injects only the credentials a task needs into the runner; runners are cattle.
-- MVP simplification: credentials manually placed on the two runners (VM + laptop); GitHub access is simply the user's own `gh` login on the runners. GitHub App (per-repo installs, short-lived tokens, webhooks) is the product path; the auth interface is designed to swap to it without touching anything else.
+- MVP simplification: credentials manually placed on the enrolled machines (cloud server + personal computer); GitHub access is simply the user's own `gh` login on those machines. GitHub App (per-repo installs, short-lived tokens, webhooks) is the product path; the auth interface is designed to swap to it without touching anything else.
 
 ## 8. Infrastructure awareness
 
@@ -128,7 +129,7 @@ GEPA-style prompt optimization (reflective mutation from execution traces + natu
 
 ## 11. Deployment & stack
 
-- **Control plane: one small always-on GCE VM** running docker-compose. The VM doubles as **runner #1** (API-key backends); the user's laptop registers as runner #2 for subscription-bound backends (e.g. Claude Max). Access via Tailscale (no public exposure, works from phone); no IAP/load-balancer ceremony in MVP.
+- **Control plane: one small always-on GCE VM** running docker-compose. That cloud server is also enrolled for API-key backends; the user's personal computer is enrolled for subscription-bound backends (e.g. Claude Max). Access via Tailscale (no public exposure, works from phone); no IAP/load-balancer ceremony in MVP.
 - **State lives off-VM from day one**: **Firestore** for structured state (projects, tasks, questions, resources, episode index), **GCS** for blobs (orchestrator session backups, traces, archives). The VM is disposable: a fresh one re-attaches and resumes, losing at most an in-flight task. Secret Manager from day one.
 - **Monorepo** (`hive`): `control-plane/` (Python/FastAPI — supervisor, orchestrator invocations, Firestore/GCS, GitHub ops), `runner-agent/` (small Python daemon), `web/` (React + Vite + TypeScript SPA), `deploy/` (compose, VM bootstrap).
 - **Kodo is reused as a library, not as the orchestration**: its raw primitives — backend sessions (Claude Code / Cursor / Codex / Gemini CLI wrappers with session persistence, token/cost parsing, malformed-output hardening), agent = prompt + session + budget, JSONL trace format. Hive builds its own supervisor, planning, distribution, inbox, and UI on top.

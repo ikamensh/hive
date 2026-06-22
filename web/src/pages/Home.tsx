@@ -125,7 +125,7 @@ function MachineCard({ m }: { m: OverviewMachine }) {
       <span className="cap-head">
         <i className={`dot ${m.online ? "" : "off"}`} />
         <span className="cap-name">{m.name}</span>
-        <span className="cap-kind">{m.device_kind === "unknown" ? m.kind : m.device_kind}</span>
+        <span className="cap-kind">{machineAvailabilityLabel(m)}</span>
       </span>
       <span className="cap-agents">
         {m.agents.length === 0 && <span className="muted">no agents discovered</span>}
@@ -137,6 +137,13 @@ function MachineCard({ m }: { m: OverviewMachine }) {
       </span>
     </Link>
   );
+}
+
+function machineAvailabilityLabel(machine: OverviewMachine): string {
+  if (machine.device_kind === "server") return "cloud server";
+  if (machine.device_kind === "laptop") return "personal computer";
+  if (machine.id.startsWith("runner:") || machine.kind === "unlinked") return "unlinked machine";
+  return "availability unknown";
 }
 
 function NewProjectModal({ onClose }: { onClose: () => void }) {
@@ -338,7 +345,7 @@ export default function Home() {
           </Link>
         </div>
         {data.capacity.machines.length === 0 ? (
-          <p className="muted">No runners registered. Enroll a host on the resources page.</p>
+          <p className="muted">No machines enrolled. Enroll a machine on the resources page.</p>
         ) : (
           <div className="cap-list">
             {data.capacity.machines.map((m) => (

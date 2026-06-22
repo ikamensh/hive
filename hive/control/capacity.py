@@ -1,4 +1,4 @@
-"""Grouping of agents under the machine that hosts them.
+"""Grouping of agent capacity under durable machines.
 
 One implementation, two consumers: the home dashboard wants a lightweight
 readiness summary (`capacity_summary`); the resources page wants the same
@@ -15,8 +15,11 @@ from hive.models import Machine, Resource, ResourceUsability, Runner, now
 
 @dataclass
 class MachineGroup:
-    """A machine (or a runner with no recognized machine) and the runners and
-    agents attached to it."""
+    """A machine card and the runners and agents attached to it.
+
+    Legacy runner-only records are synthesized into diagnostic machine cards so
+    capacity never disappears, but they are not a normal user-facing category.
+    """
 
     machine: Machine
     runners: list[Runner]
@@ -62,14 +65,14 @@ def agent_status(resource: Resource, runner: Runner | None) -> str:
     return "probe"  # discovered but never proven
 
 
-def _virtual_machine(runner: Runner) -> Machine:
+def _unlinked_machine(runner: Runner) -> Machine:
     """A runner with no recognized machine record still deserves a card."""
     return Machine(
         id=f"runner:{runner.id}",
         workspace_id=runner.workspace_id,
         name=runner.name,
         hostname=runner.name,
-        kind="runner",
+        kind="unlinked",
         device_kind="unknown",
         first_seen=runner.last_seen,
         last_seen=runner.last_seen,
@@ -90,7 +93,7 @@ def _unassigned_machine() -> Machine:
 def group_machines(
     machines: list[Machine], runners: list[Runner], resources: list[Resource]
 ) -> list[MachineGroup]:
-    """Bucket agents under their machine; give homeless runners and orphan
+    """Bucket agents under their machine; give unlinked runners and orphan
     resources their own cards so nothing disappears."""
     machine_ids = {m.id for m in machines}
     claimed: set[str] = set()
@@ -110,7 +113,7 @@ def group_machines(
             continue
         runner_resources = [res for res in resources if res.runner_id == runner.id]
         claimed.update(res.id for res in runner_resources)
-        groups.append(MachineGroup(_virtual_machine(runner), [runner], runner_resources))
+        groups.append(MachineGroup(_unlinked_machine(runner), [runner], runner_resources))
 
     orphans = [res for res in resources if res.id not in claimed]
     if orphans:

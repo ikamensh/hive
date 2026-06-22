@@ -59,8 +59,8 @@ Supporting concepts:
 - **Run** — a bounded user-triggered batch on a workstream. For issue solving,
   an `IssueRun` snapshots selected issue numbers and drives them one after
   another. Iteration work may not need explicit runs beyond "start/continue".
-- **Runner** — a process that can execute tasks on a machine.
-- **Machine** — a durable host the user recognizes; runners come and go on it.
+- **Machine** — a durable host the user recognizes; the user-facing capacity unit. A machine is either a cloud server expected to stay online or a personal computer that may sleep, move, or disconnect.
+- **Runner** — a technical access link that can execute tasks on a machine. Runner is not a user-facing machine type, and normal operation has one runner per machine.
 - **Resource** — a usable `(runner, backend)` capacity unit with auth,
   quota/cooldown, and cost accounting.
 - **Question** — a clarification Hive asks the user because a decision would

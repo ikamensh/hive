@@ -223,7 +223,7 @@ export default function Resources() {
       await api.startLocalRunner();
       await refresh();
     } catch {
-      setRunnerError("could not start local runner");
+      setRunnerError("could not enroll this machine");
     } finally {
       setStartingRunner(false);
     }
@@ -236,7 +236,7 @@ export default function Resources() {
       await api.updateLocalRunner({ autostart });
       await refresh();
     } catch {
-      setRunnerError("could not update local runner autostart");
+      setRunnerError("could not update auto-enroll setting");
     } finally {
       setUpdatingAutostart(false);
     }
@@ -267,13 +267,13 @@ export default function Resources() {
           <div className="runner-grid machine-grid">
             {machineCards.length === 0 && (
               <section className="runner-empty">
-                <h2>No runners registered</h2>
+                <h2>No machines enrolled</h2>
                 <p className="muted">
-                  Start a runner on this control-plane host to discover local agent CLIs and queue probes.
+                  Enroll this machine so Hive can discover local agent CLIs and queue probes.
                 </p>
                 {localRunner?.supported ? (
                   <button onClick={startLocalRunner} disabled={startingRunner}>
-                    {startingRunner ? "starting" : "enroll this host"}
+                    {startingRunner ? "starting" : "enroll this machine"}
                   </button>
                 ) : (
                   <code>uv run python -m hive.runner</code>
@@ -318,7 +318,6 @@ function MachineCard({
   onSetEnabled: (res: ResourceInfo, enabled: boolean) => void;
 }) {
   const { online, last_seen: lastSeen } = card;
-  const runnerNames = card.runners.map((runner) => runner.name).join(", ");
   const runnerById = new Map(card.runners.map((runner) => [runner.id, runner.name]));
 
   return (
@@ -334,7 +333,7 @@ function MachineCard({
           </div>
         </div>
         <span className="runner-seen">
-          {online ? "runner online" : lastSeen > 0 ? `last seen ${ago(lastSeen)}` : "offline"}
+          {online ? "online" : lastSeen > 0 ? `last seen ${ago(lastSeen)}` : "offline"}
         </span>
       </header>
 
@@ -345,9 +344,11 @@ function MachineCard({
         <span className="chip" title={deviceKindTitle(card.machine.device_kind)}>
           {deviceKindLabel(card.machine.device_kind)}
         </span>
-        <span className="chip" title={runnerNames ? `runner process: ${runnerNames}` : "no runner process online"}>
-          {card.machine.kind || "unknown"}
-        </span>
+        {isUnlinkedMachine(card.machine) && (
+          <span className="chip" title="This capacity is visible, but Hive has not linked it to a durable machine record.">
+            unlinked machine
+          </span>
+        )}
       </div>
 
       {card.resources.length > 0 ? (
@@ -444,8 +445,8 @@ function machineTypeTitle(machine: MachineInfo): string {
 }
 
 function deviceKindLabel(kind: string): string {
-  if (kind === "server") return "server";
-  if (kind === "laptop") return "laptop";
+  if (kind === "server") return "cloud server";
+  if (kind === "laptop") return "personal computer";
   return "availability unknown";
 }
 
@@ -453,6 +454,10 @@ function deviceKindTitle(kind: string): string {
   if (kind === "server") return "Expected to stay online unless explicitly stopped.";
   if (kind === "laptop") return "May sleep, disconnect, or move between networks.";
   return "Set HIVE_MACHINE_KIND=server or HIVE_MACHINE_KIND=laptop to make availability expectations explicit.";
+}
+
+function isUnlinkedMachine(machine: MachineInfo): boolean {
+  return machine.id.startsWith("runner:") || machine.kind === "unlinked";
 }
 
 function discoveryTitle(res: ResourceInfo): string {
@@ -523,22 +528,22 @@ function LocalRunnerAction({
 }) {
   return (
     <div className="local-runner-controls">
-      <label className="runner-autostart" title="start this host's runner automatically with hive run">
+      <label className="runner-autostart" title="enroll this machine automatically with hive run">
         <input
           type="checkbox"
           checked={localRunner.autostart}
           disabled={busy}
           onChange={(event) => onAutostart(event.currentTarget.checked)}
         />
-        <span>auto-start runner</span>
+        <span>auto-enroll on launch</span>
       </label>
       {localRunner.registered ? (
         <span className="local-runner-chip" title={localRunner.message || localRunner.log_path}>
-          this host enrolled
+          this machine enrolled
         </span>
       ) : (
         <button className="ghost" onClick={onStart} disabled={busy}>
-          {busy ? "starting" : "enroll this host"}
+          {busy ? "starting" : "enroll this machine"}
         </button>
       )}
     </div>
