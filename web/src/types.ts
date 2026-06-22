@@ -183,6 +183,46 @@ export interface ProjectDetail {
   stories: Story[];
   findings: Finding[];
   test_episodes: TestEpisode[];
+  directives?: Directive[];
+  checkouts?: Checkout[];
+}
+
+export type DirectiveStatus =
+  | "triaging"
+  | "awaiting_executor"
+  | "working"
+  | "done"
+  | "cancelled";
+
+/** A human-authored ask to a project that Hive routes (see CONTEXT.md). */
+export interface Directive {
+  id: string;
+  workspace_id?: string;
+  project_id: string;
+  text: string;
+  status: DirectiveStatus;
+  suggested_backend: string;
+  suggested_model: string;
+  suggested_machine_id: string;
+  routing_note: string;
+  created_at: number;
+  updated_at: number;
+}
+
+/** A project repo's working copy on one machine + its git-drift facts. */
+export interface Checkout {
+  id: string;
+  workspace_id?: string;
+  machine_id: string;
+  repo: string;
+  exists: boolean;
+  head_sha: string;
+  branch: string;
+  ahead: number;
+  behind: number;
+  dirty: boolean;
+  env_status: string;
+  last_reported_at: number;
 }
 
 export interface IssueRun {

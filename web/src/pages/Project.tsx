@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useOverview } from "../App";
-import { api, repoShort, usePoll } from "../api";
-import { Markdown, SegPicker, StateBadge } from "../components/shared";
+import { api, repoKey, repoShort, usePoll } from "../api";
+import { Markdown, StateBadge } from "../components/shared";
 import {
   AnsweredQuestion,
   HumanTodoCard,
@@ -17,6 +17,15 @@ import {
   WorkstreamCard,
 } from "../features/project/controls";
 import { IssueCard, IssuesToolbar, IssuesView } from "../features/project/issues";
+import {
+  DirectiveComposer,
+  DirectivesList,
+  JobTiles,
+  MachinesPanel,
+  groupCheckouts,
+  type JobKind,
+  type JobTile,
+} from "../features/project/launchpad";
 import { ProjectSetup } from "../features/project/setup";
 import { StoriesView, TestingToolbar } from "../features/project/testing";
 import { projectViewModel } from "../features/project/viewModel";
@@ -25,7 +34,7 @@ import type { ProjectPatch } from "../types";
 export default function ProjectPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
-  const [primaryView, setPrimaryView] = useState<"work" | "issues" | "tests">("work");
+  const [drill, setDrill] = useState<"none" | "build" | "issues" | "tests">("none");
   const [selectedIssueStreamId, setSelectedIssueStreamId] = useState("");
   const [selectedIssueNumbers, setSelectedIssueNumbers] = useState<number[]>([]);
   const [selectedTestingStreamId, setSelectedTestingStreamId] = useState("");
@@ -113,6 +122,11 @@ export default function ProjectPage() {
     refresh();
   };
 
+  const submitDirective = async (text: string) => {
+    await api.createDirective(id, text);
+    refresh();
+  };
+
   const needsStart = false;
   const toggleIssueSelection = (issueNumber: number) => {
     setSelectedIssueNumbers((numbers) =>
@@ -129,6 +143,100 @@ export default function ProjectPage() {
         : [...keys, storyKey].sort(),
     );
   };
+
+  // --- launchpad-derived data ---------------------------------------------
+  const directives = data.directives ?? [];
+  const checkouts = data.checkouts ?? [];
+  const projectRepos = (() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of [project.spec_repo, ...project.member_repos]) {
+      const repo = (r ?? "").trim();
+      if (repo && !seen.has(repoKey(repo))) {
+        seen.add(repoKey(repo));
+        out.push(repo);
+      }
+    }
+    return out;
+  })();
+  const machineMeta = (machineId: string) => {
+    const card = (resources?.cards ?? []).find((c) => c.machine.id === machineId);
+    return { name: card?.machine.name ?? machineId.slice(0, 6), online: card?.online ?? false };
+  };
+  const checkoutGroups = groupCheckouts(projectRepos, checkouts, machineMeta, repoKey);
+  const driftCount = checkouts.filter((c) => c.exists && (c.ahead > 0 || c.dirty)).length;
+
+  const jobTiles: JobTile[] = [
+    {
+      kind: "issues",
+      icon: "ti-bug",
+      label: "Fix issues",
+      hint: issueWorkItems.length > 0 ? `${issueWorkItems.length} issues` : "scan a repo",
+    },
+    {
+      kind: "tests",
+      icon: "ti-flask",
+      label: "Run tests",
+      hint: testingStories.length > 0 ? `${testingStories.length} stories` : "set up testing",
+    },
+    {
+      kind: "build",
+      icon: "ti-hammer",
+      label: "Advance build",
+      hint: project.paused ? "paused" : `${manualWorkItems.length} work items`,
+    },
+    {
+      kind: "sync",
+      icon: "ti-git-merge",
+      label: "Sync a machine",
+      hint: driftCount > 0 ? `${driftCount} drifted` : "all in sync",
+      disabled: driftCount === 0,
+    },
+  ];
+
+  const onLaunch = (kind: JobKind) => {
+    if (kind === "sync") {
+      document.getElementById("machines-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    setDrill(kind);
+  };
+
+  const launchpadHome = (
+    <section className="col col-launchpad">
+      <div className="launch-row">
+        <DirectiveComposer onSubmit={submitDirective} />
+        <JobTiles tiles={jobTiles} onLaunch={onLaunch} />
+      </div>
+      {directives.length > 0 && (
+        <div className="launch-block">
+          <h2 className="col-title">
+            directives <span className="col-count">{directives.length}</span>
+          </h2>
+          <DirectivesList directives={directives} machineName={(mid) => machineMeta(mid).name} />
+        </div>
+      )}
+      <div className="launch-block" id="machines-panel">
+        <h2 className="col-title">
+          machines &amp; checkouts <span className="col-count">{checkoutGroups.length}</span>
+        </h2>
+        <MachinesPanel groups={checkoutGroups} />
+      </div>
+      <TogglesBar project={project} onPatch={patch} />
+      <ProjectSettings
+        project={project}
+        workstreams={workstreams}
+        onPatch={patch}
+        onPatchWorkstream={patchWorkstream}
+      />
+    </section>
+  );
+
+  const drillBackBar = (
+    <button type="button" className="ghost drill-back" onClick={() => setDrill("none")}>
+      <i className="ti ti-arrow-left" aria-hidden /> launchpad
+    </button>
+  );
 
   const needsYouCol = (
     <section className="col col-inbox">
@@ -202,33 +310,19 @@ export default function ProjectPage() {
       ) : (
         <>
           {project.goal_complete && <GoalBanner project={project} onPatch={patch} />}
-          {configured && !needsStart && <TogglesBar project={project} onPatch={patch} />}
-          {configured && !needsStart && (
-            <ProjectSettings
-              project={project}
-              workstreams={workstreams}
-              onPatch={patch}
-              onPatchWorkstream={patchWorkstream}
-            />
-          )}
 
-          {configured && !needsStart && (
-            <div className="project-primary-switch">
-              <SegPicker
-                value={primaryView}
-                options={[
-                  { value: "work", label: "work" },
-                  { value: "issues", label: "issues" },
-                  { value: "tests", label: "tests" },
-                ]}
-                onChange={setPrimaryView}
-              />
-            </div>
-          )}
-
-          <div className={`columns ${primaryView === "issues" || primaryView === "tests" ? "columns-issues" : ""}`}>
-            {primaryView === "issues" ? (
+          <div
+            className={`columns ${
+              drill === "issues" || drill === "tests"
+                ? "columns-issues"
+                : drill === "none"
+                  ? "columns-launchpad"
+                  : ""
+            }`}
+          >
+            {drill === "issues" ? (
               <section className="col col-ws col-issues-main">
+                {drillBackBar}
                 <IssuesToolbar
                   project={project}
                   issueStreams={issueStreams}
@@ -249,8 +343,9 @@ export default function ProjectPage() {
                   onToggle={toggleIssueSelection}
                 />
               </section>
-            ) : primaryView === "tests" ? (
+            ) : drill === "tests" ? (
               <section className="col col-ws col-issues-main">
+                {drillBackBar}
                 <TestingToolbar
                   project={project}
                   testingStreams={testingStreams}
@@ -274,8 +369,9 @@ export default function ProjectPage() {
                   onToggle={toggleStorySelection}
                 />
               </section>
-            ) : (
+            ) : drill === "build" ? (
               <section className="col col-ws">
+                {drillBackBar}
                 <h2 className="col-title">
                   work items <span className="col-count">{manualWorkItems.length}</span>
                 </h2>
@@ -284,6 +380,8 @@ export default function ProjectPage() {
                   <WorkstreamCard key={w.id} ws={w} />
                 ))}
               </section>
+            ) : (
+              launchpadHome
             )}
             {needsYouCol}
             {activityCol}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AuthInfo,
   AgentConversation,
+  Directive,
   HumanTodo,
   GithubRepo,
   IntakeMessage,
@@ -99,6 +100,11 @@ const realApi = {
   startProject: (id: string, body: ProjectStart) =>
     http<Project>(`/api/projects/${id}/start`, { method: "POST", body: JSON.stringify(body) }),
   project: (id: string) => http<ProjectDetail>(`/api/projects/${id}`),
+  createDirective: (id: string, text: string) =>
+    http<Directive>(`/api/projects/${id}/directives`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
   patchProject: (id: string, patch: ProjectPatch) =>
     http<Project>(`/api/projects/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   updateWorkstream: (projectId: string, workstreamId: string, patch: WorkstreamPatch) =>

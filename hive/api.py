@@ -68,7 +68,10 @@ from hive.workstreams.testing import (
 from hive.models import (
     AgentConversation,
     Autonomy,
+    Checkout,
     ConversationStatus,
+    Directive,
+    DirectiveStatus,
     Feedback,
     Finding,
     GuessPropensity,
@@ -129,6 +132,24 @@ PROBE_REPO_DIR = "agent-probe-repo"
 
 def _iso_utc(epoch: float) -> str:
     return datetime.datetime.fromtimestamp(epoch, datetime.UTC).isoformat()
+
+
+def canonical_repo(url: str) -> str:
+    """Reduce a repo URL to a comparable `owner/repo` (or host path) key, so a
+    runner's `git@github.com:o/r.git` origin and the stored
+    `https://github.com/o/r` match. Lenient: never raises, lower-cases."""
+    u = (url or "").strip()
+    for prefix in (
+        "git@github.com:",
+        "ssh://git@github.com/",
+        "https://github.com/",
+        "http://github.com/",
+        "git://github.com/",
+    ):
+        if u.startswith(prefix):
+            u = u[len(prefix):]
+            break
+    return u.removesuffix(".git").strip("/").lower()
 
 
 class ProjectCreate(BaseModel):
@@ -223,6 +244,22 @@ class BackendDiscoveryInput(BaseModel):
     message: str = ""
 
 
+class CheckoutReport(BaseModel):
+    """Git facts the runner observed for one repo checkout it holds."""
+
+    repo: str  # git URL
+    exists: bool = True
+    head_sha: str = ""
+    branch: str = ""
+    ahead: int = 0
+    behind: int = 0
+    dirty: bool = False
+
+
+class DirectiveCreate(BaseModel):
+    text: str
+
+
 class RunnerRegister(BaseModel):
     name: str
     backends: list[str]
@@ -236,6 +273,7 @@ class RunnerRegister(BaseModel):
     discoveries: list[BackendDiscoveryInput] = []
     capabilities: list[str] = []
     auto_probe: bool = False
+    checkouts: list[CheckoutReport] = []  # git facts per repo this runner has checked out
 
 
 class ResourcePatch(BaseModel):
@@ -1358,8 +1396,82 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 e.model_dump()
                 for e in store.list(TestEpisode, workspace_id=ctx.workspace_id, project_id=project_id)
             ],
+            "directives": [
+                d.model_dump()
+                for d in store.list(Directive, workspace_id=ctx.workspace_id, project_id=project_id)
+            ],
+            "checkouts": [c.model_dump() for c in project_checkouts(ctx.workspace_id, project)],
             "spend_today": supervisor.spend_today(project_id),
         }
+
+    def project_repos(project: Project) -> list[str]:
+        """The repos a project physically lives in: spec home plus members."""
+        repos = [project.spec_repo, *project.member_repos]
+        seen, out = set(), []
+        for repo in repos:
+            repo = (repo or "").strip()
+            if repo and repo not in seen:
+                seen.add(repo)
+                out.append(repo)
+        return out
+
+    def project_checkouts(workspace_id: str, project: Project) -> list[Checkout]:
+        """Checkouts of this project's repos, across every machine. Checkouts are
+        keyed by (machine, repo) and shared across projects on the same repo, so
+        we filter the workspace's checkouts by the project's repo set. Matching is
+        canonical so a runner's `owner/repo.git` origin joins the stored
+        `https://github.com/owner/repo`."""
+        repos = {canonical_repo(r) for r in project_repos(project)}
+        return [
+            c
+            for c in store.list(Checkout, workspace_id=workspace_id)
+            if canonical_repo(c.repo) in repos
+        ]
+
+    def suggest_executor(project: Project) -> tuple[str, str, str, str]:
+        """Preview routing for a directive: pick a plausible (backend, model,
+        machine_id) over live capacity, with a one-line rationale. This is a
+        stub — the real triage/dispatch engine is unbuilt (see
+        wiki/project-launchpad.md). Returns ("", "", "", note) when nothing is
+        online so the UI can say so honestly."""
+        available = [
+            r
+            for r in store.list(Resource, workspace_id=project.workspace_id)
+            if r.available()
+        ]
+        if not available:
+            return "", "", "", "No online agent right now — routing will wait for capacity."
+        pick = min(available, key=lambda r: (r.total_tasks, r.total_cost_usd))
+        machine = store.get(Machine, pick.machine_id) if pick.machine_id else None
+        where = machine.name if machine else "an available machine"
+        return (
+            pick.backend,
+            "",
+            pick.machine_id,
+            f"Preview: would run on {pick.backend} on {where} (least-loaded online agent).",
+        )
+
+    @app.post("/api/projects/{project_id}/directives")
+    def create_directive(
+        project_id: str, body: DirectiveCreate, ctx: AuthContext = Depends(current)
+    ):
+        project = require_project(project_id, ctx)
+        text = body.text.strip()
+        if not text:
+            raise HTTPException(400, "directive text cannot be empty")
+        backend, model, machine_id, note = suggest_executor(project)
+        directive = Directive(
+            workspace_id=ctx.workspace_id,
+            project_id=project_id,
+            text=text,
+            status=DirectiveStatus.awaiting_executor if backend else DirectiveStatus.triaging,
+            suggested_backend=backend,
+            suggested_model=model,
+            suggested_machine_id=machine_id,
+            routing_note=note,
+        )
+        store.put(directive)
+        return directive.model_dump()
 
     @app.patch("/api/projects/{project_id}")
     def patch_project(project_id: str, body: ProjectPatch, ctx: AuthContext = Depends(current)):
@@ -1843,7 +1955,32 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 apply_discovery(resource, discovery)
                 store.put(resource)
 
+        upsert_checkouts(workspace_id, machine.id, body.checkouts)
+
         return {"runner_id": runner.id, "machine_id": machine.id}
+
+    def upsert_checkouts(
+        workspace_id: str, machine_id: str, reports: list[CheckoutReport]
+    ) -> None:
+        """Record the git facts the runner observed for each repo on this
+        machine. Keyed by (machine, repo); the runner is authoritative for its
+        own host, so a fresh report replaces the prior one."""
+        existing = {
+            c.repo: c
+            for c in store.list(Checkout, workspace_id=workspace_id, machine_id=machine_id)
+        }
+        for report in reports:
+            checkout = existing.get(report.repo) or Checkout(
+                workspace_id=workspace_id, machine_id=machine_id, repo=report.repo
+            )
+            checkout.exists = report.exists
+            checkout.head_sha = report.head_sha
+            checkout.branch = report.branch
+            checkout.ahead = report.ahead
+            checkout.behind = report.behind
+            checkout.dirty = report.dirty
+            checkout.last_reported_at = time.time()
+            store.put(checkout)
 
     @app.post("/api/runners/{runner_id}/poll")
     async def poll(runner_id: str, workspace_id: str = Depends(runner_auth)):

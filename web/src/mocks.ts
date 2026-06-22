@@ -4,6 +4,8 @@
 import type {
   AgentConversation,
   AuthInfo,
+  Checkout,
+  Directive,
   GithubRepo,
   HumanTodo,
   IntakeMessage,
@@ -386,6 +388,77 @@ const testEpisodes: TestEpisode[] = [
     finished_at: now - 3600 * 7,
   },
 ];
+
+const directives: Directive[] = [
+  {
+    id: "dir-atlas-1",
+    project_id: "p-atlas",
+    text: "Add a dark-mode toggle to the settings page and persist the choice.",
+    status: "awaiting_executor",
+    suggested_backend: "claude",
+    suggested_model: "",
+    suggested_machine_id: "m-hex1",
+    routing_note: "Preview: would run on claude on hex-1 (least-loaded online agent).",
+    created_at: now - 60 * 8,
+    updated_at: now - 60 * 8,
+  },
+  {
+    id: "dir-atlas-2",
+    project_id: "p-atlas",
+    text: "Investigate why the nightly export job is 3x slower since Tuesday.",
+    status: "triaging",
+    suggested_backend: "",
+    suggested_model: "",
+    suggested_machine_id: "",
+    routing_note: "No online agent right now — routing will wait for capacity.",
+    created_at: now - 60 * 2,
+    updated_at: now - 60 * 2,
+  },
+];
+
+const checkouts: Checkout[] = [
+  // atlas-spec: clean on the always-on server, drifted on the laptop.
+  {
+    id: "co-1", machine_id: "m-hex1", repo: "git@github.com:acme/atlas-spec.git",
+    exists: true, head_sha: "9f3a1c2", branch: "main", ahead: 0, behind: 0, dirty: false,
+    env_status: "unknown", last_reported_at: now - 14,
+  },
+  {
+    id: "co-2", machine_id: "m-hex2", repo: "git@github.com:acme/atlas-spec.git",
+    exists: true, head_sha: "1b77e09", branch: "main", ahead: 3, behind: 1, dirty: true,
+    env_status: "unknown", last_reported_at: now - 60 * 47,
+  },
+  // atlas-api: only checked out on the server, one unpushed commit.
+  {
+    id: "co-3", machine_id: "m-hex1", repo: "git@github.com:acme/atlas-api.git",
+    exists: true, head_sha: "44c0d8e", branch: "hive/issue-42", ahead: 1, behind: 0, dirty: false,
+    env_status: "unknown", last_reported_at: now - 20,
+  },
+  // atlas-web: clean on the server, never checked out on the laptop.
+  {
+    id: "co-4", machine_id: "m-hex1", repo: "git@github.com:acme/atlas-web.git",
+    exists: true, head_sha: "0aa91f4", branch: "main", ahead: 0, behind: 0, dirty: false,
+    env_status: "unknown", last_reported_at: now - 31,
+  },
+];
+
+function canonicalRepo(url: string): string {
+  return url
+    .trim()
+    .replace(/^git@github\.com:/, "")
+    .replace(/^ssh:\/\/git@github\.com\//, "")
+    .replace(/^https?:\/\/github\.com\//, "")
+    .replace(/\.git$/, "")
+    .replace(/\/$/, "")
+    .toLowerCase();
+}
+
+function checkoutsForProject(projectId: string): Checkout[] {
+  const project = projects.find((p) => p.id === projectId);
+  if (!project) return [];
+  const repos = new Set([project.spec_repo, ...project.member_repos].map(canonicalRepo));
+  return checkouts.filter((c) => repos.has(canonicalRepo(c.repo)));
+}
 
 const workItems: WorkItem[] = [
   {
@@ -1128,7 +1201,26 @@ export const api = {
       stories: stories.filter((s) => s.project_id === id),
       findings: findings.filter((f) => f.project_id === id),
       test_episodes: testEpisodes.filter((e) => e.project_id === id),
+      directives: directives.filter((d) => d.project_id === id),
+      checkouts: checkoutsForProject(id),
     });
+  },
+
+  createDirective: async (id: string, text: string): Promise<Directive> => {
+    const directive: Directive = {
+      id: `dir-${Math.random().toString(36).slice(2, 8)}`,
+      project_id: id,
+      text: text.trim(),
+      status: "awaiting_executor",
+      suggested_backend: "claude",
+      suggested_model: "",
+      suggested_machine_id: "m-hex1",
+      routing_note: "Preview: would run on claude on hex-1 (least-loaded online agent).",
+      created_at: Date.now() / 1000,
+      updated_at: Date.now() / 1000,
+    };
+    directives.unshift(directive);
+    return structuredClone(directive);
   },
 
   patchProject: async (id: string, patch: ProjectPatch): Promise<Project> => {

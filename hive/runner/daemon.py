@@ -419,6 +419,51 @@ def _git(args: list[str], cwd: Path, timeout: float = 120.0) -> subprocess.Compl
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
 
 
+def _checkout_facts(repo_dir: Path) -> dict | None:
+    """Read the git drift facts for one checkout: origin URL, HEAD, branch,
+    ahead/behind vs its upstream, and whether the tree is dirty. Best-effort —
+    returns None if the directory is not a usable git repo. Reports observed
+    state only; never mutates the checkout."""
+    try:
+        origin = _git(["remote", "get-url", "origin"], repo_dir, 15)
+        if origin.returncode != 0:
+            return None
+        head = _git(["rev-parse", "HEAD"], repo_dir, 15).stdout.strip()
+        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo_dir, 15).stdout.strip()
+        dirty = bool(_git(["status", "--porcelain"], repo_dir, 30).stdout.strip())
+        ahead = behind = 0
+        counts = _git(["rev-list", "--left-right", "--count", "@{upstream}...HEAD"], repo_dir, 30)
+        if counts.returncode == 0 and counts.stdout.strip():
+            parts = counts.stdout.split()
+            if len(parts) == 2:
+                behind, ahead = int(parts[0]), int(parts[1])
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return {
+        "repo": origin.stdout.strip(),
+        "exists": True,
+        "head_sha": head,
+        "branch": branch,
+        "ahead": ahead,
+        "behind": behind,
+        "dirty": dirty,
+    }
+
+
+def collect_checkouts() -> list[dict]:
+    """Git facts for every checkout under WORKDIR, for the heartbeat payload.
+    Lets the control plane track where each project physically exists and
+    whether machine-local work has drifted from the remote."""
+    if not WORKDIR.is_dir():
+        return []
+    facts = []
+    for child in sorted(WORKDIR.iterdir()):
+        if child.is_dir() and (child / ".git").exists():
+            if observed := _checkout_facts(child):
+                facts.append(observed)
+    return facts
+
+
 def run_preflight(project_dir: Path) -> dict:
     """Runner self-check for issue solving: prove this host can actually do the
     agent-facing GitHub work — push a branch to the repo and use `gh` — so a
@@ -712,6 +757,7 @@ def main(argv: list[str] | None = None) -> None:
                 "discoveries": discoveries,
                 "capabilities": capabilities,
                 "auto_probe": True,
+                "checkouts": collect_checkouts(),
             },
         ).raise_for_status().json()["runner_id"]
         return runner_id, backends

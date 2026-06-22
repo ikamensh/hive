@@ -748,3 +748,62 @@ class OrchestratorRun(BaseModel):
     output_tokens: int = 0
     cost_usd: float = 0.0
     created_at: float = Field(default_factory=now)
+
+
+class DirectiveStatus(StrEnum):
+    triaging = "triaging"  # received; no executor chosen yet
+    awaiting_executor = "awaiting_executor"  # routed (preview only), not dispatched
+    working = "working"  # (future) Hive seeded work that is in flight
+    done = "done"
+    cancelled = "cancelled"
+
+
+class Directive(BaseModel):
+    """A persisted, human-authored ask to a project — "just tell Hive what you
+    want" (see CONTEXT.md "Directive"). Hive triages it, assigns an executor and
+    machine, may seed work items, and tracks it to done. Distinct from the
+    iteration goal (standing strategy) and GitHub issues (external source).
+
+    This pass persists directives and shows a *preview* routing suggestion; the
+    triage/dispatch engine is intentionally unbuilt (see
+    wiki/project-launchpad.md)."""
+
+    id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    project_id: str
+    text: str
+    status: DirectiveStatus = DirectiveStatus.triaging
+    suggested_backend: str = ""  # preview routing: chosen executor backend
+    suggested_model: str = ""
+    suggested_machine_id: str = ""  # preview routing: chosen machine
+    routing_note: str = ""  # one-line rationale for the preview suggestion
+    created_at: float = Field(default_factory=now)
+    updated_at: float = Field(default_factory=now)
+
+
+class Checkout(BaseModel):
+    """A project repo's working copy on one machine — the unit that answers
+    "where does this project physically exist, and is any work there missing
+    from the remote?" (see CONTEXT.md "Checkout"). One per (machine, repo).
+
+    The runner reports the git facts in its heartbeat; the control plane upserts
+    this record. The remote is authoritative — a checkout is observed, not a
+    source of truth. `drift()` is the signal that real work may live only here."""
+
+    id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    machine_id: str
+    repo: str  # git URL
+    exists: bool = False
+    head_sha: str = ""
+    branch: str = ""
+    ahead: int = 0  # local commits not on origin
+    behind: int = 0  # origin commits not local
+    dirty: bool = False  # uncommitted working-tree changes
+    env_status: str = "unknown"  # reserved: dependency-setup readiness
+    last_reported_at: float = Field(default_factory=now)
+
+    def drift(self) -> bool:
+        """Local state the remote does not have: unpushed commits or a dirty
+        tree. The signal that work may live only on this machine."""
+        return self.exists and (self.ahead > 0 or self.dirty)

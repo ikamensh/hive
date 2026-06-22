@@ -22,7 +22,9 @@ from typing import Callable, TypeVar
 
 from hive.models import (
     AgentConversation,
+    Checkout,
     DEFAULT_WORKSPACE_ID,
+    Directive,
     Feedback,
     Finding,
     HumanTask,
@@ -70,6 +72,8 @@ M = TypeVar(
     Story,
     TestEpisode,
     OrchestratorRun,
+    Directive,
+    Checkout,
 )
 
 _COLLECTIONS: dict[type, str] = {
@@ -93,6 +97,8 @@ _COLLECTIONS: dict[type, str] = {
     Story: "stories",
     TestEpisode: "test_episodes",
     OrchestratorRun: "orchestrator_runs",
+    Directive: "directives",
+    Checkout: "checkouts",
 }
 
 
