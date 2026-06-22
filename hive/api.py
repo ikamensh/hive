@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import datetime
 import logging
+import os
 import re
 import subprocess
 import time
@@ -18,7 +19,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from hive.integrations.auth import (
@@ -1870,6 +1871,26 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     return app
 
 
+def mount_spa(app: FastAPI, web_dir: Path) -> None:
+    if not web_dir.is_dir():
+        return
+
+    cache_headers = {
+        # Local operators expect `hive run` to serve the freshly built UI.
+        # Avoid browser heuristics reusing an older SPA shell or bundle.
+        "Cache-Control": "no-store",
+    }
+
+    @app.get("/{path:path}")
+    def spa(path: str):
+        # Serve built assets; anything else falls back to the SPA shell so
+        # deep links like /p/<id> work. /api routes are matched first.
+        target = web_dir / path
+        if path and target.is_file():
+            return FileResponse(target, headers=cache_headers)
+        return FileResponse(web_dir / "index.html", headers=cache_headers)
+
+
 def production_app() -> FastAPI:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     config = Config.from_env()
@@ -1897,20 +1918,5 @@ def production_app() -> FastAPI:
         local_runner=LocalRunnerManager(config),
     )
 
-    import os
-    from pathlib import Path
-
-    web_dir = Path(os.environ.get("HIVE_WEB_DIST", "web/dist"))
-    if web_dir.is_dir():
-        from fastapi.responses import FileResponse
-
-        @app.get("/{path:path}")
-        def spa(path: str):
-            # Serve built assets; anything else falls back to the SPA shell so
-            # deep links like /p/<id> work. /api routes are matched first.
-            target = web_dir / path
-            if path and target.is_file():
-                return FileResponse(target)
-            return FileResponse(web_dir / "index.html")
-
+    mount_spa(app, Path(os.environ.get("HIVE_WEB_DIST", "web/dist")))
     return app

@@ -10,6 +10,7 @@ import time
 import subprocess
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from hive.runner.backends import PROBE_MARKER
@@ -158,6 +159,26 @@ def harness(tmp_path):
     app = create_app(store, supervisor, config, blobs=LocalBlobStore(tmp_path / "blobs"))
     # No context manager: lifespan (the background loop) stays off; tests pump manually.
     yield TestClient(app), store, orch
+
+
+def test_spa_bundle_is_not_browser_cached(tmp_path):
+    """`hive run` rebuilds web/dist, so reload/navigation must fetch the latest
+    SPA shell and bundle instead of browser-cached old UI code."""
+    web = tmp_path / "web"
+    assets = web / "assets"
+    assets.mkdir(parents=True)
+    (web / "index.html").write_text("<div id='root'></div>", encoding="utf-8")
+    (assets / "app.js").write_text("console.log('fresh')", encoding="utf-8")
+    from hive.api import mount_spa
+
+    app = FastAPI()
+    mount_spa(app, web)
+    client = TestClient(app)
+
+    for path in ("/", "/assets/app.js", "/p/project-id"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
 
 
 def test_full_loop(harness):
@@ -1178,7 +1199,7 @@ def test_overview_reflects_project_and_capacity(harness):
     """The home overview is one request that sees a started project and a
     probed-usable agent on its machine."""
     client, store, _ = harness
-    project = _create_started(client, "demo")
+    _create_started(client, "demo")
     _pump(client, store)
     _register_usable_runner(client)
 
