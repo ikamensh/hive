@@ -102,6 +102,7 @@ from hive.models import (
 )
 from hive.integrations.specrepo import SpecRepo
 from hive.persistence.storage import storage_info
+from hive.control.capacity import group_machines, machine_cards, resource_available
 from hive.control.overview import build_overview
 from hive.control.supervisor import Supervisor
 from hive.runner.task_results import (
@@ -1544,29 +1545,21 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @app.get("/api/resources")
     def resources(ctx: AuthContext = Depends(current)):
-        runners = {r.id: r for r in store.list(Runner, workspace_id=ctx.workspace_id)}
+        machines = store.list(Machine, workspace_id=ctx.workspace_id)
+        runner_list = store.list(Runner, workspace_id=ctx.workspace_id)
+        resource_list = store.list(Resource, workspace_id=ctx.workspace_id)
+        runners = {r.id: r for r in runner_list}
 
-        def resource_payload(resource: Resource) -> dict:
-            runner = runners.get(resource.runner_id)
-            available = (
-                resource.available()
-                and runner is not None
-                and runner.online()
-                and resource.backend in runner.backends
-            )
-            return {**resource.model_dump(), "available": available}
-
+        # Flat lists serve the CLI and per-project availability checks; `cards`
+        # is the same grouping the home dashboard uses (see hive.control.capacity).
         return {
-            "machines": [
-                m.model_dump() for m in store.list(Machine, workspace_id=ctx.workspace_id)
-            ],
-            "runners": [
-                {**r.model_dump(), "online": r.online()} for r in runners.values()
-            ],
+            "machines": [m.model_dump() for m in machines],
+            "runners": [{**r.model_dump(), "online": r.online()} for r in runner_list],
             "resources": [
-                resource_payload(r)
-                for r in store.list(Resource, workspace_id=ctx.workspace_id)
+                {**res.model_dump(), "available": resource_available(res, runners.get(res.runner_id))}
+                for res in resource_list
             ],
+            "cards": machine_cards(group_machines(machines, runner_list, resource_list)),
             "local_runner": local_runner_payload(ctx.workspace_id),
         }
 

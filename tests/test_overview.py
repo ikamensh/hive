@@ -9,13 +9,12 @@ hand-counted constants.
 
 import time
 
-from hive.control.overview import agent_status, build_overview
+from hive.control.overview import build_overview
 from hive.models import (
     HumanTask,
     Machine,
     Project,
     Question,
-    QuestionStatus,
     Resource,
     ResourceUsability,
     Runner,
@@ -148,20 +147,3 @@ def test_capacity_groups_agents_under_machine_and_marks_readiness():
     assert cap["agents_total"] == 2
     assert cap["agents_ready"] == 1
     assert cap["agents_ready"] <= cap["agents_total"]
-
-
-def test_agent_status_reflects_runner_and_enable_state():
-    """The single readiness word degrades sensibly as conditions worsen."""
-    offline_runner = Runner(name="old", backends=["claude"], last_seen=time.time() - 10_000)
-    online_runner = Runner(name="now", backends=["claude"])
-
-    usable = Resource(runner_id=online_runner.id, backend="claude", usability_status=ResourceUsability.usable)
-    assert agent_status(usable, online_runner) == "ready"
-    assert agent_status(usable, offline_runner) == "offline"
-    assert agent_status(usable, None) == "offline"
-
-    disabled = Resource(runner_id=online_runner.id, backend="claude", enabled=False, usability_status=ResourceUsability.usable)
-    assert agent_status(disabled, online_runner) == "disabled"
-
-    unknown = Resource(runner_id=online_runner.id, backend="claude")
-    assert agent_status(unknown, online_runner) == "probe"

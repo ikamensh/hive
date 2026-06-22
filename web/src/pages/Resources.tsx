@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { marked } from "marked";
 import { useOverview } from "../App";
 import { ago, api, countdown, money, usePoll } from "../api";
-import type { LocalRunnerInfo, MachineInfo, ResourceInfo, ResourcesPayload, RunnerInfo } from "../types";
+import type { LocalRunnerInfo, MachineGroup, MachineInfo, ResourceInfo } from "../types";
 
 function HumanTodos() {
   const { data, refresh } = usePoll(() => api.humanTodos(), []);
@@ -190,7 +190,8 @@ export default function Resources() {
     return () => clearInterval(id);
   }, []);
 
-  const runnerOnline = (id: string) => data?.runners.find((r) => r.id === id)?.online ?? false;
+  const runnerOnline = (id: string) =>
+    data?.cards.some((card) => card.runners.some((r) => r.id === id && r.online)) ?? false;
 
   const probe = async (id: string) => {
     setProbing(id);
@@ -242,7 +243,7 @@ export default function Resources() {
   };
 
   const localRunner = data?.local_runner;
-  const machineCards = data ? buildMachineCards(data) : [];
+  const machineCards = data?.cards ?? [];
 
   return (
     <div className="page page-resources">
@@ -301,72 +302,6 @@ export default function Resources() {
   );
 }
 
-interface MachineCardData {
-  machine: MachineInfo;
-  runners: RunnerInfo[];
-  resources: ResourceInfo[];
-}
-
-function buildMachineCards(data: ResourcesPayload): MachineCardData[] {
-  const machines = data.machines ?? [];
-  const machineIds = new Set(machines.map((m) => m.id));
-  const resourcesById = new Set<string>();
-  const cards = machines.map((machine) => {
-    const runners = data.runners.filter((runner) => runner.machine_id === machine.id);
-    const runnerIds = new Set(runners.map((runner) => runner.id));
-    const resources = data.resources.filter((res) => res.machine_id === machine.id || runnerIds.has(res.runner_id));
-    resources.forEach((res) => resourcesById.add(res.id));
-    return { machine, runners, resources };
-  });
-
-  for (const runner of data.runners) {
-    if (runner.machine_id && machineIds.has(runner.machine_id)) continue;
-    const machine = virtualMachineForRunner(runner);
-    const resources = data.resources.filter((res) => res.runner_id === runner.id);
-    resources.forEach((res) => resourcesById.add(res.id));
-    cards.push({ machine, runners: [runner], resources });
-  }
-
-  const orphanResources = data.resources.filter((res) => !resourcesById.has(res.id));
-  if (orphanResources.length > 0) {
-    cards.push({
-      machine: {
-        id: "unassigned-resources",
-        workspace_id: "",
-        name: "unassigned",
-        hostname: "",
-        kind: "unknown",
-        machine_type: "",
-        os: "",
-        arch: "",
-        device_kind: "unknown",
-        first_seen: 0,
-        last_seen: 0,
-      },
-      runners: [],
-      resources: orphanResources,
-    });
-  }
-
-  return cards;
-}
-
-function virtualMachineForRunner(runner: RunnerInfo): MachineInfo {
-  return {
-    id: `runner:${runner.id}`,
-    workspace_id: runner.workspace_id ?? "",
-    name: runner.name,
-    hostname: runner.name,
-    kind: "runner",
-    machine_type: "",
-    os: "",
-    arch: "",
-    device_kind: "unknown",
-    first_seen: runner.last_seen,
-    last_seen: runner.last_seen,
-  };
-}
-
 function MachineCard({
   card,
   probing,
@@ -375,15 +310,14 @@ function MachineCard({
   onProbe,
   onSetEnabled,
 }: {
-  card: MachineCardData;
+  card: MachineGroup;
   probing: string | null;
   updatingResource: string | null;
   runnerOnline: (id: string) => boolean;
   onProbe: (id: string) => void;
   onSetEnabled: (res: ResourceInfo, enabled: boolean) => void;
 }) {
-  const online = card.runners.some((runner) => runner.online);
-  const lastSeen = Math.max(card.machine.last_seen, ...card.runners.map((runner) => runner.last_seen), 0);
+  const { online, last_seen: lastSeen } = card;
   const runnerNames = card.runners.map((runner) => runner.name).join(", ");
   const runnerById = new Map(card.runners.map((runner) => [runner.id, runner.name]));
 

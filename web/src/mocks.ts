@@ -8,6 +8,7 @@ import type {
   HumanTodo,
   IntakeMessage,
   IssueRun,
+  MachineGroup,
   Overview,
   Project,
   ProjectCreate,
@@ -809,7 +810,7 @@ function makeIntakeTask(
   return task;
 }
 
-const resourcesPayload: ResourcesPayload = {
+const resourcesPayload: Omit<ResourcesPayload, "cards"> = {
   machines: [
     {
       id: "m-hex1",
@@ -862,6 +863,59 @@ const resourcesPayload: ResourcesPayload = {
 
 let orgContext =
   "We are Acme Corp. Prefer boring technology, Postgres over anything fancier.\nAll services deploy to GCP europe-west4. Python backends, TypeScript frontends.";
+
+// The real backend groups agents under machines (hive.control.capacity); the
+// mock mirrors it, deriving cards from the flat lists so probe/enable mutations
+// are reflected without keeping two copies in sync.
+function groupCards(): MachineGroup[] {
+  const machines = resourcesPayload.machines ?? [];
+  const machineIds = new Set(machines.map((m) => m.id));
+  const claimed = new Set<string>();
+  const card = (
+    machine: MachineGroup["machine"],
+    runners: MachineGroup["runners"],
+    resources: MachineGroup["resources"],
+  ): MachineGroup => {
+    resources.forEach((r) => claimed.add(r.id));
+    return {
+      machine,
+      online: runners.some((r) => r.online),
+      last_seen: Math.max(machine.last_seen, ...runners.map((r) => r.last_seen), 0),
+      runners,
+      resources,
+    };
+  };
+  const cards = machines.map((machine) => {
+    const runners = resourcesPayload.runners.filter((r) => r.machine_id === machine.id);
+    const runnerIds = new Set(runners.map((r) => r.id));
+    return card(
+      machine,
+      runners,
+      resourcesPayload.resources.filter((res) => res.machine_id === machine.id || runnerIds.has(res.runner_id)),
+    );
+  });
+  for (const runner of resourcesPayload.runners) {
+    if (runner.machine_id && machineIds.has(runner.machine_id)) continue;
+    cards.push(
+      card(
+        { id: `runner:${runner.id}`, workspace_id: "default", name: runner.name, hostname: runner.name, kind: "runner", machine_type: "", os: "", arch: "", device_kind: "unknown", first_seen: runner.last_seen, last_seen: runner.last_seen },
+        [runner],
+        resourcesPayload.resources.filter((res) => res.runner_id === runner.id),
+      ),
+    );
+  }
+  const orphans = resourcesPayload.resources.filter((res) => !claimed.has(res.id));
+  if (orphans.length) {
+    cards.push(
+      card(
+        { id: "unassigned-resources", workspace_id: "", name: "unassigned", hostname: "", kind: "unknown", machine_type: "", os: "", arch: "", device_kind: "unknown", first_seen: 0, last_seen: 0 },
+        [],
+        orphans,
+      ),
+    );
+  }
+  return cards;
+}
 
 export const api = {
   me: async (): Promise<AuthInfo> => ({
@@ -1333,7 +1387,10 @@ export const api = {
     ].join("\n");
   },
 
-  resources: async (): Promise<ResourcesPayload> => structuredClone(resourcesPayload),
+  resources: async (): Promise<ResourcesPayload> => ({
+    ...structuredClone(resourcesPayload),
+    cards: structuredClone(groupCards()),
+  }),
   startLocalRunner: async () => {
     const local = resourcesPayload.local_runner!;
     local.running = true;
