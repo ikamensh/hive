@@ -116,7 +116,7 @@ function ProjectRow({
           className={`hp-spend${p.spend_today > 0 ? "" : " hp-spend-empty"}`}
           title="spend today"
         >
-          {p.spend_today > 0 ? money(p.spend_today) : "—"}
+          {p.spend_today > 0 ? money(p.spend_today) : "$0"}
         </span>
       </Link>
       <ProjectActions project={p} onPatch={onPatch} compact />
