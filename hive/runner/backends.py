@@ -108,6 +108,11 @@ class Backend:
     binary: str
     preflight: tuple[str, ...]
     login_hint: str
+    # Provider-rulebook default for how this backend's credential is licensed:
+    # "portable" (an API key Hive can copy anywhere) or "machine_bound" (a login
+    # tied to the machine that authed). Best-effort and evolving; mirrors
+    # models.LicensingMode. See wiki/architecture.md (provider rulebook).
+    licensing: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -135,6 +140,7 @@ REGISTRY: dict[str, Backend] = {
             binary="claude",
             preflight=("claude", "--version"),
             login_hint="Run `claude login` on the runner, then let Hive probe it again.",
+            licensing="machine_bound",  # Claude Max login is bound to the machine that authed
         ),
         Backend(
             "cursor",
@@ -145,6 +151,7 @@ REGISTRY: dict[str, Backend] = {
                 "Refresh the Cursor Agent login on the runner "
                 "(`cursor-agent login` if available), then let Hive probe it again."
             ),
+            licensing="portable",  # Cursor API key spends subscription quota on any machine
         ),
         Backend(
             "codex",
@@ -152,6 +159,7 @@ REGISTRY: dict[str, Backend] = {
             binary="codex",
             preflight=("codex", "--version"),
             login_hint="Run `codex login` on the runner, then let Hive probe it again.",
+            licensing="machine_bound",  # ChatGPT/codex login is a per-machine OAuth device flow
         ),
         Backend(
             "gemini-cli",
@@ -162,6 +170,7 @@ REGISTRY: dict[str, Backend] = {
                 "Run `gemini auth login` or set `GEMINI_API_KEY` for the runner, "
                 "then let Hive probe it again."
             ),
+            licensing="portable",  # a GEMINI_API_KEY works on any machine
         ),
     )
 }
@@ -175,6 +184,16 @@ def make_session(backend: str, model: str = "", resume_session: str = ""):
     if backend not in REGISTRY:
         raise ValueError(f"unknown backend {backend!r}; known: {BACKEND_NAMES}")
     return REGISTRY[backend].make_session(model, resume_session)
+
+
+def backend_licensing(backend: str) -> str:
+    """The provider-rulebook licensing default for `backend`.
+
+    Unknown backends are `"unknown"` rather than an error: licensing is advisory
+    capacity metadata, not the dispatch contract.
+    """
+    entry = REGISTRY.get(backend)
+    return entry.licensing if entry else "unknown"
 
 
 def _snippet(text: str, limit: int = 500) -> str:

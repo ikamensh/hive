@@ -14,8 +14,10 @@ from hive.control.capacity import (
     group_machines,
     machine_cards,
     resource_available,
+    subscription_candidates,
 )
-from hive.models import Machine, Resource, ResourceUsability, Runner
+from hive.models import Machine, Resource, ResourceUsability, Runner, Subscription
+from hive.runner.backends import backend_licensing
 
 
 def _usable(runner_id: str, backend: str = "claude", **kw) -> Resource:
@@ -87,3 +89,43 @@ def test_agent_status_degrades_sensibly():
     assert agent_status(_usable(online.id, cooldown_until=time.time() + 600), online) == "cooldown"
     assert agent_status(Resource(runner_id=online.id, backend="claude", enabled=False), online) == "disabled"
     assert agent_status(Resource(runner_id=online.id, backend="claude"), online) == "probe"
+
+
+def test_discovery_offers_only_proven_unsubscribed_providers():
+    """A usable agent with no Subscription is evidence to confirm; an already
+    recorded provider or an unproven CLI is not offered."""
+    runner = Runner(name="laptop", backends=["claude", "cursor", "codex"])
+    resources = [
+        _usable(runner.id, "claude"),  # proven, no subscription -> candidate
+        _usable(runner.id, "cursor"),  # proven, already subscribed -> skip
+        Resource(runner_id=runner.id, backend="codex"),  # discovered but unproven -> skip
+    ]
+    subs = [Subscription(provider="cursor")]
+
+    candidates = subscription_candidates(subs, resources, [runner])
+
+    assert [c["provider"] for c in candidates] == ["claude"]
+    assert candidates[0]["evidence"] == "usable on laptop"
+
+
+def test_discovery_carries_provider_rulebook_licensing():
+    """Each candidate starts from the backend's licensing default so confirming
+    one does not silently guess portable/machine-bound wrong."""
+    runner = Runner(name="vm", backends=["cursor", "claude"])
+    resources = [_usable(runner.id, "cursor"), _usable(runner.id, "claude")]
+
+    by_provider = {c["provider"]: c for c in subscription_candidates([], resources, [runner])}
+
+    assert by_provider["cursor"]["licensing_mode"] == backend_licensing("cursor") == "portable"
+    assert by_provider["claude"]["licensing_mode"] == backend_licensing("claude") == "machine_bound"
+
+
+def test_discovery_dedupes_a_provider_usable_on_many_machines():
+    """The same backend proven on two machines is one subscription to confirm."""
+    a = Runner(name="a", backends=["claude"])
+    b = Runner(name="b", backends=["claude"])
+    resources = [_usable(a.id, "claude"), _usable(b.id, "claude")]
+
+    candidates = subscription_candidates([], resources, [a, b])
+
+    assert [c["provider"] for c in candidates] == ["claude"]

@@ -77,6 +77,7 @@ from hive.models import (
     IssueRun,
     IssueRunScope,
     IssueRunStatus,
+    LicensingMode,
     Machine,
     Mode,
     Project,
@@ -103,7 +104,12 @@ from hive.models import (
 )
 from hive.integrations.specrepo import SpecRepo
 from hive.persistence.storage import storage_info
-from hive.control.capacity import group_machines, machine_cards, resource_available
+from hive.control.capacity import (
+    group_machines,
+    machine_cards,
+    resource_available,
+    subscription_candidates,
+)
 from hive.control.overview import build_overview
 from hive.control.supervisor import Supervisor
 from hive.runner.task_results import (
@@ -1552,6 +1558,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         machines = store.list(Machine, workspace_id=ctx.workspace_id)
         runner_list = store.list(Runner, workspace_id=ctx.workspace_id)
         resource_list = store.list(Resource, workspace_id=ctx.workspace_id)
+        subs = store.list(Subscription, workspace_id=ctx.workspace_id)
         runners = {r.id: r for r in runner_list}
 
         # Flat lists serve the CLI and per-project availability checks; `cards`
@@ -1564,6 +1571,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 for res in resource_list
             ],
             "cards": machine_cards(group_machines(machines, runner_list, resource_list)),
+            "subscription_candidates": subscription_candidates(subs, resource_list, runner_list),
             "local_runner": local_runner_payload(ctx.workspace_id),
         }
 
@@ -1637,6 +1645,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 workspace_id=ctx.workspace_id,
                 provider=body["provider"],
                 plan=body.get("plan", ""),
+                licensing_mode=LicensingMode(body.get("licensing_mode", "unknown")),
                 notes=body.get("notes", ""),
             )
         ).model_dump()

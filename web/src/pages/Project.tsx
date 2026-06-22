@@ -62,7 +62,7 @@ export default function ProjectPage() {
     manualWorkItems,
     inboxCount,
     needsSetup,
-    trustedScouts,
+    availableScoutBackends,
   } = projectViewModel(data, {
     issueStreamId: selectedIssueStreamId,
     testingStreamId: selectedTestingStreamId,
@@ -193,7 +193,7 @@ export default function ProjectPage() {
         <ProjectSetup
           project={project}
           conversation={intakeConversation}
-          trustedScouts={trustedScouts}
+          availableScoutBackends={availableScoutBackends}
           onSave={saveSetup}
           onCreateRepo={createRepo}
           onStartIntake={startIntake}

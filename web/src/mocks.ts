@@ -8,6 +8,7 @@ import type {
   HumanTodo,
   IntakeMessage,
   IssueRun,
+  LicensingMode,
   MachineGroup,
   Overview,
   Project,
@@ -23,6 +24,7 @@ import type {
   Finding,
   Story,
   Subscription,
+  SubscriptionCandidate,
   Task,
   TestEpisode,
   TestEpisodeResult,
@@ -810,7 +812,8 @@ function makeIntakeTask(
   return task;
 }
 
-const resourcesPayload: Omit<ResourcesPayload, "cards"> = {
+// `cards` and `subscription_candidates` are derived per request in resources().
+const resourcesPayload: Omit<ResourcesPayload, "cards" | "subscription_candidates"> = {
   machines: [
     {
       id: "m-hex1",
@@ -1390,6 +1393,7 @@ export const api = {
   resources: async (): Promise<ResourcesPayload> => ({
     ...structuredClone(resourcesPayload),
     cards: structuredClone(groupCards()),
+    subscription_candidates: subscriptionCandidates(),
   }),
   startLocalRunner: async () => {
     const local = resourcesPayload.local_runner!;
@@ -1464,11 +1468,17 @@ export const api = {
 
   subscriptions: async (): Promise<Subscription[]> => structuredClone(subscriptions),
 
-  addSubscription: async (provider: string, plan: string, notes: string): Promise<Subscription> => {
+  addSubscription: async (
+    provider: string,
+    plan: string,
+    licensing_mode: LicensingMode,
+    notes: string,
+  ): Promise<Subscription> => {
     const s: Subscription = {
       id: `s-${Math.random().toString(36).slice(2, 8)}`,
       provider,
       plan,
+      licensing_mode,
       notes,
       created_at: Date.now() / 1000,
     };
@@ -1528,9 +1538,35 @@ export const api = {
 };
 
 const subscriptions: Subscription[] = [
-  { id: "s1", provider: "codex", plan: "ChatGPT Plus", notes: "logged in on laptop", created_at: now - 86400 },
-  { id: "s2", provider: "claude", plan: "Claude Max 5x", notes: "", created_at: now - 86400 },
+  { id: "s1", provider: "codex", plan: "ChatGPT Plus", licensing_mode: "machine_bound", notes: "logged in on laptop", created_at: now - 86400 },
+  { id: "s2", provider: "claude", plan: "Claude Max 5x", licensing_mode: "machine_bound", notes: "", created_at: now - 86400 },
 ];
+
+// Provider-rulebook licensing defaults; mirrors hive/runner/backends.py.
+const BACKEND_LICENSING: Record<string, LicensingMode> = {
+  claude: "machine_bound",
+  codex: "machine_bound",
+  cursor: "portable",
+  "gemini-cli": "portable",
+};
+
+// Mirror hive.control.capacity.subscription_candidates: providers proven usable
+// on a machine but not yet recorded as a subscription.
+function subscriptionCandidates(): SubscriptionCandidate[] {
+  const have = new Set(subscriptions.map((s) => s.provider));
+  const seen = new Map<string, SubscriptionCandidate>();
+  for (const res of resourcesPayload.resources) {
+    if (have.has(res.backend) || seen.has(res.backend)) continue;
+    if (res.usability_status !== "usable") continue;
+    const runner = resourcesPayload.runners.find((r) => r.id === res.runner_id);
+    seen.set(res.backend, {
+      provider: res.backend,
+      licensing_mode: BACKEND_LICENSING[res.backend] ?? "unknown",
+      evidence: `usable on ${runner?.name ?? res.runner_id}`,
+    });
+  }
+  return [...seen.values()];
+}
 
 const humanTodos: HumanTodo[] = [
   {

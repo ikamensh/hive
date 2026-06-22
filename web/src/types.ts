@@ -392,6 +392,7 @@ export interface ResourcesPayload {
   runners: RunnerInfo[];
   resources: ResourceInfo[];
   cards: MachineGroup[];
+  subscription_candidates: SubscriptionCandidate[];
   local_runner?: LocalRunnerInfo;
 }
 
@@ -406,13 +407,23 @@ export interface LocalRunnerInfo {
   message: string;
 }
 
+export type LicensingMode = "portable" | "machine_bound" | "unknown";
+
 export interface Subscription {
   id: string;
   workspace_id?: string;
   provider: string;
   plan: string;
+  licensing_mode: LicensingMode;
   notes: string;
   created_at: number;
+}
+
+/** A provider proven usable on a machine but not yet recorded as a Subscription. */
+export interface SubscriptionCandidate {
+  provider: string;
+  licensing_mode: LicensingMode;
+  evidence: string;
 }
 
 export interface HumanTodo {

@@ -508,15 +508,30 @@ class Resource(BaseModel):
         self.last_exhaustion_task_id = ""
 
 
+class LicensingMode(StrEnum):
+    """How a subscription's credential may be placed across machines.
+
+    Decides whether Hive can stand up an agent itself or must ask the human to
+    log in on a specific machine (see CONTEXT.md "Licensing Mode").
+    """
+
+    portable = "portable"  # API key Hive can copy to any machine (e.g. Cursor, Gemini key)
+    machine_bound = "machine_bound"  # login tied to where the human authed (e.g. Claude Max)
+    unknown = "unknown"
+
+
 class Subscription(BaseModel):
     """An AI subscription the user owns (Claude Max, ChatGPT/codex, Cursor...).
-    Informs orchestration about capacity that exists beyond what runners
-    currently advertise, and anchors login-todos for remote nodes."""
+    The durable, account-level access an Agent is authenticated against — the
+    user's longest-lived unit of capacity. Informs orchestration about capacity
+    that exists beyond what runners currently advertise, and anchors login-todos
+    for remote nodes."""
 
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
     provider: str  # backend name it powers: claude | codex | cursor | gemini-cli
     plan: str = ""  # e.g. "ChatGPT Plus", "Claude Max 5x"
+    licensing_mode: LicensingMode = LicensingMode.unknown
     notes: str = ""  # e.g. which machines are logged in, renewal dates
     created_at: float = Field(default_factory=now)
 

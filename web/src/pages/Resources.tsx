@@ -1,70 +1,202 @@
 import { useEffect, useState } from "react";
 import { ago, api, countdown, money, usePoll } from "../api";
-import type { LocalRunnerInfo, MachineGroup, MachineInfo, ResourceInfo } from "../types";
+import type {
+  LicensingMode,
+  LocalRunnerInfo,
+  MachineGroup,
+  MachineInfo,
+  ResourceInfo,
+  SubscriptionCandidate,
+} from "../types";
 
-function Subscriptions() {
+const LICENSING_LABEL: Record<LicensingMode, string> = {
+  portable: "portable",
+  machine_bound: "machine-bound",
+  unknown: "licensing?",
+};
+
+const LICENSING_TITLE: Record<LicensingMode, string> = {
+  portable: "API key Hive can copy to any machine — Hive can stand this up itself.",
+  machine_bound: "Login tied to one machine — a human must log in where it is needed.",
+  unknown: "Licensing unknown. Set it so Hive knows whether it can self-serve the auth.",
+};
+
+interface ProviderLiveness {
+  available: boolean; // dispatchable on some machine right now
+  usable: boolean; // proven usable somewhere, even if offline/cooling
+  machines: string[];
+}
+
+/** Tie each subscription to the live agents below it: which machines have a
+ *  usable agent for that provider, and whether any is dispatchable now. */
+function providerLiveness(cards: MachineGroup[]): Map<string, ProviderLiveness> {
+  const map = new Map<string, ProviderLiveness>();
+  for (const card of cards) {
+    for (const res of card.resources) {
+      const entry = map.get(res.backend) ?? { available: false, usable: false, machines: [] };
+      if (res.usability_status === "usable") {
+        entry.usable = true;
+        if (!entry.machines.includes(card.machine.name)) entry.machines.push(card.machine.name);
+      }
+      if (res.available) entry.available = true;
+      map.set(res.backend, entry);
+    }
+  }
+  return map;
+}
+
+function liveStatus(live: ProviderLiveness | undefined) {
+  if (live?.available) {
+    return (
+      <span className="avail ok" title={`dispatchable now on ${live.machines.join(", ")}`}>
+        live · {live.machines.join(", ")}
+      </span>
+    );
+  }
+  if (live?.usable) {
+    return (
+      <span className="avail cool" title={`authenticated on ${live.machines.join(", ")} but not dispatchable right now`}>
+        set up · idle
+      </span>
+    );
+  }
+  return (
+    <span className="avail wait" title="No machine has a usable agent for this subscription yet. Hive will ask you to log one in where it needs capacity.">
+      needs setup
+    </span>
+  );
+}
+
+function licensingChip(mode: LicensingMode) {
+  return (
+    <span className={`chip licensing-${mode}`} title={LICENSING_TITLE[mode]}>
+      {LICENSING_LABEL[mode]}
+    </span>
+  );
+}
+
+function Subscriptions({
+  candidates,
+  cards,
+  onChanged,
+}: {
+  candidates: SubscriptionCandidate[];
+  cards: MachineGroup[];
+  onChanged: () => void;
+}) {
   const { data, refresh } = usePoll(() => api.subscriptions(), []);
   const [provider, setProvider] = useState("");
   const [plan, setPlan] = useState("");
+  const [licensing, setLicensing] = useState<LicensingMode>("unknown");
   const [notes, setNotes] = useState("");
   if (!data) return null;
-  const add = async () => {
-    if (!provider.trim()) return;
-    await api.addSubscription(provider.trim(), plan.trim(), notes.trim());
+
+  const live = providerLiveness(cards);
+  const have = new Set(data.map((s) => s.provider));
+  const detected = candidates.filter((c) => !have.has(c.provider));
+
+  const reload = () => Promise.all([refresh(), Promise.resolve(onChanged())]);
+  const add = async (p: string, pl: string, lic: LicensingMode, nt: string) => {
+    if (!p.trim()) return;
+    await api.addSubscription(p.trim(), pl.trim(), lic, nt.trim());
     setProvider("");
     setPlan("");
+    setLicensing("unknown");
     setNotes("");
-    refresh();
+    await reload();
   };
+
   return (
     <section className="subscriptions">
       <h2 className="col-title">subscriptions</h2>
       <p className="muted">
-        AI plans you own. Hive uses this to know what capacity exists and where logins are needed.
+        The AI agents you have access to — your durable capacity. Hive installs and probes them per
+        machine under “machines &amp; agents” below.
       </p>
-      <table className="res-table">
+      <table className="res-table sub-table">
         <thead>
           <tr>
-            <th>backend</th>
+            <th>agent</th>
             <th>plan</th>
+            <th>licensing</th>
+            <th>status</th>
             <th>notes</th>
             <th />
           </tr>
         </thead>
         <tbody>
-          {data.map((s) => (
-            <tr key={s.id}>
-              <td className="mono">{s.provider}</td>
-              <td>{s.plan || "—"}</td>
-              <td className="muted">{s.notes || "—"}</td>
-              <td className="num">
-                <button
-                  className="ghost"
-                  title="remove"
-                  onClick={async () => {
-                    await api.deleteSubscription(s.id);
-                    refresh();
-                  }}
-                >
-                  ✕
-                </button>
-              </td>
-            </tr>
-          ))}
+          {data.map((s) => {
+            const mode = (s.licensing_mode ?? "unknown") as LicensingMode;
+            return (
+              <tr key={s.id}>
+                <td className="mono">{s.provider}</td>
+                <td>{s.plan || "—"}</td>
+                <td>{licensingChip(mode)}</td>
+                <td>{liveStatus(live.get(s.provider))}</td>
+                <td className="muted">{s.notes || "—"}</td>
+                <td className="num">
+                  <button
+                    className="ghost"
+                    title="remove"
+                    onClick={async () => {
+                      await api.deleteSubscription(s.id);
+                      await reload();
+                    }}
+                  >
+                    ✕
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
           {data.length === 0 && (
             <tr>
-              <td colSpan={4} className="muted">
+              <td colSpan={6} className="muted">
                 no subscriptions recorded
               </td>
             </tr>
           )}
         </tbody>
       </table>
+
+      {detected.length > 0 && (
+        <div className="sub-candidates">
+          <h3 className="sub-candidates-title">detected on your machines</h3>
+          <p className="muted">
+            Agents already proven usable but not recorded yet. Confirm to track them as durable
+            subscriptions.
+          </p>
+          {detected.map((c) => (
+            <div key={c.provider} className="candidate-row">
+              <span className="mono">{c.provider}</span>
+              {licensingChip(c.licensing_mode)}
+              <span className="muted">{c.evidence}</span>
+              <button className="ghost" onClick={() => add(c.provider, "", c.licensing_mode, "")}>
+                add
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="sub-add">
-        <input placeholder="backend (codex / claude / cursor / gemini-cli)" value={provider} onChange={(e) => setProvider(e.target.value)} />
+        <input
+          placeholder="agent (codex / claude / cursor / gemini-cli)"
+          value={provider}
+          onChange={(e) => setProvider(e.target.value)}
+        />
         <input placeholder="plan (e.g. ChatGPT Plus)" value={plan} onChange={(e) => setPlan(e.target.value)} />
+        <select
+          value={licensing}
+          title="how the credential is licensed"
+          onChange={(e) => setLicensing(e.target.value as LicensingMode)}
+        >
+          <option value="unknown">licensing…</option>
+          <option value="portable">portable (API key)</option>
+          <option value="machine_bound">machine-bound (login)</option>
+        </select>
         <input placeholder="notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
-        <button onClick={add} disabled={!provider.trim()}>
+        <button onClick={() => add(provider, plan, licensing, notes)} disabled={!provider.trim()}>
           add
         </button>
       </div>
@@ -195,7 +327,7 @@ export default function Resources() {
   return (
     <div className="page page-resources">
       <div className="page-head">
-        <h1>Resources</h1>
+        <h1>Machines</h1>
         {localRunner?.supported && (
           <LocalRunnerAction
             localRunner={localRunner}
@@ -210,7 +342,17 @@ export default function Resources() {
       {data && (
         <>
           {runnerError && <p className="form-error runner-error">{runnerError}</p>}
-          <h2 className="col-title">machines & agents</h2>
+          <Subscriptions
+            candidates={data.subscription_candidates}
+            cards={machineCards}
+            onChanged={refresh}
+          />
+          <h2 className="col-title">machines &amp; agents</h2>
+          <p className="muted">
+            Where each subscription is installed and dispatchable right now. Secondary to your
+            subscriptions above — a subscription with no online machine is a setup task, not lost
+            capacity.
+          </p>
           <div className="runner-grid machine-grid">
             {machineCards.length === 0 && (
               <section className="runner-empty">
@@ -242,7 +384,6 @@ export default function Resources() {
         </>
       )}
 
-      <Subscriptions />
       <OrgContext />
     </div>
   );

@@ -1032,15 +1032,19 @@ textarea:focus {
   gap: 10px;
   align-items: end;
 }
-.trusted-scouts {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.scout-status {
+  margin: 0;
+  font-size: 13px;
 }
-.trusted-scouts > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.scout-status.scout-ready {
+  color: var(--green);
+}
+.scout-status.scout-blocked {
+  color: var(--ink-faint);
+}
+.scout-status a {
+  color: inherit;
+  text-decoration: underline;
 }
 .intake-brief {
   display: flex;
@@ -2576,6 +2580,18 @@ textarea:focus {
 .todo-actions { display: flex; justify-content: flex-end; margin-top: 0.7rem; }
 .sub-add { display: flex; gap: 0.5rem; margin-top: 0.7rem; flex-wrap: wrap; }
 .sub-add input { flex: 1 1 180px; }
+.sub-add select { flex: 0 0 auto; }
+
+/* discovery candidates: usable agents not yet recorded as subscriptions */
+.sub-candidates { margin-top: 1rem; padding: 0.8rem 1rem; border: 1px dashed var(--line); border-radius: 8px; background: var(--panel); }
+.sub-candidates-title { margin: 0; font-size: 0.85rem; text-transform: lowercase; color: var(--ink-faint); letter-spacing: 0.02em; }
+.candidate-row { display: flex; align-items: center; gap: 0.7rem; margin-top: 0.6rem; }
+.candidate-row .mono { min-width: 84px; }
+.candidate-row button { margin-left: auto; }
+
+/* licensing mode: machine-bound needs a human, portable Hive can self-serve */
+.chip.licensing-machine_bound { border-color: var(--red); color: var(--red); }
+.chip.licensing-unknown { color: var(--ink-faint); }
 
 /* ===== needs-you page ======================================================= */
 
@@ -2611,6 +2627,7 @@ a.needs-scope:hover { color: var(--accent); }
 .needs-card-actions .ghost-link { margin-right: auto; }
 .ghost-link { font-size: 0.85rem; color: var(--ink-faint); text-decoration: none; }
 .ghost-link:hover { color: var(--accent); }
+.needs-more { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line-soft); font-size: 0.9rem; }
 .needs-done { margin-top: 22px; }
 
 /* keep the count badge by the title when a "view all" link follows it */
