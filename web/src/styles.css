@@ -2576,6 +2576,18 @@ textarea:focus {
 .todo-actions { display: flex; justify-content: flex-end; margin-top: 0.7rem; }
 .sub-add { display: flex; gap: 0.5rem; margin-top: 0.7rem; flex-wrap: wrap; }
 .sub-add input { flex: 1 1 180px; }
+.sub-add select { flex: 0 0 auto; }
+
+/* discovery candidates: usable agents not yet recorded as subscriptions */
+.sub-candidates { margin-top: 1rem; padding: 0.8rem 1rem; border: 1px dashed var(--line); border-radius: 8px; background: var(--panel); }
+.sub-candidates-title { margin: 0; font-size: 0.85rem; text-transform: lowercase; color: var(--ink-faint); letter-spacing: 0.02em; }
+.candidate-row { display: flex; align-items: center; gap: 0.7rem; margin-top: 0.6rem; }
+.candidate-row .mono { min-width: 84px; }
+.candidate-row button { margin-left: auto; }
+
+/* licensing mode: machine-bound needs a human, portable Hive can self-serve */
+.chip.licensing-machine_bound { border-color: var(--red); color: var(--red); }
+.chip.licensing-unknown { color: var(--ink-faint); }
 
 /* ===== home dashboard ======================================================= */
 
