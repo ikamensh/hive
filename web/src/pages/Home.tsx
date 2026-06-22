@@ -121,7 +121,7 @@ function ProjectRow({
 
 function MachineCard({ m }: { m: OverviewMachine }) {
   return (
-    <Link to="/resources" className={`cap-machine ${m.online ? "online" : "offline"}`}>
+    <Link to="/machines" className={`cap-machine ${m.online ? "online" : "offline"}`}>
       <span className="cap-head">
         <i className={`dot ${m.online ? "" : "off"}`} />
         <span className="cap-name">{m.name}</span>
@@ -239,14 +239,14 @@ export default function Home() {
           label="agents"
           value={<>{t.agents_ready}<span> / {t.agents_total}</span></>}
           sub="ready"
-          to="/resources"
+          to="/machines"
         />
         <Kpi
           icon="server"
           label="machines"
           value={<>{t.machines_online}<span> / {t.machines_total}</span></>}
           sub="online"
-          to="/resources"
+          to="/machines"
         />
         <Kpi
           icon="alert-circle"
@@ -254,6 +254,7 @@ export default function Home() {
           value={t.needs_you}
           sub={`${data.attention.questions.length} q · ${data.attention.human_todos.length} todo`}
           hot={t.needs_you > 0}
+          to="/needs-you"
         />
         <Kpi
           icon="currency-dollar"
@@ -294,20 +295,19 @@ export default function Home() {
                 <i className="ti ti-hand-stop" aria-hidden /> needs you
               </h2>
               {data.attention.count > 0 && <span className="badge hot">{data.attention.count}</span>}
+              <Link to="/needs-you" className="panel-link">
+                view all →
+              </Link>
             </div>
             {data.attention.count === 0 && <p className="muted">nothing needs you right now</p>}
             {data.attention.questions.map((q) => (
-              <Link key={q.id} to={`/p/${q.project_id}`} className="rail-item">
+              <Link key={q.id} to="/needs-you" className="rail-item">
                 <span className="rail-tag">{q.project_name || "project"} · question</span>
                 <span className="rail-text">{q.text}</span>
               </Link>
             ))}
             {data.attention.human_todos.map((todo) => (
-              <Link
-                key={todo.id}
-                to={todo.project_id ? `/p/${todo.project_id}` : "/resources"}
-                className="rail-item"
-              >
+              <Link key={todo.id} to="/needs-you" className="rail-item">
                 <span className="rail-tag">{todo.project_name || "org-wide"} · todo</span>
                 <span className="rail-text">{todo.title}</span>
               </Link>
@@ -340,12 +340,12 @@ export default function Home() {
           <h2>
             <i className="ti ti-cpu" aria-hidden /> capacity · machines &amp; agents
           </h2>
-          <Link to="/resources" className="panel-link">
+          <Link to="/machines" className="panel-link">
             manage →
           </Link>
         </div>
         {data.capacity.machines.length === 0 ? (
-          <p className="muted">No machines enrolled. Enroll a machine on the resources page.</p>
+          <p className="muted">No machines enrolled. Enroll a machine on the machines page.</p>
         ) : (
           <div className="cap-list">
             {data.capacity.machines.map((m) => (

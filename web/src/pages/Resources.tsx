@@ -1,6 +1,4 @@
 import { useEffect, useState } from "react";
-import { marked } from "marked";
-import { useOverview } from "../App";
 import { ago, api, countdown, money, usePoll } from "../api";
 import type {
   LicensingMode,
@@ -10,57 +8,6 @@ import type {
   ResourceInfo,
   SubscriptionCandidate,
 } from "../types";
-
-function HumanTodos() {
-  const { data, refresh } = usePoll(() => api.humanTodos(), []);
-  const { data: projects } = usePoll(() => api.projects(), [], 30000);
-  const overview = useOverview();
-  if (!data) return null;
-  const open = data.filter((t) => t.status === "open");
-  const done = data.filter((t) => t.status === "done");
-  const scopeTag = (projectId: string) =>
-    projectId === "" ? "org-wide" : (projects?.find((p) => p.id === projectId)?.name ?? projectId);
-  return (
-    <section className="human-todos">
-      <h2 className="col-title">
-        your todos {open.length > 0 && <span className="badge hot">{open.length}</span>}
-      </h2>
-      <p className="muted">Things only a human can do: logins, auth refresh, infra unblocks.</p>
-      {open.length === 0 && <p className="muted">nothing needs you right now</p>}
-      {open.map((t) => (
-        <article key={t.id} className="todo-card">
-          <header>
-            <h3>{t.title}</h3>
-            <span className="chip">{scopeTag(t.project_id)}</span>
-            <span className="muted">{ago(t.created_at)}</span>
-          </header>
-          <div className="md" dangerouslySetInnerHTML={{ __html: marked.parse(t.instructions) as string }} />
-          <div className="org-actions">
-            <button
-              onClick={async () => {
-                await api.completeHumanTodo(t.id);
-                await Promise.all([refresh(), overview.refresh()]);
-              }}
-            >
-              mark done
-            </button>
-          </div>
-        </article>
-      ))}
-      {done.length > 0 && (
-        <details className="answered-fold">
-          <summary>{done.length} done</summary>
-          {done.map((t) => (
-            <div key={t.id} className="answered-row">
-              <span>{t.title}</span>
-              <span className="muted">{ago(t.done_at)}</span>
-            </div>
-          ))}
-        </details>
-      )}
-    </section>
-  );
-}
 
 const LICENSING_LABEL: Record<LicensingMode, string> = {
   portable: "portable",
@@ -380,7 +327,7 @@ export default function Resources() {
   return (
     <div className="page page-resources">
       <div className="page-head">
-        <h1>Resources</h1>
+        <h1>Machines</h1>
         {localRunner?.supported && (
           <LocalRunnerAction
             localRunner={localRunner}
@@ -437,7 +384,6 @@ export default function Resources() {
         </>
       )}
 
-      <HumanTodos />
       <OrgContext />
     </div>
   );

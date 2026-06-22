@@ -27,9 +27,17 @@ A durable, account-level access to an AI provider — a paid plan or an API key 
 _Avoid_: Plan, account, provider, entitlement
 
 **Agent**:
-A model-backed coding tool authenticated on a machine and ready for Hive to assign work to, realized from a [[Subscription]]. Shorter-lived than the subscription behind it: live availability also needs the machine online, the login still valid, and the provider not rate-limiting it.
-_Avoid_: Runner, resource, subscription
+A model-backed coding tool authenticated on a machine and ready for Hive to assign work to, realized from a [[Subscription]]. Shorter-lived than the subscription behind it: live availability also needs the machine online, the login still valid, and the provider not rate-limiting it. An agent is the individual unit; "resource" is only a category word for capacity in aggregate and must never name a single one.
+_Avoid_: Runner, resource (for an individual), subscription
 
 **Licensing Mode**:
 How a [[Subscription]]'s credential may be placed across machines: *portable* (an API key Hive can copy to any machine, e.g. Cursor) or *machine-bound* (a login tied to where the human authenticated, e.g. Claude Max). It decides whether Hive can stand up an [[Agent]] itself or must ask the human to log in on a specific machine.
 _Avoid_: License, tier
+
+**Scout**:
+An agent acting in the intake role — aligning a project's mission, next iteration, and assumptions before planning begins. "Scout" names what the agent is doing, not a separate kind of agent; the same machine-bound agent that does project work can serve as a scout.
+_Avoid_: intake bot, planner
+
+**Trusted scout**:
+A backend+model combination Hive permits to run intake. Intake is high-leverage, so only a curated set qualifies, not every available agent. "Trusted" qualifies the backend (e.g. codex gpt-5.5, claude opus), never a specific machine's install — so trust is a single yes/no policy, not a per-machine status.
+_Avoid_: verified agent, approved runner
