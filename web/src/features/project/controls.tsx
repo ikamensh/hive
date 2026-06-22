@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { repoShort } from "../../api";
 import { RepoListEditor } from "../../components/RepoPicker";
 import {
@@ -11,6 +12,10 @@ import {
 import type { Project, ProjectPatch, WorkItem, Workstream } from "../../types";
 
 type ProjectPatchHandler = (p: ProjectPatch) => void | Promise<void>;
+
+function OverlayPortal({ children }: { children: ReactNode }) {
+  return createPortal(children, document.body);
+}
 
 function RenameProjectModal({
   project,
@@ -42,24 +47,26 @@ function RenameProjectModal({
   };
 
   return (
-    <div className="modal-veil" onClick={onClose}>
-      <form className="modal modal-narrow" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
-        <h2>Rename project</h2>
-        <label>
-          project name
-          <input value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
-        </label>
-        {error && <p className="form-error">{error}</p>}
-        <div className="modal-actions">
-          <button type="button" className="ghost" onClick={onClose}>
-            cancel
-          </button>
-          <button type="submit" disabled={!canSave}>
-            {busy ? "saving..." : "save name"}
-          </button>
-        </div>
-      </form>
-    </div>
+    <OverlayPortal>
+      <div className="modal-veil" onClick={onClose}>
+        <form className="modal modal-narrow" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
+          <h2>Rename project</h2>
+          <label>
+            project name
+            <input value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
+          </label>
+          {error && <p className="form-error">{error}</p>}
+          <div className="modal-actions">
+            <button type="button" className="ghost" onClick={onClose}>
+              cancel
+            </button>
+            <button type="submit" disabled={!canSave}>
+              {busy ? "saving..." : "save name"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </OverlayPortal>
   );
 }
 
@@ -88,24 +95,67 @@ function ArchiveProjectModal({
   };
 
   return (
-    <div className="modal-veil" onClick={onClose}>
-      <section className="modal modal-narrow" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        <h2>Archive project?</h2>
-        <p className="modal-hint">
-          This hides "{project.name}" from the dashboard and pauses it. Project data, history, and repos are not
-          deleted.
-        </p>
-        {error && <p className="form-error">{error}</p>}
-        <div className="modal-actions">
-          <button type="button" className="ghost" onClick={onClose}>
-            cancel
-          </button>
-          <button type="button" className="danger-fill" onClick={archive} disabled={busy}>
-            {busy ? "archiving..." : "archive project"}
-          </button>
-        </div>
-      </section>
-    </div>
+    <OverlayPortal>
+      <div className="modal-veil" onClick={onClose}>
+        <section className="modal modal-narrow" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+          <h2>Archive project?</h2>
+          <p className="modal-hint">
+            This hides "{project.name}" from the dashboard and pauses it. Project data, history, and repos are not
+            deleted.
+          </p>
+          {error && <p className="form-error">{error}</p>}
+          <div className="modal-actions">
+            <button type="button" className="ghost" onClick={onClose}>
+              cancel
+            </button>
+            <button type="button" className="danger-fill confirm-action" onClick={archive} disabled={busy}>
+              {busy ? "archiving..." : "archive project"}
+            </button>
+          </div>
+        </section>
+      </div>
+    </OverlayPortal>
+  );
+}
+
+function ProjectActionSheet({
+  project,
+  onClose,
+  onRename,
+  onArchive,
+}: {
+  project: { name: string };
+  onClose: () => void;
+  onRename: () => void;
+  onArchive: () => void;
+}) {
+  return (
+    <OverlayPortal>
+      <div className="modal-veil" onClick={onClose}>
+        <section
+          className="modal modal-narrow project-action-sheet"
+          onClick={(e) => e.stopPropagation()}
+          role="dialog"
+          aria-modal="true"
+        >
+          <h2>Project actions</h2>
+          <p className="modal-hint">{project.name}</p>
+          <div className="action-sheet-actions">
+            <button type="button" className="ghost" onClick={onRename}>
+              Rename
+            </button>
+            <button type="button" className="danger-outline" onClick={onArchive}>
+              Delete / archive...
+            </button>
+          </div>
+          <div className="modal-actions">
+            <button type="button" className="ghost" onClick={onClose}>
+              cancel
+            </button>
+          </div>
+        </section>
+      </div>
+    </OverlayPortal>
   );
 }
 
@@ -142,11 +192,17 @@ export function ProjectActions({
   const [open, setOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onDoc = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
@@ -159,23 +215,60 @@ export function ProjectActions({
     };
   }, []);
 
+  useEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const menuWidth = 190;
+      const estimatedHeight = 90;
+      const margin = 12;
+      const below = rect.bottom + 6;
+      const maxLeft = Math.max(margin, window.innerWidth - menuWidth - margin);
+      const top =
+        below + estimatedHeight + margin <= window.innerHeight
+          ? below
+          : Math.max(margin, rect.top - estimatedHeight - 6);
+      const left = Math.min(maxLeft, Math.max(margin, rect.right - menuWidth));
+      setMenuStyle({ left, minWidth: menuWidth, top });
+    };
+
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open]);
+
   const startRename = () => {
     setOpen(false);
+    setSheetOpen(false);
     setRenameOpen(true);
   };
   const startArchive = () => {
     setOpen(false);
+    setSheetOpen(false);
     setArchiveOpen(true);
+  };
+  const toggleActions = () => {
+    if (compact) {
+      setSheetOpen(true);
+      return;
+    }
+    setOpen((v) => !v);
   };
 
   return (
     <div className={`project-actions ${compact ? "compact" : ""}`} ref={rootRef}>
       <button
         type="button"
+        ref={triggerRef}
         className="project-action-trigger ghost"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-haspopup="menu"
+        onClick={toggleActions}
+        aria-expanded={compact ? sheetOpen : open}
+        aria-haspopup={compact ? "dialog" : "menu"}
         title="Project actions"
       >
         {compact ? (
@@ -189,17 +282,27 @@ export function ProjectActions({
           </>
         )}
       </button>
-      {open && (
-        <div className="project-action-menu" role="menu">
-          <button type="button" role="menuitem" className="project-action-item" onClick={startRename}>
-            <i className="ti ti-pencil" aria-hidden />
-            Rename
-          </button>
-          <button type="button" role="menuitem" className="project-action-item danger" onClick={startArchive}>
-            <i className="ti ti-trash" aria-hidden />
-            Delete / archive...
-          </button>
-        </div>
+      {open && menuStyle && (
+        <OverlayPortal>
+          <div className="project-action-menu" role="menu" ref={menuRef} style={menuStyle}>
+            <button type="button" role="menuitem" className="project-action-item" onClick={startRename}>
+              <i className="ti ti-pencil" aria-hidden />
+              Rename
+            </button>
+            <button type="button" role="menuitem" className="project-action-item danger" onClick={startArchive}>
+              <i className="ti ti-trash" aria-hidden />
+              Delete / archive...
+            </button>
+          </div>
+        </OverlayPortal>
+      )}
+      {sheetOpen && (
+        <ProjectActionSheet
+          project={project}
+          onClose={() => setSheetOpen(false)}
+          onRename={startRename}
+          onArchive={startArchive}
+        />
       )}
       {renameOpen && (
         <RenameProjectModal project={project} onPatch={onPatch} onClose={() => setRenameOpen(false)} />

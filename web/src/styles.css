@@ -570,10 +570,8 @@ textarea:focus {
   padding: 0;
 }
 .project-action-menu {
-  position: absolute;
-  z-index: 30;
-  top: calc(100% + 6px);
-  right: 0;
+  position: fixed;
+  z-index: 70;
   min-width: 190px;
   padding: 6px;
   background: var(--panel);
@@ -608,6 +606,17 @@ textarea:focus {
 .project-action-item i {
   width: 15px;
   font-size: 15px;
+}
+.project-action-sheet .action-sheet-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.project-action-sheet .action-sheet-actions button {
+  justify-content: flex-start;
+  min-height: 38px;
+  text-align: left;
+  width: 100%;
 }
 
 .reveal {
@@ -836,7 +845,7 @@ textarea:focus {
 .modal-veil {
   position: fixed;
   inset: 0;
-  z-index: 10;
+  z-index: 80;
   background: var(--modal-veil);
   backdrop-filter: blur(3px);
   display: grid;
@@ -844,8 +853,8 @@ textarea:focus {
   padding: 24px;
 }
 .modal {
-  width: 520px;
-  max-width: 100%;
+  width: min(520px, calc(100vw - 48px));
+  max-width: none;
   max-height: 90vh;
   overflow: auto;
   background: var(--panel);
@@ -862,7 +871,7 @@ textarea:focus {
   font-size: 18px;
 }
 .modal-narrow {
-  max-width: 420px;
+  width: min(420px, calc(100vw - 48px));
 }
 .modal-hint {
   margin: -8px 0 0;
@@ -892,6 +901,9 @@ textarea:focus {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 4px;
+}
+.modal-actions .confirm-action {
+  min-width: 132px;
 }
 .form-error {
   color: var(--red);
@@ -2613,9 +2625,9 @@ textarea:focus {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px;
   padding: 12px 14px; border: 1px solid var(--line-soft); border-left: 3px solid var(--line);
   border-radius: var(--r-md); color: var(--ink);
-  transition: border-color 0.15s, transform 0.15s;
+  transition: border-color 0.15s;
 }
-.home-project:hover { border-left-color: var(--accent); transform: translateY(-1px); }
+.home-project:hover { border-left-color: var(--accent); }
 .hp-content {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
