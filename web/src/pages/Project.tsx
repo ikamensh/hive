@@ -11,6 +11,7 @@ import {
 } from "../features/project/activity";
 import {
   GoalBanner,
+  ProjectActions,
   ProjectSettings,
   TogglesBar,
   WorkstreamCard,
@@ -185,6 +186,7 @@ export default function ProjectPage() {
           {configured && <span className="head-repo">{repoShort(project.spec_repo)}</span>}
         </h1>
         <StateBadge state={project.state} attentionCount={inboxCount} />
+        <ProjectActions project={project} onPatch={patch} />
       </div>
 
       {needsSetup || needsStart ? (

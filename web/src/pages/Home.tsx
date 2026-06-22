@@ -3,12 +3,14 @@ import { Link, useNavigate } from "react-router-dom";
 import { api, countdown, duration, money, repoShort } from "../api";
 import { useOverview } from "../App";
 import { StateBadge } from "../components/shared";
+import { ProjectActions } from "../features/project/controls";
 import type {
   AgentStatus,
   OverviewAgent,
   OverviewMachine,
   OverviewProject,
   Overview,
+  ProjectPatch,
 } from "../types";
 
 const AGENT_TONE: Record<AgentStatus, "ok" | "warn" | "bad" | "muted"> = {
@@ -74,7 +76,15 @@ function Kpi({
   );
 }
 
-function ProjectRow({ p, cooldownHint }: { p: OverviewProject; cooldownHint?: string }) {
+function ProjectRow({
+  p,
+  cooldownHint,
+  onPatch,
+}: {
+  p: OverviewProject;
+  cooldownHint?: string;
+  onPatch: (p: ProjectPatch) => Promise<void>;
+}) {
   const { counts } = p;
   const bits = [
     `${counts.active} active`,
@@ -83,26 +93,29 @@ function ProjectRow({ p, cooldownHint }: { p: OverviewProject; cooldownHint?: st
     `${counts.streams} streams`,
   ].filter(Boolean);
   return (
-    <Link to={`/p/${p.id}`} className="home-project">
-      <div className="hp-main">
-        <div className="hp-title">
-          <span className="hp-name">{p.name}</span>
-          {p.spec_repo ? (
-            <span className="hp-repo">{repoShort(p.spec_repo)}</span>
-          ) : (
-            <span className="chip chip-setup">setup needed</span>
-          )}
-          {p.paused && <span className="chip chip-paused">paused</span>}
+    <article className="home-project">
+      <Link to={`/p/${p.id}`} className="hp-content">
+        <div className="hp-main">
+          <div className="hp-title">
+            <span className="hp-name">{p.name}</span>
+            {p.spec_repo ? (
+              <span className="hp-repo">{repoShort(p.spec_repo)}</span>
+            ) : (
+              <span className="chip chip-setup">setup needed</span>
+            )}
+            {p.paused && <span className="chip chip-paused">paused</span>}
+          </div>
+          <div className="hp-stats">{bits.join(" · ")}</div>
         </div>
-        <div className="hp-stats">{bits.join(" · ")}</div>
-      </div>
-      <StateBadge
-        state={p.state}
-        attentionCount={counts.questions + counts.blockers}
-        cooldownHint={p.state === "blocked_resources" ? cooldownHint : undefined}
-      />
-      <span className="hp-spend">{p.spend_today > 0 ? money(p.spend_today) : "—"}</span>
-    </Link>
+        <StateBadge
+          state={p.state}
+          attentionCount={counts.questions + counts.blockers}
+          cooldownHint={p.state === "blocked_resources" ? cooldownHint : undefined}
+        />
+        <span className="hp-spend">{p.spend_today > 0 ? money(p.spend_today) : "—"}</span>
+      </Link>
+      <ProjectActions project={p} onPatch={onPatch} compact />
+    </article>
   );
 }
 
@@ -185,7 +198,7 @@ function HomeSkeleton() {
 }
 
 export default function Home() {
-  const { data, failed } = useOverview();
+  const { data, failed, refresh } = useOverview();
   const [showNew, setShowNew] = useState(false);
 
   if (!data) {
@@ -253,7 +266,15 @@ export default function Home() {
           ) : (
             <div className="home-project-list">
               {data.projects.map((p) => (
-                <ProjectRow key={p.id} p={p} cooldownHint={cooldownHint} />
+                <ProjectRow
+                  key={p.id}
+                  p={p}
+                  cooldownHint={cooldownHint}
+                  onPatch={async (patch) => {
+                    await api.patchProject(p.id, patch);
+                    refresh();
+                  }}
+                />
               ))}
             </div>
           )}

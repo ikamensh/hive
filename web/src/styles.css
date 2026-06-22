@@ -183,6 +183,19 @@ button.ghost:hover:not(:disabled) {
   color: var(--ink);
   border-color: var(--ink-faint);
 }
+button.danger-outline {
+  color: var(--red);
+  border: 1px solid var(--red);
+  background: transparent;
+}
+button.danger-outline:hover:not(:disabled) {
+  background: var(--red);
+  color: #fff;
+}
+button.danger-fill {
+  background: var(--red);
+  color: #fff;
+}
 
 input,
 textarea {
@@ -509,10 +522,12 @@ textarea:focus {
   margin-bottom: 22px;
 }
 .page-head h1 {
+  min-width: 0;
   font-size: 24px;
   letter-spacing: 0.02em;
 }
-.page-head button {
+.page-head > button,
+.page-head .project-actions {
   margin-left: auto;
 }
 .head-repo {
@@ -521,6 +536,78 @@ textarea:focus {
   color: var(--ink-faint);
   margin-left: 12px;
   font-weight: 400;
+}
+.page-head .project-actions button {
+  margin-left: 0;
+}
+
+/* ---- project actions ------------------------------------------------------- */
+
+.project-actions {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+.project-action-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  white-space: nowrap;
+}
+.project-action-trigger i {
+  font-size: 16px;
+}
+.project-action-dots {
+  font-family: var(--mono);
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  line-height: 1;
+}
+.project-actions.compact .project-action-trigger {
+  width: 34px;
+  padding: 0;
+}
+.project-action-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 190px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-card);
+}
+.project-action-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-dim);
+  font-family: var(--body);
+  font-size: 13px;
+  letter-spacing: 0;
+  text-align: left;
+}
+.project-action-item:hover:not(:disabled) {
+  background: var(--bg-raise);
+  color: var(--ink);
+  box-shadow: none;
+  filter: none;
+}
+.project-action-item.danger {
+  color: var(--red);
+}
+.project-action-item i {
+  width: 15px;
+  font-size: 15px;
 }
 
 .reveal {
@@ -2523,17 +2610,42 @@ textarea:focus {
 /* --- project rows --- */
 .home-project-list { display: flex; flex-direction: column; gap: 8px; }
 .home-project {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 16px;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px;
   padding: 12px 14px; border: 1px solid var(--line-soft); border-left: 3px solid var(--line);
-  border-radius: var(--r-md); text-decoration: none; color: var(--ink);
+  border-radius: var(--r-md); color: var(--ink);
   transition: border-color 0.15s, transform 0.15s;
 }
 .home-project:hover { border-left-color: var(--accent); transform: translateY(-1px); }
+.hp-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  text-decoration: none;
+  color: var(--ink);
+}
 .hp-title { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
 .hp-name { font-family: var(--display); font-size: 16px; font-weight: 600; }
 .hp-repo { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
 .hp-stats { font-size: 12px; color: var(--ink-dim); margin-top: 3px; }
 .hp-spend { font-family: var(--mono); font-size: 12.5px; color: var(--ink-dim); min-width: 40px; text-align: right; }
+
+@media (max-width: 720px) {
+  .page-head {
+    flex-wrap: wrap;
+  }
+  .page-head .project-actions {
+    margin-left: 0;
+  }
+  .hp-content {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .hp-spend {
+    text-align: left;
+  }
+}
 
 /* --- needs-you + live rail --- */
 .rail-item { display: block; text-decoration: none; color: var(--ink); padding: 9px 0; border-top: 1px solid var(--line-soft); }
