@@ -179,9 +179,10 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
     ]
     name_by_id = {p.id: p.name for p in projects}
 
+    all_tasks = store.list(Task, workspace_id=workspace_id)
     items_by_project = _bucket(store.list(Workstream, workspace_id=workspace_id), lambda w: w.project_id)
     streams_by_project = _bucket(store.list(ProjectWorkstream, workspace_id=workspace_id), lambda s: s.project_id)
-    tasks_by_project = _bucket(store.list(Task, workspace_id=workspace_id), lambda t: t.project_id)
+    tasks_by_project = _bucket(all_tasks, lambda t: t.project_id)
     questions = store.list(Question, workspace_id=workspace_id)
     q_by_project = _bucket(questions, lambda q: q.project_id)
 
@@ -227,7 +228,7 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
         store.list(Resource, workspace_id=workspace_id),
     )
 
-    running = [t for t in store.list(Task, workspace_id=workspace_id) if t.status == TaskStatus.running]
+    running = [t for t in all_tasks if t.status == TaskStatus.running]
     running.sort(key=lambda t: t.started_at, reverse=True)
     live_tasks = [
         {
