@@ -175,6 +175,7 @@ export default function App() {
           <NavLink to="/" end>
             home
           </NavLink>
+          <NavLink to="/needs-you">needs you</NavLink>
           <NavLink to="/resources">resources</NavLink>
         </nav>
         {auth.data && <AccountMenu auth={auth.data} loggingOut={loggingOut} onSignOut={signOut} />}
@@ -204,13 +205,14 @@ export default function App() {
             </svg>
           )}
         </button>
-        <div
+        <NavLink
+          to="/needs-you"
           className={`q-counter ${attention > 0 ? "hot" : ""}`}
           title="open questions + human todos"
         >
           <span className="q-num">{poll.data ? attention : "–"}</span>
           <span className="q-label">need attention</span>
-        </div>
+        </NavLink>
       </header>
 
       {poll.failed && (

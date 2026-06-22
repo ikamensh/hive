@@ -254,6 +254,7 @@ export default function Home() {
           value={t.needs_you}
           sub={`${data.attention.questions.length} q · ${data.attention.human_todos.length} todo`}
           hot={t.needs_you > 0}
+          to="/needs-you"
         />
         <Kpi
           icon="currency-dollar"
@@ -294,20 +295,19 @@ export default function Home() {
                 <i className="ti ti-hand-stop" aria-hidden /> needs you
               </h2>
               {data.attention.count > 0 && <span className="badge hot">{data.attention.count}</span>}
+              <Link to="/needs-you" className="panel-link">
+                view all →
+              </Link>
             </div>
             {data.attention.count === 0 && <p className="muted">nothing needs you right now</p>}
             {data.attention.questions.map((q) => (
-              <Link key={q.id} to={`/p/${q.project_id}`} className="rail-item">
+              <Link key={q.id} to="/needs-you" className="rail-item">
                 <span className="rail-tag">{q.project_name || "project"} · question</span>
                 <span className="rail-text">{q.text}</span>
               </Link>
             ))}
             {data.attention.human_todos.map((todo) => (
-              <Link
-                key={todo.id}
-                to={todo.project_id ? `/p/${todo.project_id}` : "/resources"}
-                className="rail-item"
-              >
+              <Link key={todo.id} to="/needs-you" className="rail-item">
                 <span className="rail-tag">{todo.project_name || "org-wide"} · todo</span>
                 <span className="rail-text">{todo.title}</span>
               </Link>
