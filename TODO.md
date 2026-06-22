@@ -33,6 +33,19 @@ lives in the spec repo. Decide and implement the canonical path: who writes
 `iteration.md`, and how hive notices a direct git edit (until GitHub webhooks
 land, an idle project gets no heartbeat).
 
+## Subscription recovery flow — consult subscriptions on blocked_resources
+The data model now distinguishes durable `Subscription`s (with `licensing_mode`)
+from live per-machine agents, and `/api/resources` surfaces
+`subscription_candidates` (`hive/control/capacity.py`). Not yet wired into the
+control loop: when work is `blocked_resources` (no online usable agent for a
+needed backend), the supervisor/orchestrator should consult subscriptions and
+act on the licensing mode — self-serve a `portable` credential onto an online
+machine, or file a `HumanTask` login for a `machine_bound` one — instead of just
+going quiet. This is "subscriptions as a recovery source, not baseline
+capacity"; worth an ADR when built (the genuine trade-off vs counting owned
+capacity as always-available). See CONTEXT.md (Subscription / Licensing Mode)
+and wiki/architecture.md (provider rulebook, user resource policy).
+
 ## Issue solving — selectable run scope
 The 2026-06-14 live validation target was issues #2-#4, but scanning the repo
 also ingested newly-open issue #5 and the deterministic queue started it after
