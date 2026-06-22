@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from hive.models import Machine, Resource, ResourceUsability, Runner, now
+from hive.models import Machine, Resource, ResourceUsability, Runner, Subscription, now
+from hive.runner.backends import backend_licensing
 
 
 @dataclass
@@ -137,6 +138,37 @@ def machine_cards(groups: list[MachineGroup]) -> list[dict]:
         }
         for g in groups
     ]
+
+
+def subscription_candidates(
+    subscriptions: list[Subscription],
+    resources: list[Resource],
+    runners: list[Runner],
+) -> list[dict]:
+    """Providers proven usable on a machine but not yet recorded as a Subscription.
+
+    A usable agent is direct evidence the user holds access to that provider, so
+    Hive offers it back as a one-click confirmation instead of making the user
+    re-type what discovery already found. Only proven-usable resources count —
+    an installed-but-unprobed CLI is not yet evidence of a real subscription.
+    Candidates carry the provider-rulebook licensing default so confirming one
+    starts from the right portable/machine-bound guess.
+    """
+    have = {s.provider for s in subscriptions}
+    runner_name = {r.id: r.name for r in runners}
+    candidates: dict[str, dict] = {}
+    for res in resources:
+        if res.backend in have or res.backend in candidates:
+            continue
+        if res.usability_status != ResourceUsability.usable:
+            continue
+        where = runner_name.get(res.runner_id, res.runner_id)
+        candidates[res.backend] = {
+            "provider": res.backend,
+            "licensing_mode": backend_licensing(res.backend),
+            "evidence": f"usable on {where}" if where else "usable",
+        }
+    return list(candidates.values())
 
 
 def capacity_summary(groups: list[MachineGroup]) -> dict:

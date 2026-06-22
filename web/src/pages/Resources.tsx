@@ -63,7 +63,7 @@ function Subscriptions() {
   if (!data) return null;
   const add = async () => {
     if (!provider.trim()) return;
-    await api.addSubscription(provider.trim(), plan.trim(), notes.trim());
+    await api.addSubscription(provider.trim(), plan.trim(), "unknown", notes.trim());
     setProvider("");
     setPlan("");
     setNotes("");

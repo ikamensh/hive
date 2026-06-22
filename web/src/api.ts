@@ -13,6 +13,7 @@ import type {
   ProjectDetail,
   ProjectPatch,
   ProjectRepoCreate,
+  LicensingMode,
   ProjectStart,
   PreflightResult,
   Question,
@@ -174,10 +175,10 @@ const realApi = {
   updateResource: (id: string, patch: { enabled?: boolean; disabled_reason?: string }) =>
     http(`/api/resources/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   subscriptions: () => http<Subscription[]>("/api/subscriptions"),
-  addSubscription: (provider: string, plan: string, notes: string) =>
+  addSubscription: (provider: string, plan: string, licensing_mode: LicensingMode, notes: string) =>
     http<Subscription>("/api/subscriptions", {
       method: "POST",
-      body: JSON.stringify({ provider, plan, notes }),
+      body: JSON.stringify({ provider, plan, licensing_mode, notes }),
     }),
   deleteSubscription: async (id: string) => {
     await http(`/api/subscriptions/${id}`, { method: "DELETE" });

@@ -164,6 +164,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("sub-add", help="add a subscription")
     p.add_argument("provider")
     p.add_argument("--plan", default="")
+    p.add_argument(
+        "--licensing",
+        default="unknown",
+        choices=("portable", "machine_bound", "unknown"),
+        help="portable (API key, any machine) or machine_bound (login tied to one machine)",
+    )
     p.add_argument("--notes", default="")
     p = sub.add_parser("sub-rm", help="delete a subscription")
     p.add_argument("sub_id")
@@ -541,7 +547,8 @@ def run(args: argparse.Namespace, client) -> dict | list:
         r = client.get("/api/subscriptions")
     elif c == "sub-add":
         r = client.post("/api/subscriptions", json={
-            "provider": args.provider, "plan": args.plan, "notes": args.notes,
+            "provider": args.provider, "plan": args.plan,
+            "licensing_mode": args.licensing, "notes": args.notes,
         })
     elif c == "sub-rm":
         r = client.delete(f"/api/subscriptions/{args.sub_id}")

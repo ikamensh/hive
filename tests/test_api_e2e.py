@@ -26,6 +26,9 @@ from hive.models import (
     Project,
     Question,
     Resource,
+    ResourceUsability,
+    Runner,
+    Subscription,
     Task,
     TaskKind,
     TaskStatus,
@@ -1227,3 +1230,42 @@ def test_overview_reflects_project_and_capacity(harness):
     assert ov["totals"]["machines_online"] >= 1
     # Totals stay internally consistent with the rows they summarize.
     assert ov["totals"]["tasks_running"] == sum(p["counts"]["running"] for p in ov["projects"])
+
+
+def test_subscription_records_licensing_mode(harness):
+    """A subscription persists how its credential is licensed, so the recovery
+    flow can later decide self-serve vs ask-a-human without re-guessing."""
+    client, store, _ = harness
+    created = client.post(
+        "/api/subscriptions",
+        json={"provider": "claude", "plan": "Claude Max 5x", "licensing_mode": "machine_bound"},
+    ).json()
+    assert created["licensing_mode"] == "machine_bound"
+    assert store.get(Subscription, created["id"]).licensing_mode == "machine_bound"
+
+    # Omitting it is allowed and defaults to unknown rather than erroring.
+    bare = client.post("/api/subscriptions", json={"provider": "cursor"}).json()
+    assert bare["licensing_mode"] == "unknown"
+
+
+def test_resources_surface_unsubscribed_usable_providers(harness):
+    """/api/resources offers a usable-but-unrecorded provider as a candidate the
+    user can confirm, carrying the provider-rulebook licensing default; once a
+    subscription exists the candidate disappears."""
+    client, store, _ = harness
+    runner = store.put(Runner(name="laptop", backends=["cursor"]))
+    store.put(
+        Resource(
+            runner_id=runner.id,
+            backend="cursor",
+            usability_status=ResourceUsability.usable,
+        )
+    )
+
+    candidates = client.get("/api/resources").json()["subscription_candidates"]
+    assert [c["provider"] for c in candidates] == ["cursor"]
+    assert candidates[0]["licensing_mode"] == "portable"  # Cursor key is portable
+    assert candidates[0]["evidence"] == "usable on laptop"
+
+    client.post("/api/subscriptions", json={"provider": "cursor"})
+    assert client.get("/api/resources").json()["subscription_candidates"] == []
