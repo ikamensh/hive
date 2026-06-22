@@ -102,6 +102,7 @@ from hive.models import (
 )
 from hive.integrations.specrepo import SpecRepo
 from hive.persistence.storage import storage_info
+from hive.control.overview import build_overview
 from hive.control.supervisor import Supervisor
 from hive.runner.task_results import (
     TaskResult,
@@ -880,6 +881,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             raise HTTPException(502, f"GitHub API error: {exc}") from exc
 
     # ---- web API -------------------------------------------------------------
+
+    @app.get("/api/overview")
+    def overview(ctx: AuthContext = Depends(current)):
+        return build_overview(store, ctx.workspace_id, supervisor.spend_today)
 
     @app.get("/api/projects")
     def list_projects(include_archived: bool = False, ctx: AuthContext = Depends(current)):

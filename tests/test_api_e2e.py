@@ -1172,3 +1172,21 @@ def _register_usable_runner(client, name: str = "fake-runner", backend: str = "c
         headers=RUNNER_HEADERS,
     )
     return rid
+
+
+def test_overview_reflects_project_and_capacity(harness):
+    """The home overview is one request that sees a started project and a
+    probed-usable agent on its machine."""
+    client, store, _ = harness
+    project = _create_started(client, "demo")
+    _pump(client, store)
+    _register_usable_runner(client)
+
+    ov = client.get("/api/overview").json()
+
+    assert [p["name"] for p in ov["projects"]] == ["demo"]
+    assert ov["capacity"]["agents_total"] >= 1
+    assert ov["capacity"]["agents_ready"] >= 1
+    assert ov["totals"]["machines_online"] >= 1
+    # Totals stay internally consistent with the rows they summarize.
+    assert ov["totals"]["tasks_running"] == sum(p["counts"]["running"] for p in ov["projects"])
