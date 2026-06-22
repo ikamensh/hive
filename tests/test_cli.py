@@ -5,6 +5,8 @@ runner protocol); the CLI plays the user. This is the parity check that the
 CLI can fully replace the UI.
 """
 
+import os
+
 import pytest
 import httpx
 from fastapi.testclient import TestClient
@@ -246,14 +248,52 @@ def test_run_control_plane_caps_graceful_shutdown(monkeypatch, tmp_path, capsys)
     monkeypatch.setenv("HIVE_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("HIVE_GCP_PROJECT", "proj")
     monkeypatch.setenv("HIVE_GCS_BUCKET", "bucket")
+    monkeypatch.delenv("HIVE_WEB_DIST", raising=False)
+
+    from hive.cli import main
+
+    main(["run", "--host", "127.0.0.1", "--port", "8765", "--no-web-build"])
+
+    assert calls
+    assert calls[0][1]["timeout_graceful_shutdown"] == UVICORN_GRACEFUL_SHUTDOWN_S
+    assert "starting hive control plane" in capsys.readouterr().out
+
+
+def test_run_control_plane_builds_web_bundle(monkeypatch, tmp_path, capsys):
+    import subprocess
+    import uvicorn
+
+    calls = []
+    uvicorn_calls = []
+
+    def fake_subprocess_run(cmd, *args, **kwargs):
+        calls.append((cmd, kwargs.get("cwd"), kwargs.get("check")))
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    def fake_run(*args, **kwargs):
+        uvicorn_calls.append((args, kwargs))
+
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr("hive.cli._web_deps_stale", lambda _web_dir: True)
+    monkeypatch.setattr("hive.cli.shutil.which", lambda name: "/usr/bin/npm" if name == "npm" else None)
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+    monkeypatch.setattr("hive.cli.load_stored_config", lambda: {})
+    monkeypatch.setenv("HIVE_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("HIVE_GCP_PROJECT", "proj")
+    monkeypatch.setenv("HIVE_GCS_BUCKET", "bucket")
+    monkeypatch.setenv("HIVE_GH_TOKEN", "token")
+    monkeypatch.delenv("HIVE_WEB_DIST", raising=False)
 
     from hive.cli import main
 
     main(["run", "--host", "127.0.0.1", "--port", "8765"])
 
-    assert calls
-    assert calls[0][1]["timeout_graceful_shutdown"] == UVICORN_GRACEFUL_SHUTDOWN_S
-    assert "starting hive control plane" in capsys.readouterr().out
+    assert [call[0] for call in calls] == [["npm", "ci"], ["npm", "run", "build"]]
+    assert uvicorn_calls
+    assert "HIVE_WEB_DIST" in os.environ
+    out = capsys.readouterr().out
+    assert "web: installing npm dependencies" in out
+    assert "web: building latest web bundle" in out
 
 
 def test_run_control_plane_leader_refusal_is_concise(monkeypatch, tmp_path, capsys):
@@ -268,11 +308,12 @@ def test_run_control_plane_leader_refusal_is_concise(monkeypatch, tmp_path, caps
     monkeypatch.setenv("HIVE_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("HIVE_GCP_PROJECT", "proj")
     monkeypatch.setenv("HIVE_GCS_BUCKET", "bucket")
+    monkeypatch.delenv("HIVE_WEB_DIST", raising=False)
 
     from hive.cli import main
 
     with pytest.raises(SystemExit) as exc:
-        main(["run", "--host", "127.0.0.1", "--port", "8765"])
+        main(["run", "--host", "127.0.0.1", "--port", "8765", "--no-web-build"])
 
     assert exc.value.code == 1
     err = capsys.readouterr().err

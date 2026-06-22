@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -51,6 +53,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--reload", action="store_true", help="auto-reload on code changes")
+    p.add_argument(
+        "--no-web-build",
+        action="store_true",
+        help="serve the existing web bundle instead of rebuilding web/dist first",
+    )
 
     p = sub.add_parser("config", help="manage hive's own stored tokens/settings")
     csub = p.add_subparsers(dest="config_command", required=True)
@@ -297,6 +304,64 @@ def _managed_state_missing(env: dict[str, str]) -> list[str]:
     return [key for key in ("HIVE_GCP_PROJECT", "HIVE_GCS_BUCKET") if not env.get(key, "").strip()]
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _default_web_dist() -> Path:
+    return _repo_root() / "web" / "dist"
+
+
+def _web_deps_stale(web_dir: Path) -> bool:
+    """Best-effort dependency freshness check before building the SPA."""
+    node_modules = web_dir / "node_modules"
+    installed_lock = node_modules / ".package-lock.json"
+    package_lock = web_dir / "package-lock.json"
+    if not node_modules.is_dir() or not installed_lock.is_file():
+        return True
+    return package_lock.is_file() and package_lock.stat().st_mtime > installed_lock.stat().st_mtime
+
+
+def _run_checked(cmd: list[str], cwd: Path, description: str) -> None:
+    try:
+        subprocess.run(cmd, cwd=cwd, check=True)
+    except subprocess.CalledProcessError as exc:
+        print(f"\n{description} failed with exit code {exc.returncode}.", file=sys.stderr)
+        raise SystemExit(exc.returncode) from exc
+
+
+def _prepare_web_bundle(skip_build: bool) -> None:
+    web_dir = _repo_root() / "web"
+    dist_dir = _default_web_dist()
+    if configured := os.environ.get("HIVE_WEB_DIST", "").strip():
+        configured_dist = Path(configured).expanduser()
+        if configured_dist.resolve() != dist_dir.resolve():
+            print(f"web: using HIVE_WEB_DIST={configured}")
+            if not skip_build:
+                print("web: build skipped because HIVE_WEB_DIST is custom")
+            return
+
+    os.environ["HIVE_WEB_DIST"] = str(dist_dir)
+    if skip_build:
+        print(f"web: serving existing bundle from {dist_dir}")
+        return
+
+    if not shutil.which("npm"):
+        print(
+            "\nCannot build the web UI because `npm` is not on PATH.\n"
+            "Install Node/npm, or rerun with `uv run hive run --no-web-build` "
+            "to serve the existing web/dist bundle.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    if _web_deps_stale(web_dir):
+        print("web: installing npm dependencies")
+        _run_checked(["npm", "ci"], web_dir, "npm ci")
+    print("web: building latest web bundle")
+    _run_checked(["npm", "run", "build"], web_dir, "npm run build")
+
+
 def _run_control_plane(args: argparse.Namespace) -> None:
     import uvicorn
 
@@ -318,6 +383,7 @@ def _run_control_plane(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         raise SystemExit(2)
+    _prepare_web_bundle(skip_build=args.no_web_build)
     print(f"starting hive control plane on {args.host}:{args.port}\n")
     try:
         uvicorn.run(

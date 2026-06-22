@@ -38,7 +38,8 @@ uv run hive doctor storage
 uv run hive run
 ```
 
-`hive run` resolves its tokens and prints what it found (and from where) before booting:
+`hive run` resolves its tokens, rebuilds the React UI into `web/dist`, points the
+server at that bundle, and prints what it found (and from where) before booting:
 
 ```
   github: token from `gh auth token`
@@ -50,7 +51,7 @@ uv run hive run
 hive control plane → http://127.0.0.1:8000
 ```
 
-If `HIVE_GCP_PROJECT` or `HIVE_GCS_BUCKET` is missing, `hive run` refuses to start and prints the exact variables to set. Leave it running. (Flags: `--host`, `--port`, `--reload`.)
+If `HIVE_GCP_PROJECT` or `HIVE_GCS_BUCKET` is missing, `hive run` refuses to start and prints the exact variables to set. Leave it running. (Flags: `--host`, `--port`, `--reload`, `--no-web-build`.)
 
 **Giving hive its own tokens.** Autodetected tokens (the `gh` token, `OPENAI_API_KEY`/`GEMINI_API_KEY` from your shell) are just the starting point. To have hive use *separate* keys — e.g. so its spend is billed/tracked on their own account — store them in hive's own config (`~/.config/hive/config.env`, `chmod 600`); stored values take precedence over the ambient environment on `hive run`:
 
@@ -146,6 +147,9 @@ npm run dev              # dev server, proxies /api → http://localhost:8000
 VITE_MOCK=1 npm run dev  # canned fixtures, no backend needed
 npm run build            # tsc --noEmit + vite build → web/dist (served by the control plane)
 ```
+
+For normal local launches, prefer `uv run hive run`: it runs the production web
+build for you before starting the API, so the served UI matches `web/src`.
 
 ### Local checks
 
