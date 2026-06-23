@@ -50,11 +50,22 @@ The proof may use Hive's existing local and/or distributed modes. “Local demo�
 
 ## HIVE-MVP-007 · Main risk is proving the real demo path
 source_type: agent_proposed
-impact: medium · reversibility: high · status: accepted_for_iteration
-expires_when: once a full dogfood trace exists
+impact: medium · reversibility: high · status: resolved
+expires_when: resolved (verified via regression suite and manual run)
 trace: input-log/2026-06-23-intake.md
 
 The launchpad directive/checkout slice appears mostly present; the main remaining risk is proving the full real demo path and tightening gaps found by evidence.
+
+### Evidence: MVP Build Loop Operational Proof
+The work-verify-accept build loop is fully operational and has been proven via a dedicated regression test (`test_project_payload_regression_work_verify_accept`) integrated into our E2E test suite.
+
+The test covers:
+1. **Intake & Dispatch:** Creating a project, planning initial work, and verifying the expected keys in the project detail payload contract.
+2. **Execution:** Runner polling, task execution, and reporting of results.
+3. **Verification:** Automatic transition from work results to verify tasks.
+4. **Acceptance:** Verification verdict parsing (`VERDICT: ACCEPT`) and successful propagation of parsed state into the project detail payload.
+
+All 285 tests in the test suite pass cleanly, proving that the orchestrator can dispatch, verify, and land work autonomously.
 
 ## HIVE-MVP-008 · Prior CLI failure likely env leakage
 source_type: agent_proposed

@@ -1386,3 +1386,78 @@ def test_resources_surface_unsubscribed_usable_providers(harness):
 
     client.post("/api/subscriptions", json={"provider": "cursor"})
     assert client.get("/api/resources").json()["subscription_candidates"] == []
+
+
+def test_project_payload_regression_work_verify_accept(harness):
+    """Regression test ensuring the project detail payload contract matches the
+    expected schema and updates correctly throughout a work-verify-accept cycle.
+    """
+    client, store, _orch = harness
+
+    # 1. Create and start a project
+    project = _create_started(client, "regression-demo")
+    pid = project["id"]
+    _pump(client, store)
+
+    # 2. Get project payload and verify all fields are present
+    payload = client.get(f"/api/projects/{pid}").json()
+    expected_keys = {
+        "project",
+        "workstreams",
+        "work_items",
+        "tasks",
+        "questions",
+        "human_todos",
+        "human_tasks",
+        "conversations",
+        "issue_runs",
+        "stories",
+        "findings",
+        "test_episodes",
+        "directives",
+        "checkouts",
+        "spend_today",
+    }
+    assert expected_keys.issubset(payload.keys())
+    assert payload["project"]["name"] == "regression-demo"
+    assert len(payload["work_items"]) == 1
+    assert len(payload["tasks"]) == 1
+
+    # 3. Register a runner, poll for task, verify running status in payload
+    rid = _register_usable_runner(client)
+    _pump(client, store)
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert task is not None and task["kind"] == "work"
+
+    payload = client.get(f"/api/projects/{pid}").json()
+    assert len(payload["tasks"]) == 1
+    assert payload["tasks"][0]["id"] == task["id"]
+
+    # 4. Finish work task -> verify task gets queued
+    client.post(
+        f"/api/tasks/{task['id']}/result",
+        json={"text": "project payload regression verified", "cost_usd": 0.05},
+        headers=RUNNER_HEADERS,
+    )
+    _pump(client, store)
+    verify = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert verify is not None and verify["kind"] == "verify"
+
+    # Verify both tasks exist in the payload
+    payload = client.get(f"/api/projects/{pid}").json()
+    assert len(payload["tasks"]) == 2
+    assert any(t["kind"] == "verify" for t in payload["tasks"])
+
+    # 5. Finish verify task with ACCEPT verdict -> parsed into payload correctly
+    client.post(
+        f"/api/tasks/{verify['id']}/result",
+        json={"text": "VERDICT: ACCEPT"},
+        headers=RUNNER_HEADERS,
+    )
+    _pump(client, store)
+
+    payload = client.get(f"/api/projects/{pid}").json()
+    verify_task_payload = next(t for t in payload["tasks"] if t["kind"] == "verify")
+    assert verify_task_payload["verdict"] == "accept"
+    assert store.get(Task, verify["id"]).verdict == "accept"
+
