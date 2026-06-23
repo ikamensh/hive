@@ -73,6 +73,7 @@ GITHUB_URL = re.compile(
     r"(?P<repo>[\w.-]+/[\w.-]+?)(?:\.git)?/?$",
     re.IGNORECASE,
 )
+GITHUB_EXTRAHEADER_KEY = "http.https://github.com/.extraheader"
 
 
 class CheckoutError(RuntimeError):
@@ -164,7 +165,6 @@ def _runner_github_token() -> str:
 def _git_auth_overlay(token: str) -> dict[str, str]:
     if not token:
         return {}
-    target_key = "http.https://github.com/.extraheader"
     existing: list[tuple[str, str]] = []
     try:
         count = int(os.environ.get("GIT_CONFIG_COUNT", "0") or "0")
@@ -173,13 +173,17 @@ def _git_auth_overlay(token: str) -> dict[str, str]:
     for i in range(count):
         key = os.environ.get(f"GIT_CONFIG_KEY_{i}", "")
         value = os.environ.get(f"GIT_CONFIG_VALUE_{i}", "")
-        if not key or key == target_key:
+        if not key or key.lower() == GITHUB_EXTRAHEADER_KEY:
             continue
         existing.append((key, value))
     basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
     # GitHub CLI can install a global extraheader. An empty value resets the
     # multi-valued header list before Hive adds the one it wants.
-    entries = [*existing, (target_key, ""), (target_key, f"AUTHORIZATION: basic {basic}")]
+    entries = [
+        *existing,
+        (GITHUB_EXTRAHEADER_KEY, ""),
+        (GITHUB_EXTRAHEADER_KEY, f"AUTHORIZATION: basic {basic}"),
+    ]
     overlay = {"GIT_CONFIG_COUNT": str(len(entries))}
     for i, (key, value) in enumerate(entries):
         overlay[f"GIT_CONFIG_KEY_{i}"] = key

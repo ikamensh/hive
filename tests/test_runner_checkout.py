@@ -149,27 +149,37 @@ def test_reset_task_scratch_removes_previous_runner_state(tmp_path):
 
 
 def test_git_auth_overlay_replaces_inherited_github_extraheader(monkeypatch):
-    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "3")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.name")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "Hive Runner")
-    monkeypatch.setenv("GIT_CONFIG_KEY_1", "http.https://github.com/.extraheader")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "Http.https://github.com/.ExtraHeader")
     monkeypatch.setenv("GIT_CONFIG_VALUE_1", "AUTHORIZATION: basic old")
+    monkeypatch.setenv("GIT_CONFIG_KEY_2", "http.https://example.com/.extraheader")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_2", "X-Trace: keep")
 
     overlay = runner._git_auth_overlay("ghp_new")
 
-    assert overlay["GIT_CONFIG_COUNT"] == "3"
+    assert overlay["GIT_CONFIG_COUNT"] == "4"
     assert overlay["GIT_CONFIG_KEY_0"] == "user.name"
     assert overlay["GIT_CONFIG_VALUE_0"] == "Hive Runner"
-    assert overlay["GIT_CONFIG_KEY_1"] == "http.https://github.com/.extraheader"
-    assert overlay["GIT_CONFIG_VALUE_1"] == ""
+    assert overlay["GIT_CONFIG_KEY_1"] == "http.https://example.com/.extraheader"
+    assert overlay["GIT_CONFIG_VALUE_1"] == "X-Trace: keep"
     assert overlay["GIT_CONFIG_KEY_2"] == "http.https://github.com/.extraheader"
+    assert overlay["GIT_CONFIG_VALUE_2"] == ""
+    assert overlay["GIT_CONFIG_KEY_3"] == "http.https://github.com/.extraheader"
     assert "ghp_new" not in overlay["GIT_CONFIG_VALUE_2"]
-    assert overlay["GIT_CONFIG_VALUE_2"] != "AUTHORIZATION: basic old"
+    assert "ghp_new" not in overlay["GIT_CONFIG_VALUE_3"]
+    assert overlay["GIT_CONFIG_VALUE_3"] != "AUTHORIZATION: basic old"
 
 
 def test_checkout_uses_https_token_auth_for_github_ssh_urls(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "WORKDIR", tmp_path / "work")
     monkeypatch.setenv("HIVE_GH_TOKEN", "ghp_runner")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "http.https://github.com/.extraheader")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "AUTHORIZATION: bearer ambient")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "user.email")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_1", "runner@example.invalid")
     calls = []
 
     def fake_run(args, **kwargs):
@@ -179,11 +189,19 @@ def test_checkout_uses_https_token_auth_for_github_ssh_urls(monkeypatch, tmp_pat
             assert "ghp_runner" not in args
             (tmp_path / "work" / "hive").mkdir(parents=True)
             env = kwargs["env"]
-            assert env["GIT_CONFIG_COUNT"] == "2"
-            assert env["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
-            assert env["GIT_CONFIG_VALUE_0"] == ""
-            assert env["GIT_CONFIG_KEY_1"] == "http.https://github.com/.extraheader"
-            assert "ghp_runner" not in env["GIT_CONFIG_VALUE_1"]
+            entries = [
+                (env[f"GIT_CONFIG_KEY_{i}"], env[f"GIT_CONFIG_VALUE_{i}"])
+                for i in range(int(env["GIT_CONFIG_COUNT"]))
+            ]
+            assert ("user.email", "runner@example.invalid") in entries
+            github_headers = [
+                value
+                for key, value in entries
+                if key.lower() == "http.https://github.com/.extraheader"
+            ]
+            assert github_headers == ["", env["GIT_CONFIG_VALUE_2"]]
+            assert "AUTHORIZATION: bearer ambient" not in github_headers
+            assert "ghp_runner" not in env["GIT_CONFIG_VALUE_2"]
         if args[:2] == ["git", "symbolic-ref"]:
             return _completed(args, "origin/main\n")
         return _completed(args)
