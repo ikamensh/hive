@@ -124,6 +124,20 @@ function ProjectRow({
   );
 }
 
+function NewProjectRow({ onClick }: { onClick: () => void }) {
+  return (
+    <button type="button" className="home-project home-project-new" onClick={onClick}>
+      <span className="hp-new-icon" aria-hidden>
+        +
+      </span>
+      <span className="hp-main">
+        <span className="hp-name">new project</span>
+        <span className="hp-stats">create a project and configure its repos</span>
+      </span>
+    </button>
+  );
+}
+
 function MachineCard({ m }: { m: OverviewMachine }) {
   return (
     <Link to="/machines" className={`cap-machine ${m.online ? "online" : "offline"}`}>
@@ -234,7 +248,6 @@ export default function Home() {
     <div className="page page-home">
       <div className="home-head">
         <h1>{summary || "the hive is quiet"}</h1>
-        <button onClick={() => setShowNew(true)}>+ new project</button>
       </div>
 
       <div className="kpi-row">
@@ -275,22 +288,22 @@ export default function Home() {
             <h2>projects</h2>
           </div>
           {data.projects.length === 0 ? (
-            <p className="muted">No projects yet. Create one to put the hive to work.</p>
-          ) : (
-            <div className="home-project-list">
-              {data.projects.map((p) => (
-                <ProjectRow
-                  key={p.id}
-                  p={p}
-                  cooldownHint={cooldownHint}
-                  onPatch={async (patch) => {
-                    await api.patchProject(p.id, patch);
-                    refresh();
-                  }}
-                />
-              ))}
-            </div>
-          )}
+            <p className="muted">No projects yet.</p>
+          ) : null}
+          <div className="home-project-list">
+            {data.projects.map((p) => (
+              <ProjectRow
+                key={p.id}
+                p={p}
+                cooldownHint={cooldownHint}
+                onPatch={async (patch) => {
+                  await api.patchProject(p.id, patch);
+                  refresh();
+                }}
+              />
+            ))}
+            <NewProjectRow onClick={() => setShowNew(true)} />
+          </div>
         </section>
 
         <div className="home-rail">
