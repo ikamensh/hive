@@ -268,6 +268,22 @@ textarea:focus {
   text-transform: uppercase;
   color: var(--ink-faint);
 }
+.version-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: min(220px, 50vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--green);
+  border: 1px solid color-mix(in srgb, var(--green) 35%, var(--line));
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: color-mix(in srgb, var(--green) 9%, transparent);
+}
 .storage-chip {
   display: inline-flex;
   align-items: center;
@@ -482,6 +498,9 @@ textarea:focus {
   }
   .storage-chip {
     max-width: 100%;
+  }
+  .version-chip {
+    max-width: calc(100vw - 32px);
   }
 }
 

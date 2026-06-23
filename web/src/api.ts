@@ -25,6 +25,7 @@ import type {
   Task,
   TestEpisode,
   TestEpisodeResult,
+  VersionInfo,
   Workstream,
   WorkstreamPatch,
 } from "./types";
@@ -89,6 +90,7 @@ async function httpText(path: string, init?: RequestInit): Promise<string> {
 }
 
 const realApi = {
+  version: () => http<VersionInfo>("/api/version"),
   me: () => http<AuthInfo>("/api/auth/me"),
   logout: async () => {
     await http("/api/auth/logout", { method: "POST" });

@@ -347,6 +347,18 @@ export interface AuthInfo {
   workspace: Workspace;
   auth_mode: string;
   storage?: StorageInfo;
+  version?: VersionInfo;
+}
+
+export interface VersionInfo {
+  version: string;
+  base_version: string;
+  major: number;
+  minor: number;
+  micro: number;
+  commit: string;
+  dirty: boolean;
+  source: string;
 }
 
 export interface StorageInfo {

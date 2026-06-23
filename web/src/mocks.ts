@@ -30,12 +30,23 @@ import type {
   Task,
   TestEpisode,
   TestEpisodeResult,
+  VersionInfo,
   WorkItem,
   Workstream,
   WorkstreamPatch,
 } from "./types";
 
 const now = Date.now() / 1000;
+const version: VersionInfo = {
+  version: "0.1.150+mock",
+  base_version: "0.1",
+  major: 0,
+  minor: 1,
+  micro: 150,
+  commit: "mock",
+  dirty: false,
+  source: "mock",
+};
 
 const mockGithubRepos: GithubRepo[] = [
   {
@@ -994,6 +1005,7 @@ function groupCards(): MachineGroup[] {
 }
 
 export const api = {
+  version: async (): Promise<VersionInfo> => version,
   me: async (): Promise<AuthInfo> => ({
     user: {
       id: "github:ikamensh",
@@ -1015,6 +1027,7 @@ export const api = {
       export_available: false,
       fully_managed: false,
     },
+    version,
   }),
   logout: async (): Promise<void> => {},
 

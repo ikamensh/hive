@@ -1,6 +1,6 @@
 [project]
 name = "hive"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Continuous autonomous software development: chief + runner"
 requires-python = ">=3.13"
 dependencies = [
@@ -26,7 +26,11 @@ dev = [
 
 [build-system]
 requires = ["hatchling"]
-build-backend = "hatchling.build"
+build-backend = "hive_build_backend"
+backend-path = ["."]
+
+[tool.hatch.version]
+path = "hive/_version_fallback.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["hive"]

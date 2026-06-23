@@ -32,6 +32,7 @@ from hive.config.file import (
     load_stored_config,
     save_stored_config,
 )
+from hive.version import get_version, version_payload
 
 UVICORN_GRACEFUL_SHUTDOWN_S = 6
 
@@ -94,6 +95,7 @@ def _gh_token(preferred_user: str = "") -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="hive", description=__doc__.split("\n")[0])
+    parser.add_argument("--version", action="version", version=f"hive {get_version()}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("run", help="launch the local chief (auto-detects tokens)")
@@ -132,6 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
         "whoami",
         help="show the resolved chief target and current auth identity",
     )
+    sub.add_parser("version", help="show the local CLI version and the target chief version")
 
     p = sub.add_parser("projects", help="list projects")
 
@@ -455,7 +458,7 @@ def _run_chief(args: argparse.Namespace) -> None:
         )
         raise SystemExit(2)
     _prepare_web_bundle(skip_build=args.no_web_build)
-    print(f"starting hive chief on {args.host}:{args.port}\n")
+    print(f"starting hive chief {get_version()} on {args.host}:{args.port}\n")
     try:
         uvicorn.run(
             "hive.api:production_app",
@@ -515,7 +518,15 @@ def run(args: argparse.Namespace, client) -> dict | list:
     c = args.command
     if c == "whoami":
         me = client.get("/api/auth/me").raise_for_status().json()
-        return {"target": str(client.base_url), **me}
+        return {"target": str(client.base_url), "cli_version": version_payload(), **me}
+    elif c == "version":
+        payload = {"target": str(client.base_url), "cli": version_payload()}
+        try:
+            payload["chief"] = client.get("/api/version").raise_for_status().json()
+        except Exception as exc:
+            payload["chief"] = None
+            payload["chief_error"] = str(exc)
+        return payload
     elif c == "projects":
         r = client.get("/api/projects")
     elif c == "create":

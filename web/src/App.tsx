@@ -15,6 +15,15 @@ function storageLabel(storage: StorageInfo): string {
   return "persistence: test memory";
 }
 
+function VersionChip({ version }: { version: string }) {
+  if (!version) return null;
+  return (
+    <span className="version-chip" title={`Hive chief version ${version}`}>
+      v{version}
+    </span>
+  );
+}
+
 function AccountMenu({
   auth,
   loggingOut,
@@ -77,6 +86,7 @@ function AccountMenu({
 
 export default function App() {
   const [loggingOut, setLoggingOut] = useState(false);
+  const version = usePoll(() => api.version(), [], 60000, { cacheKey: "hive-version" });
   const auth = usePoll(() => api.me(), [], 30000);
   const poll = usePoll(() => api.overview(), [auth.data?.workspace.id], 4000, {
     enabled: !!auth.data,
@@ -85,6 +95,11 @@ export default function App() {
   const { theme, toggle } = useTheme();
   const attention = poll.data?.totals.needs_you ?? 0;
   const authNeedsLogin = auth.error instanceof ApiError && auth.error.status === 401;
+  const versionLabel = version.data?.version ?? auth.data?.version?.version ?? "";
+
+  useEffect(() => {
+    document.title = versionLabel ? `hive ${versionLabel} — chief` : "hive — chief";
+  }, [versionLabel]);
 
   const signOut = async () => {
     setLoggingOut(true);
@@ -112,6 +127,7 @@ export default function App() {
                 <path d="M12 6.5 16.5 9.25v5.5L12 17.5 7.5 14.75v-5.5z" fill="var(--accent-2)" opacity="0.7" />
               </svg>
               <span className="brand-word">hive</span>
+              <VersionChip version={versionLabel} />
             </div>
             <h1>Chief unreachable</h1>
             <p className="modal-hint">Retrying...</p>
@@ -134,6 +150,7 @@ export default function App() {
               <path d="M12 6.5 16.5 9.25v5.5L12 17.5 7.5 14.75v-5.5z" fill="var(--accent-2)" opacity="0.7" />
             </svg>
             <span className="brand-word">hive</span>
+            <VersionChip version={versionLabel} />
           </div>
           <h1>Sign in</h1>
           <a className="login-button" href="/api/auth/github/start">
@@ -161,6 +178,7 @@ export default function App() {
             <span className="brand-word">hive</span>
             <small>chief</small>
           </NavLink>
+          <VersionChip version={versionLabel} />
           {auth.data?.storage && (
             <NavLink
               to="/settings"

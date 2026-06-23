@@ -150,8 +150,19 @@ def test_cli_whoami(harness):
     me = cli(client, "whoami")
     assert me["auth_mode"] == "dev"
     assert me["target"].startswith("http")
+    assert me["cli_version"]["version"]
+    assert me["version"]["version"]
     assert me["user"]["github_login"]
     assert me["workspace"]["id"]
+
+
+def test_cli_version_reports_cli_and_chief(harness):
+    client, _store = harness
+    result = cli(client, "version")
+
+    assert result["target"].startswith("http")
+    assert result["cli"]["version"]
+    assert result["chief"]["version"] == result["cli"]["version"]
 
 
 class _Recorder:
@@ -421,7 +432,8 @@ def test_run_chief_builds_web_bundle(monkeypatch, tmp_path, capsys):
 
     main(["run", "--host", "127.0.0.1", "--port", "8765"])
 
-    assert [call[0] for call in calls] == [["npm", "ci"], ["npm", "run", "build"]]
+    npm_calls = [call for call in calls if call[0][0] == "npm"]
+    assert [call[0] for call in npm_calls] == [["npm", "ci"], ["npm", "run", "build"]]
     assert uvicorn_calls
     assert "HIVE_WEB_DIST" in os.environ
     out = capsys.readouterr().out

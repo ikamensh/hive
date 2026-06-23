@@ -114,6 +114,7 @@ from hive.control.capacity import (
 )
 from hive.control.overview import build_overview
 from hive.control.supervisor import Supervisor
+from hive.version import get_version, version_payload
 from hive.runner.task_results import (
     TaskResult,
     TaskResultProcessor,
@@ -287,7 +288,7 @@ class LocalRunnerPatch(BaseModel):
 
 
 def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_runner=None) -> FastAPI:
-    app = FastAPI(title="hive")
+    app = FastAPI(title=f"hive {get_version()}")
     auth = AuthManager(store, config)
     auth.validate_config()
 
@@ -917,6 +918,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         ),
     )
 
+    @app.get("/api/version")
+    def version():
+        return version_payload()
+
     # ---- auth ---------------------------------------------------------------
 
     @app.get("/api/auth/me")
@@ -935,6 +940,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             "workspace": ctx.workspace.model_dump(),
             "auth_mode": config.auth_mode,
             "storage": _storage_payload(),
+            "version": version_payload(),
         }
 
     @app.get("/api/auth/github/start")

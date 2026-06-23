@@ -20,10 +20,11 @@ IP=$(gcloud compute instances describe "$VM" --zone="$ZONE" --project="$PROJECT"
 SSH="ssh -i $HOME/.ssh/google_compute_engine -o IdentitiesOnly=yes \
   -o UserKnownHostsFile=$HOME/.ssh/google_compute_known_hosts -o StrictHostKeyChecking=accept-new"
 REMOTE="ikamen@$IP"
+VERSION=$(uv run python -m hive.version)
 
 # --rsync-path=sudo rsync: /opt/hive is root-owned. Excluded paths are also
 # protected from --delete, so the VM's .venv / web/dist / .git survive.
-echo "-> rsync sources to $VM ($IP):/opt/hive"
+echo "-> rsync sources to $VM ($IP):/opt/hive (version $VERSION)"
 rsync -az --delete --rsync-path="sudo rsync" -e "$SSH" \
   --exclude '.git' --exclude '.venv' --exclude 'node_modules' --exclude 'web/dist' \
   --exclude '__pycache__' --exclude '.pytest_cache' --exclude '.ruff_cache' --exclude '.idea' \
@@ -33,6 +34,9 @@ if [[ " $* " == *" --deps "* ]]; then
   echo "-> uv sync (deps changed)"
   $SSH "$REMOTE" "cd /opt/hive && sudo /usr/local/bin/uv sync --frozen --no-dev"
 fi
+
+echo "-> stamp version fallback ($VERSION)"
+$SSH "$REMOTE" "cd /opt/hive && sudo HIVE_VERSION='$VERSION' /opt/hive/.venv/bin/python -m hive.version --write-fallback >/dev/null"
 
 if [[ " $* " == *" --web "* ]]; then
   echo "-> build + ship web/dist"
