@@ -1,0 +1,58 @@
+# CI auto-fix
+
+Hive watches each project repo's default-branch CI and, when the build goes red,
+**files a GitHub issue and lets the existing issue-solving pipeline fix it**. It
+is the testing-workstream pattern (`wiki/testing.md`) applied to CI: a
+deterministic check *produces a GitHub issue*; the resolve→review→land machine in
+`wiki/issue-solving.md` does the actual fixing. There is no separate CI fixer.
+
+## Why this shape
+
+The architecture already calls out "a red main build (when CI exists) is an event
+that triggers a fix task" (`wiki/architecture.md` §4). Splitting it into
+*issue creation* + *reuse of the issue pipeline* keeps one trustworthy code path
+doing the fixing and makes the whole thing a thin, testable add-on.
+
+## The toggle
+
+`Project.ci_autofix` (default off) is the per-project switch, shown in the policy
+grid next to *prod deploys* and *paused*. When on, the supervisor polls CI for
+each of the project's repos (spec home + members) every
+`Supervisor.CI_CHECK_INTERVAL_S` (5 min) and runs the check below. A manual
+"check CI" button on the Issues toolbar (and `POST
+/api/projects/{id}/workstreams/{ws}/check-ci`, `hive check-ci`) runs the same
+check on demand for one repo.
+
+## The check (`hive/workstreams/ci.py`)
+
+`fetch_ci_status(repo, token)` reads the default branch's head commit and combines
+the GitHub **check-runs** API (Actions and other check apps) with the legacy
+**commit-status** API into one verdict: `failing` if anything failed, `pending`
+if some are still running and none failed, `passing` if there are checks and all
+succeeded, `none` if the branch has no CI at all (so repos without CI never get
+noise).
+
+`check_and_autofix(store, project, workstream, token, ...)` is the orchestration
+(pure store ops; the only network is the two GitHub functions):
+
+1. Get the CI verdict. If not `failing`, do nothing — no store writes, no issue.
+2. **Dedup.** Each CI issue body embeds `<!-- hive-ci sha=<sha> -->`. If an open
+   issue already carries the marker for this commit, reuse it (`already_filed`)
+   instead of filing again — a repeated check of the same red commit never opens
+   a duplicate. A *new* red commit (new sha) files a fresh issue.
+3. **File** the issue (label `hive-ci`) when there is no match.
+4. `reconcile` the workstream against the repo's open issues (so the CI issue
+   becomes a `queued` issue work item) and `advance_issues` to queue the resolve
+   task — the same one-issue-at-a-time pipeline that fixes human-filed issues.
+
+From there it is ordinary issue solving: resolve on `hive/issue-<n>`, independent
+review, then merge into the default branch + close. The merge re-triggers CI; a
+later check confirms green (or files the next failure for a new commit).
+
+## Tests
+
+`tests/test_ci.py`: status parsing across check-run/commit-status shapes; a red
+build files an issue and queues a resolve on its branch (the pipeline-reuse
+property); the same red commit is not refiled; a green build touches nothing;
+the supervisor gate respects the toggle and interval; the toggle persists via the
+API.
