@@ -11,7 +11,6 @@ import hashlib
 import hmac
 import json
 import re
-import socket
 import time
 from dataclasses import dataclass
 
@@ -108,22 +107,6 @@ def ensure_machine(
         machine.device_kind = device_kind or machine.device_kind
         machine.last_seen = now
     return store.put(machine)
-
-
-def ensure_chief_machine(store, config: Config) -> Machine:
-    name = config.machine_name or socket.gethostname()
-    return ensure_machine(
-        store,
-        config.workspace_id,
-        name=name,
-        machine_id=config.machine_id,
-        hostname=socket.gethostname(),
-        kind="chief",
-        machine_type=config.machine_type,
-        machine_os=config.machine_os,
-        machine_arch=config.machine_arch,
-        device_kind=config.machine_kind,
-    )
 
 
 class AuthManager:

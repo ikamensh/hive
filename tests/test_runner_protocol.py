@@ -13,6 +13,7 @@ from hive.models import (
     Project,
     Resource,
     ResourceUsability,
+    Runner,
     Task,
     TaskKind,
     TaskStatus,
@@ -222,6 +223,32 @@ def test_register_records_machine_metadata():
     resource_machine = next(m for m in payload["machines"] if m["id"] == "machine-raven")
     assert resource_machine["machine_type"] == "macbook"
     assert resource_machine["device_kind"] == "laptop"
+
+
+def test_forget_machine_cascades_to_runner_and_resources():
+    store = MemoryStore()
+    client = make_client(store)
+    client.post(
+        "/api/runners/register",
+        json={
+            "name": "raven",
+            "backends": ["codex", "claude"],
+            "machine_id": "machine-raven",
+            "machine_name": "raven",
+        },
+        headers=H,
+    )
+    assert store.get(Machine, "machine-raven") is not None
+    assert store.list(Resource, workspace_id="default")
+
+    deleted = client.request("DELETE", "/api/machines/machine-raven")
+    assert deleted.status_code == 200
+
+    assert store.get(Machine, "machine-raven") is None
+    assert store.list(Runner, workspace_id="default") == []
+    assert store.list(Resource, workspace_id="default") == []
+    assert client.get("/api/resources").json()["machines"] == []
+    assert client.request("DELETE", "/api/machines/machine-raven").status_code == 404
 
 
 def test_codex_probe_explains_deprecated_wrapper(tmp_path):

@@ -530,6 +530,12 @@ textarea:focus {
 .page-head .project-actions {
   margin-left: auto;
 }
+.page-head .project-settings-link {
+  margin-left: auto;
+}
+.page-head .project-settings-link + .project-actions {
+  margin-left: 0;
+}
 .head-repo {
   font-family: var(--mono);
   font-size: 12px;
@@ -539,6 +545,32 @@ textarea:focus {
 }
 .page-head .project-actions button {
   margin-left: 0;
+}
+.project-settings-link,
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 6px 12px;
+  font-family: var(--display);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+}
+.project-settings-link:hover,
+.back-link:hover {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+.back-link {
+  margin-bottom: 8px;
+  width: fit-content;
+  border-color: transparent;
+  padding-left: 0;
 }
 
 /* ---- project actions ------------------------------------------------------- */
@@ -1155,6 +1187,65 @@ textarea:focus {
   background: var(--red);
   color: #fff;
 }
+.page-project-settings .page-head {
+  align-items: flex-end;
+}
+.project-settings-panel {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.1fr) minmax(320px, 0.9fr);
+  gap: 18px;
+  align-items: start;
+}
+.settings-section {
+  padding: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+}
+.settings-section .col-title {
+  margin-bottom: 12px;
+}
+.settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.project-policy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.project-policy-grid .toggle-cell {
+  min-height: 66px;
+  align-items: flex-start;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--bg-raise);
+}
+.project-policy-grid .toggle-cell.grow {
+  grid-column: 1 / -1;
+}
+.project-settings-panel .workstream-settings {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+.project-settings-panel .settings-danger {
+  grid-column: 1 / -1;
+  margin-top: 0;
+}
+@media (max-width: 900px) {
+  .project-settings-panel,
+  .project-policy-grid {
+    grid-template-columns: 1fr;
+  }
+  .project-policy-grid .toggle-cell.grow,
+  .project-settings-panel .settings-danger {
+    grid-column: auto;
+  }
+}
 
 /* ---- repo picker --------------------------------------------------------------- */
 
@@ -1367,6 +1458,25 @@ textarea:focus {
   flex-direction: column;
   gap: 22px;
 }
+.launch-console {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+}
+.launch-console-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.launch-console-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
 .launch-row {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(220px, 1fr);
@@ -1388,7 +1498,7 @@ textarea:focus {
   flex-direction: column;
   gap: 12px;
   padding: 18px;
-  border-radius: 16px;
+  border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
   background:
     radial-gradient(120% 140% at 0% 0%, var(--accent-soft) 0%, transparent 55%),
@@ -1429,6 +1539,10 @@ textarea:focus {
   font-size: 11px;
   letter-spacing: 0.04em;
 }
+.launch-status {
+  margin: 0;
+  font-size: 12px;
+}
 
 .job-tiles {
   display: grid;
@@ -1442,7 +1556,7 @@ textarea:focus {
   align-items: flex-start;
   gap: 4px;
   padding: 14px;
-  border-radius: 14px;
+  border-radius: 8px;
   border: 1px solid var(--line);
   background: var(--bg-raise);
   cursor: pointer;
@@ -1478,7 +1592,7 @@ textarea:focus {
 }
 .directive-card {
   padding: 14px 16px;
-  border-radius: 12px;
+  border-radius: 8px;
   border: 1px solid var(--line);
   background: var(--bg-raise);
 }
@@ -2616,11 +2730,24 @@ textarea:focus {
 .runner-card.offline {
   opacity: 0.65;
 }
+.machine-status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .runner-seen {
   margin-left: auto;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--ink-faint);
+}
+.machine-status .runner-seen {
+  margin-left: 0;
+}
+.machine-forget {
+  font-size: 11px;
+  padding: 2px 8px;
 }
 .backend-chips {
   display: flex;

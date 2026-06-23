@@ -26,7 +26,6 @@ from hive.integrations.auth import (
     SESSION_TTL_S,
     AuthContext,
     AuthManager,
-    ensure_chief_machine,
     ensure_machine,
 )
 from hive.runner.backends import probe_instructions
@@ -290,7 +289,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     app = FastAPI(title="hive")
     auth = AuthManager(store, config)
     auth.validate_config()
-    chief_machine = ensure_chief_machine(store, config)
 
     def current(request: Request) -> AuthContext:
         return auth.require(request)
@@ -718,7 +716,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @contextlib.asynccontextmanager
     async def lifespan(_app):
-        ensure_chief_machine(store, config)
         supervisor.acquire_leadership()  # raises if another chief is live
         if config.autostart_runner and local_runner is not None:
             status = local_runner.start()
@@ -743,7 +740,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     app.state.supervisor = supervisor
     app.state.store = store
     app.state.auth = auth
-    app.state.machine = chief_machine
 
     def active_probe_task(resource: Resource) -> Task | None:
         if not resource.last_probe_task_id:
@@ -1674,6 +1670,29 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             "local_runner": local_runner_payload(ctx.workspace_id),
         }
 
+    @app.delete("/api/machines/{machine_id}")
+    def forget_machine(machine_id: str, ctx: AuthContext = Depends(current)):
+        """Remove a machine the user no longer recognizes, with its runners,
+        resources, and checkouts. A live runner re-registers and reappears; this
+        is for pruning hosts that are gone for good (old chiefs, retired laptops)."""
+        machine = store.get(Machine, machine_id)
+        if not machine or machine.workspace_id != ctx.workspace_id:
+            raise HTTPException(404)
+        runner_ids = {
+            r.id
+            for r in store.list(Runner, workspace_id=ctx.workspace_id)
+            if r.machine_id == machine_id
+        }
+        for resource in store.list(Resource, workspace_id=ctx.workspace_id):
+            if resource.machine_id == machine_id or resource.runner_id in runner_ids:
+                store.delete(Resource, resource.id)
+        for runner_id in runner_ids:
+            store.delete(Runner, runner_id)
+        for checkout in store.list(Checkout, workspace_id=ctx.workspace_id, machine_id=machine_id):
+            store.delete(Checkout, checkout.id)
+        store.delete(Machine, machine_id)
+        return {"ok": True, "forgotten": machine_id}
+
     @app.patch("/api/local-runner")
     def update_local_runner(body: LocalRunnerPatch, ctx: AuthContext = Depends(current)):
         if local_runner is None:
@@ -2036,13 +2055,12 @@ def production_app() -> FastAPI:
     blobs = make_blob_store(config)
     from hive.control.orchestrator import Orchestrator
 
-    machine = ensure_chief_machine(store, config)
     orchestrator = Orchestrator(store, blobs, config)
     supervisor = Supervisor(
         store,
         orchestrator.invoke,
         workspace_id=config.workspace_id,
-        machine_name=machine.name,
+        machine_name=config.machine_name,
     )
     from hive.runner.local import LocalRunnerManager
 

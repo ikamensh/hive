@@ -180,6 +180,9 @@ const realApi = {
     http(`/api/resources/${id}/probe`, { method: "POST" }),
   updateResource: (id: string, patch: { enabled?: boolean; disabled_reason?: string }) =>
     http(`/api/resources/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  forgetMachine: async (id: string) => {
+    await http(`/api/machines/${id}`, { method: "DELETE" });
+  },
   subscriptions: () => http<Subscription[]>("/api/subscriptions"),
   addSubscription: (provider: string, plan: string, licensing_mode: LicensingMode, notes: string) =>
     http<Subscription>("/api/subscriptions", {

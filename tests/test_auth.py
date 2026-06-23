@@ -46,7 +46,7 @@ def make_client(store: MemoryStore, **overrides):
     return TestClient(create_app(store, supervisor, config)), config
 
 
-def test_dev_auth_bootstraps_user_workspace_and_machine():
+def test_dev_auth_bootstraps_user_and_workspace():
     store = MemoryStore()
     client, config = make_client(store)
 
@@ -56,8 +56,17 @@ def test_dev_auth_bootstraps_user_workspace_and_machine():
     assert me["user"]["github_login"] == "ikamensh"
     assert me["workspace"]["id"] == config.workspace_id
     assert "hive_session" in response.headers["set-cookie"]
-    machines = store.list(Machine, workspace_id=config.workspace_id)
-    assert [m.name for m in machines] == ["chief-test"]
+
+
+def test_chief_does_not_register_itself_as_a_machine():
+    # Machines are runner hosts the user recognizes. A chief is a process, not a
+    # durable machine — persisting one left a permanent offline card per chief
+    # host (every ephemeral container hostname). The machines view is empty until
+    # a runner registers.
+    store = MemoryStore()
+    _client, config = make_client(store)
+
+    assert store.list(Machine, workspace_id=config.workspace_id) == []
 
 
 def test_dev_auth_disables_github_oauth_routes():

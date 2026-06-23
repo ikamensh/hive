@@ -295,6 +295,16 @@ export default function Resources() {
     }
   };
 
+  const forgetMachine = async (id: string) => {
+    setRunnerError("");
+    try {
+      await api.forgetMachine(id);
+      await refresh();
+    } catch {
+      setRunnerError("could not forget this machine");
+    }
+  };
+
   const startLocalRunner = async () => {
     setStartingRunner(true);
     setRunnerError("");
@@ -378,6 +388,7 @@ export default function Resources() {
                 runnerOnline={runnerOnline}
                 onProbe={probe}
                 onSetEnabled={setResourceEnabled}
+                onForget={forgetMachine}
               />
             ))}
           </div>
@@ -396,6 +407,7 @@ function MachineCard({
   runnerOnline,
   onProbe,
   onSetEnabled,
+  onForget,
 }: {
   card: MachineGroup;
   probing: string | null;
@@ -403,6 +415,7 @@ function MachineCard({
   runnerOnline: (id: string) => boolean;
   onProbe: (id: string) => void;
   onSetEnabled: (res: ResourceInfo, enabled: boolean) => void;
+  onForget: (id: string) => void;
 }) {
   const { online, last_seen: lastSeen } = card;
   const runnerById = new Map(card.runners.map((runner) => [runner.id, runner.name]));
@@ -419,9 +432,24 @@ function MachineCard({
             )}
           </div>
         </div>
-        <span className="runner-seen">
-          {online ? "online" : lastSeen > 0 ? `last seen ${ago(lastSeen)}` : "offline"}
-        </span>
+        <div className="machine-status">
+          <span className="runner-seen">
+            {online ? "online" : lastSeen > 0 ? `last seen ${ago(lastSeen)}` : "offline"}
+          </span>
+          {!online && (
+            <button
+              className="ghost quiet machine-forget"
+              title="Forget this machine and its agents. A live runner re-registers automatically."
+              onClick={() => {
+                if (confirm(`Forget ${card.machine.name}? Its agents and history are removed. A running runner will re-register.`)) {
+                  onForget(card.machine.id);
+                }
+              }}
+            >
+              forget
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="machine-meta">

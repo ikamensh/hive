@@ -1558,6 +1558,17 @@ export const api = {
     return structuredClone(res);
   },
 
+  forgetMachine: async (id: string): Promise<void> => {
+    const runnerIds = new Set(
+      resourcesPayload.runners.filter((r) => r.machine_id === id).map((r) => r.id),
+    );
+    resourcesPayload.machines = (resourcesPayload.machines ?? []).filter((m) => m.id !== id);
+    resourcesPayload.runners = resourcesPayload.runners.filter((r) => r.machine_id !== id);
+    resourcesPayload.resources = resourcesPayload.resources.filter(
+      (r) => r.machine_id !== id && !runnerIds.has(r.runner_id),
+    );
+  },
+
   subscriptions: async (): Promise<Subscription[]> => structuredClone(subscriptions),
 
   addSubscription: async (
