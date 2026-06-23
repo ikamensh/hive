@@ -1060,7 +1060,14 @@ def test_intake_approval_requires_ready_brief(harness):
     assert blocked.status_code == 409
     proceed = client.post(f"/api/conversations/{conversation['id']}/message", json={"action": "proceed"})
     assert proceed.status_code == 200
-    assert proceed.json()["task"]["conversation_turn"] == "proceed"
+    proceed_task = proceed.json()["task"]
+    # Regression: "proceed with assumptions" must produce the next approval
+    # brief, not a file-finalization report that keeps approval disabled.
+    assert proceed_task["conversation_turn"] == "proceed"
+    assert "Return a compact approval-ready brief" in proceed_task["instructions"]
+    assert "Do not edit files" in proceed_task["instructions"]
+    assert "Mission:" in proceed_task["instructions"]
+    assert "Questions:" in proceed_task["instructions"]
 
 
 CLAUDE_SUBSCRIPTION_DISABLED = (

@@ -596,9 +596,18 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 + "\n"
                 "The user chose to proceed with current information and accepts the risk of "
                 "wrong assumptions.\n\n"
-                "Finalize the brief using current repo/spec context. Do not ask more questions "
-                "unless work would be impossible rather than merely risky. Clearly list the "
-                "assumptions you are making. Do not commit or push yet."
+                "Return a compact approval-ready brief using the current repo/spec context. "
+                "Do not edit files, commit, push, or report on file changes. Do not ask more "
+                "questions unless work would be impossible rather than merely risky. Clearly "
+                "list the assumptions you are making.\n\n"
+                "Use exactly these sections:\n"
+                "Mission:\n"
+                "Next iteration:\n"
+                "Likely next steps:\n"
+                "Assumptions:\n"
+                "Questions:\n"
+                "Evidence:\n\n"
+                "If there are no material questions, write `Questions:\\nNone`."
             )
         if turn == "finalize":
             return (
