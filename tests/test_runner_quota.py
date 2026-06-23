@@ -25,6 +25,12 @@ CLAUDE_SUBSCRIPTION_DISABLED = (
     "Use an Anthropic API key instead, or ask your admin to enable access"
 )
 
+# Captured live from a codex run on the hive-vm runner when the account lapsed.
+# It tripped neither pattern, so the resource stayed "usable" and every issue
+# task re-dispatched onto the dead credential and failed — a human-fix block, not
+# a self-healing quota window.
+CODEX_BILLING_BLOCK = "codex: Subscription/billing issue — check your account status."
+
 
 def _resource_exhausted(text: str, *, is_error: bool = True) -> bool:
     """Mirror the flag the runner sets on task results."""
@@ -64,6 +70,20 @@ def test_claude_subscription_block_classifies_as_auth():
 def test_codex_quota_classifies_as_exhausted_not_auth():
     assert classify_failure(CODEX_QUOTA_ERROR, is_error=True) == "exhausted"
     assert classify_failure(CODEX_RATE_LIMIT_JSON, is_error=True) == "exhausted"
+
+
+def test_billing_block_classifies_as_auth_not_exhausted():
+    # A lapsed account needs a human to fix billing; it must not be cooled down
+    # and retried like a quota window, or work loops forever on a dead credential.
+    assert classify_failure(CODEX_BILLING_BLOCK, is_error=True) == "auth"
+    assert classify_failure("Payment required: your card was declined.", is_error=True) == "auth"
+    assert classify_failure("Account suspended — past due balance.", is_error=True) == "auth"
+
+
+def test_billing_block_is_not_a_temporary_quota():
+    # Guards the original gap: it must not silently fall through to "" (no-op).
+    assert _resource_exhausted(CODEX_BILLING_BLOCK) is False
+    assert classify_failure(CODEX_BILLING_BLOCK, is_error=True) != ""
 
 
 def test_auth_wins_when_message_trips_both():

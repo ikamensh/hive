@@ -286,6 +286,12 @@ class TaskResultProcessor:
             self._handle_intake_result(task, body)
             return {"ok": True}
 
+        # A credential block on real work (not just a probe) proves the backend is
+        # dead for everything on this resource. `_account_resources` already marked
+        # it failed so dispatch stops; tell the operator how to fix it too.
+        if body.auth_blocked:
+            self._escalate_backend_login(task, body.text, workspace_id)
+
         if task.kind == TaskKind.resolve and not body.cancelled:
             self._land_resolve(task, body)
         elif task.kind == TaskKind.review and not body.cancelled:
@@ -421,20 +427,27 @@ class TaskResultProcessor:
             and not body.resource_exhausted
             and HUMAN_FIX_PATTERNS.search(body.text)
         ):
-            runner = self.store.get(Runner, task.runner_id)
-            runner_name = runner.name if runner else task.runner_id
-            hint = REGISTRY.get(task.backend).login_hint if task.backend in REGISTRY else ""
-            escalate(
-                self.store,
-                f"Fix {task.backend} login on {runner_name}",
-                instructions=(
-                    f"Refresh or repair the `{task.backend}` CLI login on runner "
-                    f"`{runner_name}`, then rerun the resource probe."
-                    f"{chr(10) + chr(10) + hint if hint else ''}\n\n"
-                    f"Recent probe output:\n\n```\n{body.text[:1500]}\n```"
-                ),
-                workspace_id=workspace_id,
-            )
+            self._escalate_backend_login(task, body.text, workspace_id)
+
+    def _escalate_backend_login(self, task: Task, text: str, workspace_id: str) -> None:
+        """File (idempotently) the operator todo to repair a backend's broken
+        login/billing on the machine that hit the block, so a dead credential
+        surfaces in the inbox instead of silently failing every task it touches.
+        Filed from both the probe path and any real task that hits an auth block."""
+        runner = self.store.get(Runner, task.runner_id)
+        runner_name = runner.name if runner else task.runner_id
+        hint = REGISTRY.get(task.backend).login_hint if task.backend in REGISTRY else ""
+        escalate(
+            self.store,
+            f"Fix {task.backend} login on {runner_name}",
+            instructions=(
+                f"Refresh or repair the `{task.backend}` CLI login on runner "
+                f"`{runner_name}`, then rerun the resource probe."
+                f"{chr(10) + chr(10) + hint if hint else ''}\n\n"
+                f"Recent output:\n\n```\n{text[:1500]}\n```"
+            ),
+            workspace_id=workspace_id,
+        )
 
     def _handle_intake_result(self, task: Task, body: TaskResult) -> None:
         def update_conversation(conversation: AgentConversation) -> None:

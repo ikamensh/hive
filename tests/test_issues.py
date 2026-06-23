@@ -307,6 +307,42 @@ def _pass_preflight(monkeypatch):
     monkeypatch.setattr("hive.api.preflight_checks", lambda store, config, project: [])
 
 
+def test_resolve_auth_block_stops_dispatch_and_files_todo(app, monkeypatch):
+    """A billing/login block on a real resolve task (not just a probe) must mark
+    the backend unusable so dispatch stops, and file an operator todo — instead
+    of silently re-dispatching every issue onto a dead credential forever.
+
+    The runner classifies the failure (unit-tested in test_runner_quota); this
+    asserts the chief acts on the auth_blocked flag for non-probe work."""
+    client, store = app
+    pid = _issues_project_via_api(client)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    _pass_preflight(monkeypatch)
+    monkeypatch.setattr("hive.api.fetch_open_issues_full", lambda repo, token: [issue(1, "bug")])
+
+    client.post(f"/api/projects/{pid}/scan-issues")
+    _pump(client, store)
+    resolve = _poll(client, rid)
+    assert resolve["kind"] == "resolve"
+
+    client.post(
+        f"/api/tasks/{resolve['id']}/result",
+        json={
+            "text": "codex: Subscription/billing issue — check your account status.",
+            "is_error": True,
+            "auth_blocked": True,
+        },
+        headers=RUNNER_HEADERS,
+    )
+
+    codex = next(r for r in client.get("/api/resources").json()["resources"]
+                 if r["backend"] == "codex")
+    assert codex["usability_status"] == "failed"
+
+    open_todos = [t for t in store.list(HumanTask) if t.status == HumanTaskStatus.open]
+    assert any("Fix codex login on codex-runner" in t.title for t in open_todos)
+
+
 def test_scan_resolve_review_accept_lands(app, monkeypatch):
     client, store = app
     pid = _issues_project_via_api(client)

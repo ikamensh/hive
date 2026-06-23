@@ -34,14 +34,18 @@ EXHAUSTION_PATTERNS = re.compile(
     r"rate.?limit|quota|usage.?limit|plan.?limit|too many requests|429\b|credits?",
     re.IGNORECASE,
 )
-# A login/policy block: the credential is rejected or the account is not allowed
-# to run this agent (e.g. "organization has disabled Claude subscription access",
-# "use an Anthropic API key", expired login, forbidden). Unlike exhaustion this
-# does not heal on its own — a human must fix the login/policy — so Hive marks the
-# resource failed and files an operator todo instead of a silent cooldown.
+# A login/policy/billing block: the credential is rejected or the account cannot
+# run this agent (e.g. "organization has disabled Claude subscription access",
+# "use an Anthropic API key", expired login, forbidden, or a "billing issue —
+# check your account status" from a lapsed subscription). Unlike exhaustion this
+# does not heal on its own — a human must fix the login/billing — so Hive marks
+# the resource failed and files an operator todo instead of a silent cooldown
+# that would re-dispatch onto the dead credential forever. A bare "quota"/"rate
+# limit"/"credits" window stays exhaustion (below); a billing/account block is here.
 AUTH_BLOCK_PATTERNS = re.compile(
     r"subscription access|use an? .*api key|ask your admin|not authenticated|"
-    r"unauthori[sz]ed|forbidden|invalid api key|expired|log ?in|credential",
+    r"unauthori[sz]ed|forbidden|invalid api key|expired|log ?in|credential|"
+    r"billing|payment|past due|suspended|account status|check your account",
     re.IGNORECASE,
 )
 
