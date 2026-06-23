@@ -730,7 +730,11 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         )
 
         def mark(conv: AgentConversation) -> None:
-            conv.status = ConversationStatus.finalizing if turn == "finalize" else ConversationStatus.running
+            conv.status = (
+                ConversationStatus.finalizing
+                if turn in ("finalize", "write_mission")
+                else ConversationStatus.running
+            )
             conv.last_task_id = task.id
             conv.updated_at = time.time()
             if user_text.strip():

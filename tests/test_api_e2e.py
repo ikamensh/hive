@@ -1017,32 +1017,87 @@ def test_manual_spec_files_finalize_intake_and_handoff_to_orchestrator(harness, 
     assert any("Intake accepted from durable spec files" in event for batch in orch.invocations for event in batch)
 
 
-def test_write_mission_queues_scout_to_write_dedicated_files(harness):
-    client, store, _orch = harness
+def test_web_intake_contract_holds_until_durable_spec_finalize(harness, tmp_path):
+    """Regression proof for the web intake MVP contract: configuring a project
+    is quiet, scout turns stay in intake, write-mission is the durable-spec
+    push turn, and only verified files wake normal planning."""
+    client, store, orch = harness
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    (spec_dir / "mission.md").write_text("# Mission\nBuild Hive.\n")
     project = client.post("/api/projects", json={"name": "intake-demo"}).json()
     pid = project["id"]
-    _configure_project(client, pid, "https://example.com/spec.git")
+    _configure_project(client, pid, str(spec_dir))
+    _pump(client, store)
+    assert orch.invocations == []
+    assert store.list(Task, project_id=pid) == []
+
     rid = _register_usable_runner(client, backend="codex")
 
     conversation = client.post(f"/api/projects/{pid}/intake/start").json()
+    assert conversation["backend"] == "codex"
+    assert conversation["model"] == "gpt-5.5"
+    assert store.get(Project, pid).state == "intake"
+    assert [
+        task.kind for task in store.list(Task, project_id=pid)
+    ] == [TaskKind.intake]
+
     _pump(client, store)
     first = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert first["kind"] == "intake"
+    assert first["conversation_turn"] == "initial"
     client.post(
         f"/api/tasks/{first['id']}/result",
         json={"text": "We should make intake file-based.", "session_handle": "session-1"},
         headers=RUNNER_HEADERS,
     )
+    answer = client.post(
+        f"/api/conversations/{conversation['id']}/message",
+        json={"action": "message", "message": "Keep wiki/intake.md as provenance."},
+    ).json()
+    assert answer["task"]["conversation_turn"] == "message"
+    _pump(client, store)
+    message_task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    client.post(
+        f"/api/tasks/{message_task['id']}/result",
+        json={"text": "Updated brief. I will keep wiki/intake.md as provenance."},
+        headers=RUNNER_HEADERS,
+    )
+    transcript = store.get(AgentConversation, conversation["id"]).transcript
+    assert [turn["role"] for turn in transcript] == ["assistant", "user", "assistant"]
+    assert "Keep wiki/intake.md" in transcript[1]["text"]
+    assert store.get(Project, pid).state == "intake"
+    assert orch.invocations == []
 
     queued = client.post(f"/api/projects/{pid}/intake/write-mission").json()["task"]
     assert queued["conversation_turn"] == "write_mission"
     assert queued["session_handle"] == "session-1"
+    assert store.get(AgentConversation, conversation["id"]).status == "finalizing"
     _pump(client, store)
     write_task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
     assert write_task["id"] == queued["id"]
     assert "mission.md" in write_task["instructions"]
     assert "iteration.md" in write_task["instructions"]
     assert "Commit and push" in write_task["instructions"]
-    assert store.get(AgentConversation, conversation["id"]).status == "running"
+    (spec_dir / "iteration.md").write_text("# Iteration\nMake intake file-based.\n")
+    (spec_dir / "wiki").mkdir()
+    (spec_dir / "wiki" / "intake.md").write_text("# Intake\nConversation captured.\n")
+    client.post(
+        f"/api/tasks/{write_task['id']}/result",
+        json={"text": "Committed and pushed mission.md, iteration.md, and wiki/intake.md."},
+        headers=RUNNER_HEADERS,
+    )
+    assert store.get(AgentConversation, conversation["id"]).status == "open"
+    assert store.get(Project, pid).state == "intake"
+    _pump(client, store)
+    assert orch.invocations == []
+
+    accepted = client.post(f"/api/projects/{pid}/intake/finalize").json()
+    assert accepted["spec_status"]["ready"] is True
+    assert accepted["conversation"]["status"] == "done"
+    assert store.get(Project, pid).state == "idle"
+    _pump(client, store)
+    assert any("Intake accepted from durable spec files" in event for batch in orch.invocations for event in batch)
 
 
 def test_intake_finalize_requires_spec_files_not_ready_brief(harness, tmp_path):
