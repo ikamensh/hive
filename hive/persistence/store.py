@@ -168,7 +168,9 @@ class MemoryStore(StoreBase):
     def __init__(self) -> None:
         self._data: dict[str, dict[str, dict]] = {name: {} for name in _COLLECTIONS.values()}
         self.org_context: str = ""
+        self._org_contexts: dict[str, str] = {}
         self._lease: dict | None = None
+        self._leases: dict[str, dict] = {}
         self._lock = threading.RLock()
 
     def put(self, obj: M) -> M:
@@ -211,15 +213,13 @@ class MemoryStore(StoreBase):
         with self._lock:
             if workspace_id == DEFAULT_WORKSPACE_ID:
                 return self.org_context
-            return getattr(self, "_org_contexts", {}).get(workspace_id, "")
+            return self._org_contexts.get(workspace_id, "")
 
     def set_org_context(self, text: str, workspace_id: str = DEFAULT_WORKSPACE_ID) -> None:
         with self._lock:
             if workspace_id == DEFAULT_WORKSPACE_ID:
                 self.org_context = text
             else:
-                if not hasattr(self, "_org_contexts"):
-                    self._org_contexts = {}
                 self._org_contexts[workspace_id] = text
 
     def claim_leader(
@@ -230,12 +230,7 @@ class MemoryStore(StoreBase):
         the competing holder's name. A lease is free once its TTL lapses, so
         a crashed control plane is superseded within ttl_s."""
         with self._lock:
-            if workspace_id == DEFAULT_WORKSPACE_ID:
-                lease = self._lease
-            else:
-                if not hasattr(self, "_leases"):
-                    self._leases = {}
-                lease = self._leases.get(workspace_id)
+            lease = self._lease if workspace_id == DEFAULT_WORKSPACE_ID else self._leases.get(workspace_id)
             if lease and lease["holder"] != holder and lease["expires"] > time.time():
                 return lease["holder"]
             lease = {"holder": holder, "expires": time.time() + ttl_s}
@@ -253,12 +248,10 @@ class MemoryStore(StoreBase):
                     return False
                 self._lease = None
                 return True
-            if not hasattr(self, "_leases"):
-                self._leases = {}
             lease = self._leases.get(workspace_id)
             if not lease or lease["holder"] != holder:
                 return False
-            self._leases.pop(workspace_id, None)
+            self._leases.pop(workspace_id)
             return True
 
 
@@ -293,8 +286,6 @@ class FileStore(MemoryStore):
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
         super().__init__()
-        self._org_contexts: dict[str, str] = {}
-        self._leases: dict[str, dict] = {}
         self._load()
 
     def _collection_dir(self, collection: str) -> Path:
@@ -392,8 +383,6 @@ class FileStore(MemoryStore):
             if workspace_id == DEFAULT_WORKSPACE_ID:
                 self.org_context = text
             else:
-                if not hasattr(self, "_org_contexts"):
-                    self._org_contexts = {}
                 self._org_contexts[workspace_id] = text
             self._persist_org_context(workspace_id, text)
 
@@ -401,12 +390,7 @@ class FileStore(MemoryStore):
         self, holder: str, ttl_s: float, workspace_id: str = DEFAULT_WORKSPACE_ID
     ) -> str:
         with self._lock:
-            if workspace_id == DEFAULT_WORKSPACE_ID:
-                lease = self._lease
-            else:
-                if not hasattr(self, "_leases"):
-                    self._leases = {}
-                lease = self._leases.get(workspace_id)
+            lease = self._lease if workspace_id == DEFAULT_WORKSPACE_ID else self._leases.get(workspace_id)
             if lease and lease["holder"] != holder and lease["expires"] > time.time():
                 return lease["holder"]
             lease = {"holder": holder, "expires": time.time() + ttl_s}
@@ -425,12 +409,10 @@ class FileStore(MemoryStore):
                     return False
                 self._lease = None
             else:
-                if not hasattr(self, "_leases"):
-                    self._leases = {}
                 lease = self._leases.get(workspace_id)
                 if not lease or lease["holder"] != holder:
                     return False
-                self._leases.pop(workspace_id, None)
+                self._leases.pop(workspace_id)
             self._delete_lease(workspace_id)
             return True
 

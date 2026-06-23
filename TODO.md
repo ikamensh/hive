@@ -46,6 +46,30 @@ capacity"; worth an ADR when built (the genuine trade-off vs counting owned
 capacity as always-available). See CONTEXT.md (Subscription / Licensing Mode)
 and wiki/architecture.md (provider rulebook, user resource policy).
 
+## Remote control — convenience gaps
+The laptop-off workflow (README "Keep Hive working while your laptop is off") works
+today, but the story has friction worth smoothing:
+- **Per-user CLI auth.** The remote sits behind one shared Caddy basic-auth password
+  (the app itself runs `dev` mode behind it); driving it means copying the
+  `hive-web-password` secret into `HIVE_BASIC_AUTH`. Build `hive login` + a minted,
+  revocable per-user token: the server signs a `typ:"cli"` token via the existing
+  `AuthManager` HMAC machinery, surfaced in the UI / via `hive login`, stored as
+  `HIVE_TOKEN` (the CLI already sends it as a bearer). Then `github` auth mode is
+  reachable from the CLI without the browser, and the shared password can retire.
+- **Backend continuity is on the operator.** Work routed to a backend only the
+  (off) laptop has parks as `blocked: resources`. Same root gap as the "Subscription
+  recovery flow" item above — wire subscriptions as a recovery source so the always-on
+  side can self-serve a portable credential or file a login todo, and/or surface
+  "this project's work needs a backend no always-on runner offers" in preflight/UI.
+- **One client target, no named contexts.** `HIVE_URL` is a single stored value;
+  switching local↔remote is manual. A `hive target` with named contexts (kubectl-style)
+  would make running both pleasant. Lower priority for single-user MVP.
+- **No scheduled issue scan.** New GitHub issues are only ingested on a human-triggered
+  `hive scan`. A periodic scan (control-plane cron) would make issue solving truly
+  unattended; until then it relies on a remote trigger from any machine.
+- **`scripts/laptop_runner.sh` is hardcoded** to the sslip.io URL and a specific gcloud
+  account — fine for the maintainer, but generalize (env/args) before it's onboarding.
+
 ## Issue solving — selectable run scope
 The 2026-06-14 live validation target was issues #2-#4, but scanning the repo
 also ingested newly-open issue #5 and the deterministic queue started it after

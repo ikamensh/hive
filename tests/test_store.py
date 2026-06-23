@@ -160,6 +160,49 @@ def test_file_store_concurrent_puts_same_doc(tmp_path):
     assert store.get(User, "github:test") is not None
 
 
+def test_org_context_multi_workspace():
+    store = MemoryStore()
+    store.set_org_context("default notes")
+    store.set_org_context("team notes", workspace_id="team-a")
+    store.set_org_context("other notes", workspace_id="team-b")
+
+    assert store.get_org_context() == "default notes"
+    assert store.get_org_context(workspace_id="team-a") == "team notes"
+    assert store.get_org_context(workspace_id="team-b") == "other notes"
+    assert store.get_org_context(workspace_id="unknown") == ""
+
+
+def test_release_leader():
+    store = MemoryStore()
+    assert store.claim_leader("a", 60) == "a"
+    assert store.release_leader("b") is False   # b doesn't hold the lease
+    assert store.release_leader("a") is True    # a releases successfully
+    assert store.release_leader("a") is False   # nothing left to release
+    assert store.claim_leader("b", 60) == "b"   # lease is now free
+
+
+def test_release_leader_per_workspace():
+    store = MemoryStore()
+    store.claim_leader("a", 60)
+    store.claim_leader("x", 60, workspace_id="ws-1")
+
+    assert store.release_leader("x", workspace_id="ws-1") is True
+    assert store.release_leader("x", workspace_id="ws-1") is False  # already released
+    assert store.claim_leader("y", 60, workspace_id="ws-1") == "y"  # free now
+    assert store.claim_leader("z", 60) == "a"   # default workspace unaffected
+
+
+def test_file_store_persists_workspace_org_context(tmp_path):
+    store1 = FileStore(tmp_path)
+    store1.set_org_context("default context")
+    store1.set_org_context("team context", workspace_id="team-x")
+
+    store2 = FileStore(tmp_path)
+    assert store2.get_org_context() == "default context"
+    assert store2.get_org_context(workspace_id="team-x") == "team context"
+    assert store2.get_org_context(workspace_id="unknown") == ""
+
+
 def test_copy_store_between_backends(tmp_path):
     source = FileStore(tmp_path)
     source.put(Project(name="migrate-me"))

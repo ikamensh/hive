@@ -115,6 +115,142 @@ def test_cli_drives_full_loop(harness):
     assert not cli(client, "show", pid)["project"]["goal_complete"]
 
 
+def test_resolve_target_precedence():
+    """The CLI's client target resolves env > stored > default, so a saved
+    remote is the default but a one-off `HIVE_URL=…` still overrides it."""
+    from hive.cli import DEFAULT_HIVE_URL, resolve_target
+
+    assert resolve_target({}, {}).base_url == DEFAULT_HIVE_URL
+
+    stored = {"HIVE_URL": "https://hive.example", "HIVE_BASIC_AUTH": "ilya:pw", "HIVE_TOKEN": "tok"}
+    saved = resolve_target({}, stored)
+    assert saved.base_url == "https://hive.example"
+    assert saved.auth == ("ilya", "pw")
+    assert saved.token == "tok"
+
+    overridden = resolve_target({"HIVE_URL": "http://localhost:9000"}, stored)
+    assert overridden.base_url == "http://localhost:9000"
+    assert overridden.auth == ("ilya", "pw")  # unrelated keys still come from stored
+
+
+def test_client_target_keys_never_reach_server_env(monkeypatch):
+    # Regression: persisting a client target (where the CLI *sends* commands)
+    # must not leak into a `hive run` server process's environment.
+    _fake_gh(monkeypatch, "")
+    env: dict[str, str] = {}
+    prepare_run_env(env, {
+        "HIVE_URL": "https://hive.example",
+        "HIVE_BASIC_AUTH": "ilya:pw",
+        "HIVE_TOKEN": "tok",
+        "HIVE_GCP_PROJECT": "proj",
+    })
+    assert not ({"HIVE_URL", "HIVE_BASIC_AUTH", "HIVE_TOKEN"} & env.keys())
+    assert env["HIVE_GCP_PROJECT"] == "proj"
+
+
+def test_cli_whoami(harness):
+    client, _store = harness
+    me = cli(client, "whoami")
+    assert me["auth_mode"] == "dev"
+    assert me["target"].startswith("http")
+    assert me["user"]["github_login"]
+    assert me["workspace"]["id"]
+
+
+class _Recorder:
+    """A minimal httpx-shaped client that records the call instead of sending it
+    — enough to assert a CLI command maps to the documented API request."""
+
+    base_url = "http://rec"
+
+    def __init__(self):
+        self.calls: list[tuple[str, str, dict | None]] = []
+
+    def _send(self, method: str, url: str, json=None):
+        self.calls.append((method, url, json))
+
+        class _Resp:
+            def raise_for_status(self):
+                return self
+
+            def json(self):
+                return {"task": {"id": "t1"}}
+
+        return _Resp()
+
+    def get(self, url, **kw):
+        return self._send("GET", url, kw.get("json"))
+
+    def post(self, url, **kw):
+        return self._send("POST", url, kw.get("json"))
+
+    def patch(self, url, **kw):
+        return self._send("PATCH", url, kw.get("json"))
+
+    def delete(self, url, **kw):
+        return self._send("DELETE", url, kw.get("json"))
+
+
+def test_cli_test_refresh_maps_to_endpoint():
+    rec = _Recorder()
+    result = cli(rec, "test-refresh", "p1", "ws1", "--backend", "codex", "--model", "gpt")
+    assert rec.calls == [
+        ("POST", "/api/projects/p1/workstreams/ws1/test-refresh",
+         {"backend": "codex", "model": "gpt"}),
+    ]
+    assert result["task"]["id"] == "t1"
+
+
+def test_main_targets_stored_remote(monkeypatch, capsys):
+    """`main` builds its client from the persisted target + bearer token, so a
+    saved remote is driven without re-exporting env vars every invocation."""
+    import httpx
+    from hive.cli import main
+
+    captured: dict = {}
+
+    class _Client:
+        def __init__(self, **kw):
+            captured.update(kw)
+            self.base_url = kw.get("base_url")
+
+        def get(self, *a, **k):
+            return httpx.Response(200, json=[], request=httpx.Request("GET", "http://x"))
+
+    monkeypatch.setattr("hive.cli.load_stored_config",
+                        lambda *a, **k: {"HIVE_URL": "https://hive.example", "HIVE_TOKEN": "tok"})
+    monkeypatch.setattr(httpx, "Client", lambda **kw: _Client(**kw))
+    for key in ("HIVE_URL", "HIVE_BASIC_AUTH", "HIVE_TOKEN"):
+        monkeypatch.delenv(key, raising=False)
+
+    main(["projects"])
+    assert captured["base_url"] == "https://hive.example"
+    assert captured["headers"] == {"Authorization": "Bearer tok"}
+
+
+def test_main_reports_auth_failure_cleanly(monkeypatch, capsys):
+    import httpx
+    from hive.cli import main
+
+    class _AuthFailClient:
+        def __init__(self, **kw):
+            self.base_url = kw.get("base_url")
+
+        def get(self, *a, **k):
+            return httpx.Response(401, text="nope", request=httpx.Request("GET", "http://x"))
+
+    monkeypatch.setattr("hive.cli.load_stored_config", lambda *a, **k: {})
+    monkeypatch.setattr(httpx, "Client", lambda **kw: _AuthFailClient(**kw))
+    for key in ("HIVE_URL", "HIVE_BASIC_AUTH", "HIVE_TOKEN"):
+        monkeypatch.delenv(key, raising=False)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["projects"])
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "Not authorized" in err and "HIVE_BASIC_AUTH" in err
+
+
 def test_cli_agents_and_probe(harness):
     client, _store = harness
     agents = cli(client, "agents")

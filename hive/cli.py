@@ -2,8 +2,14 @@
 
 Built for agents as much as humans: every command prints the API response as
 JSON, so `hive projects | jq ...` and scripted tests work the same way the
-web UI does. Talks to HIVE_URL (default http://localhost:8000); set
-HIVE_BASIC_AUTH="user:pass" when the endpoint sits behind Caddy.
+web UI does.
+
+Where it sends commands and how it authenticates is a *client target*:
+HIVE_URL (default http://localhost:8000), HIVE_BASIC_AUTH="user:pass" for a
+control plane behind basic auth (Caddy), and HIVE_TOKEN for app-level (github)
+auth. Each can be a one-off env var or persisted with `hive config set …`
+(env wins, so ad-hoc targeting overrides the saved default). `hive whoami`
+resolves the target and reports the authenticated identity.
 
 Run as `python -m hive.cli <command>` or the `hive` console script.
 """
@@ -18,6 +24,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 from hive.config.file import (
     CONFIG_KEYS,
@@ -28,9 +35,49 @@ from hive.config.file import (
 
 UVICORN_GRACEFUL_SHUTDOWN_S = 6
 
+# Keys that describe where the CLI *sends* commands and how it authenticates,
+# as opposed to the secrets a control plane *runs* with. They are persisted in
+# the same store but never injected into a `hive run` server process.
+CLIENT_KEYS = ("HIVE_URL", "HIVE_BASIC_AUTH", "HIVE_TOKEN")
+
+DEFAULT_HIVE_URL = "http://localhost:8000"
+
+
+class Target(NamedTuple):
+    """A resolved control-plane connection: where + how to authenticate."""
+
+    base_url: str
+    auth: tuple[str, str] | None  # basic auth (Caddy perimeter)
+    token: str  # bearer token (app-level github auth)
+
+
+def resolve_target(env: dict[str, str], stored: dict[str, str]) -> Target:
+    """Where the CLI talks to and how it authenticates.
+
+    Precedence is explicit env var > stored config > built-in default, so a
+    one-off ``HIVE_URL=… hive …`` overrides the saved default the way a
+    ``--context`` flag would. This is the inverse of `prepare_run_env`'s
+    server precedence on purpose: there stored config gives the *server* its
+    own keys; here env gives the *operator* ad-hoc targeting."""
+
+    def pick(key: str, default: str = "") -> str:
+        return env.get(key) or stored.get(key, default)
+
+    basic = pick("HIVE_BASIC_AUTH")
+    return Target(
+        base_url=pick("HIVE_URL", DEFAULT_HIVE_URL),
+        auth=tuple(basic.split(":", 1)) if basic else None,  # type: ignore[return-value]
+        token=pick("HIVE_TOKEN"),
+    )
+
 
 def _is_secret(key: str) -> bool:
-    return key.endswith("_TOKEN") or key.endswith("_API_KEY") or key.endswith("_SECRET")
+    return (
+        key.endswith("_TOKEN")
+        or key.endswith("_API_KEY")
+        or key.endswith("_SECRET")
+        or key == "HIVE_BASIC_AUTH"
+    )
 
 
 def _mask(key: str, value: str) -> str:
@@ -81,6 +128,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--workspace-id", default="")
     p.add_argument("--no-verify", action="store_true", help="skip readback verification")
 
+    sub.add_parser(
+        "whoami",
+        help="show the resolved control-plane target and current auth identity",
+    )
+
     p = sub.add_parser("projects", help="list projects")
 
     p = sub.add_parser("create", help="create a project (name only; configure in project view)")
@@ -128,6 +180,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("preflight", help="check issue-solving preconditions (token, perms, runner push/gh auth)")
     p.add_argument("project_id")
+
+    p = sub.add_parser("test-refresh", help="queue a testing-workstream refresh (start testing)")
+    p.add_argument("project_id")
+    p.add_argument("workstream_id")
+    p.add_argument("--backend", default="", help="agent backend (default: server config)")
+    p.add_argument("--model", default="", help="model (default: backend default)")
 
     p = sub.add_parser("iterate", help="start the next iteration with a note")
     p.add_argument("project_id")
@@ -201,8 +259,12 @@ def prepare_run_env(env: dict[str, str], stored: dict[str, str]) -> list[str]:
     then autodetection (`gh auth token`). Stored config intentionally *overrides*
     ambient env so a user can give hive separate keys — e.g. to bill/track its
     cost on a different account — while autodetected tokens are just the starting
-    point you seed that store from (`hive config import`)."""
-    stored = {k: v for k, v in stored.items() if v}
+    point you seed that store from (`hive config import`).
+
+    Client-target keys (`CLIENT_KEYS`) are skipped: they describe where the CLI
+    *sends* commands, not how this server *runs*, so they never leak into the
+    control-plane process."""
+    stored = {k: v for k, v in stored.items() if v and k not in CLIENT_KEYS}
     for key, value in stored.items():
         env[key] = value
 
@@ -448,7 +510,10 @@ def run(args: argparse.Namespace, client) -> dict | list:
     """Execute one command against an httpx-compatible client and return the
     response payload. Non-2xx responses raise (clear failure over silence)."""
     c = args.command
-    if c == "projects":
+    if c == "whoami":
+        me = client.get("/api/auth/me").raise_for_status().json()
+        return {"target": str(client.base_url), **me}
+    elif c == "projects":
         r = client.get("/api/projects")
     elif c == "create":
         r = client.post("/api/projects", json={"name": args.name})
@@ -507,6 +572,11 @@ def run(args: argparse.Namespace, client) -> dict | list:
                     break
                 time.sleep(2)
         return data
+    elif c == "test-refresh":
+        r = client.post(
+            f"/api/projects/{args.project_id}/workstreams/{args.workstream_id}/test-refresh",
+            json={"backend": args.backend, "model": args.model},
+        )
     elif c == "iterate":
         r = client.patch(f"/api/projects/{args.project_id}",
                          json={"new_iteration_note": args.note})
@@ -588,11 +658,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "migrate-local-state":
         _run_migrate_local_state(args)
         return
-    auth = os.environ.get("HIVE_BASIC_AUTH", "")
-    base_url = os.environ.get("HIVE_URL", "http://localhost:8000")
+    target = resolve_target(os.environ, load_stored_config())
     client = httpx.Client(
-        base_url=base_url,
-        auth=tuple(auth.split(":", 1)) if auth else None,
+        base_url=target.base_url,
+        auth=target.auth,
+        headers={"Authorization": f"Bearer {target.token}"} if target.token else {},
         timeout=30.0,
     )
     try:
@@ -601,8 +671,20 @@ def main(argv: list[str] | None = None) -> None:
             print(client.get(f"/api/tasks/{args.task_id}/trace").raise_for_status().text)
             return
         print(json.dumps(run(args, client), indent=2))
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code
+        if code in (401, 403):
+            print(
+                f"Not authorized at {target.base_url} (HTTP {code}). Set credentials with "
+                "`hive config set HIVE_BASIC_AUTH user:pass` (control plane behind basic auth) "
+                "or `hive config set HIVE_TOKEN …` (app-level auth).",
+                file=sys.stderr,
+            )
+        else:
+            print(f"Hive API error {code} at {target.base_url}: {exc.response.text}", file=sys.stderr)
+        raise SystemExit(1) from exc
     except httpx.RequestError as exc:
-        print(f"Hive API unreachable at {base_url}: {exc}", file=sys.stderr)
+        print(f"Hive API unreachable at {target.base_url}: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
 

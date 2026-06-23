@@ -115,9 +115,12 @@ Prefer clicking? Run the web UI (below) and do steps 5–6 there instead.
 
 ### CLI
 
-`hive` (or `uv run python -m hive.cli`) covers the full web API — everything the UI can do, with JSON output — so coding agents and scripts can drive hive exactly like you do. Targets `HIVE_URL` (default `http://localhost:8000`; set `HIVE_BASIC_AUTH=user:pass` for an authenticated endpoint).
+`hive` (or `uv run python -m hive.cli`) covers the full web API — everything the UI can do, with JSON output — so coding agents and scripts can drive hive exactly like you do.
+
+**Where it points.** Commands go to a *client target*: `HIVE_URL` (default `http://localhost:8000`), with `HIVE_BASIC_AUTH=user:pass` for a control plane behind basic auth and `HIVE_TOKEN` for app-level auth. Set them as one-off env vars or persist them with `hive config set` (an explicit env var overrides the saved value), so you point at a remote once and every command follows. `hive whoami` resolves the target and reports who you're authenticated as — run it first to confirm you're driving the right control plane. See [Keep Hive working while your laptop is off](#keep-hive-working-while-your-laptop-is-off).
 
 ```bash
+hive whoami                        # resolved target URL + authenticated identity
 hive create myproj
 hive set <project_id> --spec-repo https://github.com/me/spec.git --member-repos https://github.com/me/app.git
 hive start <project_id> --mission "ship the first useful slice" --iteration-goal "..."
@@ -126,6 +129,9 @@ hive show <project_id>             # workstreams, tasks, questions
 hive answer <question_id> "yes, add B"
 hive dismiss <question_id>         # discard a stale question without answering
 hive iterate <project_id> "next goal: ..."
+hive scan <project_id>             # sync open GitHub issues and queue fixes
+hive preflight <project_id>        # check issue-solving preconditions before a run
+hive test-refresh <project_id> <workstream_id>   # queue a testing-workstream refresh
 hive set <project_id> --paused true --autonomy pr --daily-budget 25
 hive cancel <task_id>              # dequeue if pending, stop the agent if running
 hive trace <task_id>              # raw kodo JSONL run trace (pipe into jq / kodo's viewer)
@@ -159,6 +165,42 @@ CI runs the same gates as pre-commit: Ruff, the backend pytest suite, and the we
 uv run pre-commit install
 uv run pre-commit run --all-files
 ```
+
+---
+
+## Keep Hive working while your laptop is off
+
+The laptop quickstart runs the control plane *and* a runner on your machine — close the lid and everything stops. To let work continue overnight, run the control plane on an always-on server (a small VM) with its own runner, and drive it from your laptop's CLI.
+
+**The model.** There is exactly one control plane per project database — a Firestore leader lease makes a second one refuse to start — and runners attach to it:
+
+- **The server** runs the control plane *and* an always-on runner. The control plane's planning loop keeps decomposing the goal, dispatching work, and verifying results on its own, so **iteration work progresses with no human in the loop** while your laptop is closed.
+- **Your laptop** is just a client. You point the `hive` CLI at the server to set goals, answer questions, and trigger issue/test runs. You can *also* attach your laptop as an extra runner; closing it simply removes that runner and the server's runner keeps going.
+
+**Point your CLI at the server (once):**
+
+```bash
+hive config set HIVE_URL https://your-hive.example
+hive config set HIVE_BASIC_AUTH you:your-password    # if it sits behind basic auth (e.g. Caddy)
+hive whoami                                           # confirm: prints the target URL + identity
+```
+
+From there every command — `hive start`, `hive answer`, `hive scan`, `hive test-refresh`, `hive iterate` — runs against the server. Submit once and walk away; the server carries it out. Don't *also* run `hive run` locally against the same database — the leader lease will refuse it. With a remote control plane your laptop never needs its own.
+
+**Match the always-on backends to the work you want unattended.** A runner can only execute work for the agent CLIs it has logged in. So which work continues while your laptop is off depends on what the *server's* runner has:
+
+| Runner | Typically serves | Available when |
+| --- | --- | --- |
+| Server (always-on) | API-key backends, e.g. **codex**, **gemini-cli** | always |
+| Your laptop | subscription backends, e.g. **claude**, **cursor** | only while the laptop is on |
+
+If the planner routes a task to a backend only your laptop has, that task parks as `blocked: resources` until the laptop reattaches. The planner is backend-aware and will prefer available backends, but for true laptop-off continuity, keep the project's work on backends the always-on runner offers (or give the server a runner logged into the backend you want).
+
+**What is *not* automatic yet.** Iteration work is autonomous, but new GitHub issues are only picked up when you trigger a scan (`hive scan`) — there's no scheduled sync. Since the CLI now drives the remote, you can trigger one from any machine (or phone over SSH); a scheduled scan would remove even that step.
+
+> **Rough edges (tracked in [TODO.md](TODO.md)).** Today's remote uses a single shared basic-auth password, so per-user `hive login` and a minted token would be smoother than copying a secret; there's one client target rather than named local/remote contexts; and the always-on backend coverage is on you to arrange. These are convenience gaps, not blockers — the workflow above works as written.
+
+For the concrete deployed instance (URL, password, runner attach), see [The deployed instance](#the-deployed-instance-maintainer-notes).
 
 ---
 
@@ -221,5 +263,12 @@ Built on primitives from [kodo](https://github.com/ikamensh/kodo) (agent/session
 This repo is also hive's own **spec home** (dogfooding the spec format it defines). The MVP is deployed and demo-verified: control plane (FastAPI + Firestore + GCS) and a runner live on a GCE VM (`hive-vm`, project `hive-ikamen`); a greenfield demo project ([wordfreq-demo](https://github.com/ikamensh/wordfreq-demo)) was planned, built, verified, and completed autonomously end-to-end.
 
 - Web UI: https://hive.34-62-218-54.sslip.io, user `ilya`, password in Secret Manager `hive-web-password`. (`hive.ilyakamen.com` awaits a manual GoDaddy A record → 34.62.218.54; Caddy already serves both names.)
+- Drive it from the laptop CLI (the [laptop-off workflow](#keep-hive-working-while-your-laptop-is-off)):
+  ```bash
+  hive config set HIVE_URL https://hive.34-62-218-54.sslip.io
+  hive config set HIVE_BASIC_AUTH "ilya:$(gcloud secrets versions access latest --secret=hive-web-password --project=hive-ikamen)"
+  hive whoami
+  ```
+  The VM's always-on runner serves **codex + gemini-cli**; `scripts/laptop_runner.sh` adds **claude + cursor** while your laptop is attached.
 - Attach your laptop as a runner to the deployed instance: `bash scripts/laptop_runner.sh`.
 - Secrets live in GCP Secret Manager (`hive-gemini-api-key`, `hive-gh-token`, `hive-runner-token`, `hive-openai-api-key`, `hive-web-password`); the VM startup script materializes `/etc/hive/env`. GCP project `hive-ikamen`, Firestore `(default)` + bucket `hive-ikamen-blobs`, both `europe-west1`.
