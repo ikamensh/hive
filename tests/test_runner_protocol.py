@@ -310,6 +310,49 @@ def test_fresh_issue_checkout_resets_existing_branch_and_preserves_backup(tmp_pa
     assert _git(["--git-dir", str(remote), "rev-parse", backup], tmp_path).stdout.strip() == old_issue
 
 
+def test_default_branch_checkout_lands_head_on_main_not_a_stale_branch(tmp_path, monkeypatch):
+    """A no-branch task ("work that lands on main") must leave HEAD *on* the
+    default branch even when the persistent checkout was left on an issue branch
+    by a prior task. Otherwise the agent's `git push HEAD` lands on that stale
+    branch — observed live: a test_refresh pushed its acceptance refresh onto a
+    leftover hive/issue-18 instead of main, so the spec home never updated."""
+    remote = tmp_path / "remote.git"
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "init", "-b", "main", str(seed)], check=True, capture_output=True, text=True)
+    _git(["config", "user.email", "test@example.invalid"], seed)
+    _git(["config", "user.name", "Test"], seed)
+    (seed / "file.txt").write_text("main v1\n")
+    _git(["add", "file.txt"], seed)
+    _git(["commit", "-m", "main v1"], seed)
+    _git(["remote", "add", "origin", str(remote)], seed)
+    _git(["push", "-u", "origin", "main"], seed)
+    _git(["--git-dir", str(remote), "symbolic-ref", "HEAD", "refs/heads/main"], tmp_path)
+    _git(["checkout", "-b", "hive/issue-9"], seed)
+    _git(["push", "-u", "origin", "hive/issue-9"], seed)
+
+    monkeypatch.setattr("hive.runner.daemon.WORKDIR", tmp_path / "work")
+
+    # A prior issue task left the persistent checkout sitting on the issue branch.
+    issue_path = checkout(str(remote), "hive/issue-9")
+    assert _git(["rev-parse", "--abbrev-ref", "HEAD"], issue_path).stdout.strip() == "hive/issue-9"
+
+    # A no-branch task reuses that checkout; it must end up on main.
+    path = checkout(str(remote), "")
+    assert _git(["rev-parse", "--abbrev-ref", "HEAD"], path).stdout.strip() == "main"
+
+    # So a commit + `git push HEAD` lands on origin/main, not the stale branch.
+    _git(["config", "user.email", "test@example.invalid"], path)
+    _git(["config", "user.name", "Test"], path)
+    (path / "acceptance.txt").write_text("refreshed\n")
+    _git(["add", "acceptance.txt"], path)
+    _git(["commit", "-m", "refresh acceptance"], path)
+    pushed = _git(["rev-parse", "HEAD"], path).stdout.strip()
+    _git(["push", "origin", "HEAD"], path)
+    assert _git(["--git-dir", str(remote), "rev-parse", "main"], tmp_path).stdout.strip() == pushed
+    assert _git(["--git-dir", str(remote), "rev-parse", "hive/issue-9"], tmp_path).stdout.strip() != pushed
+
+
 def test_boot_marks_interrupted_probe_unknown_then_queues_fresh_probe():
     store = MemoryStore()
     client = make_client(store)

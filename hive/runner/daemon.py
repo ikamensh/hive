@@ -405,8 +405,14 @@ def checkout(repo_url: str, branch: str = "", fresh_branch: bool = False) -> Pat
                 branch=branch,
             )
     else:
+        # No branch = "work that lands on main": put HEAD *on* the default branch,
+        # not merely reset its content. A bare `reset --hard origin/main` leaves the
+        # checkout on whatever local branch a prior task left it on (e.g. an issue
+        # branch), so the agent's `git push HEAD` would land on that stale branch
+        # instead of main — silently misdirecting refresh/intake commits.
+        default_branch = default_head.split("/", 1)[1] if "/" in default_head else default_head
         _run_checkout_git(
-            ["reset", "--hard", default_head],
+            ["checkout", "-B", default_branch, default_head],
             cwd=path,
             timeout=60,
             env=env,
