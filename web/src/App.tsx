@@ -217,7 +217,7 @@ export default function App() {
           ) : (
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
               <path
-                d="M21 14.5A7.5 7.5 0 0 1 9.5 3 6.5 6.5 0 1 0 14.5 21 7.5 7.5 0 0 1 21 14.5z"
+                d="M20.35 15.35A9 9 0 0 1 8.65 3.65 9 9 0 1 0 20.35 15.35z"
                 fill="currentColor"
               />
             </svg>
