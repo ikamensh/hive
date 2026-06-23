@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from hive.config.settings import Config
 from hive.control.supervisor import Supervisor
-from hive.models import Machine, Project, Resource, ResourceUsability
+from hive.models import Machine, Resource, ResourceUsability
 from hive.persistence.store import MemoryStore
 
 RUNNER_HEADERS = {"X-Hive-Token": "t"}

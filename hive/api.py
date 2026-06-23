@@ -106,7 +106,6 @@ from hive.models import (
     WorkstreamSource,
     WorkstreamStatus,
 )
-from hive.integrations.specrepo import SpecRepo
 from hive.persistence.storage import storage_info
 from hive.control.capacity import (
     group_machines,
