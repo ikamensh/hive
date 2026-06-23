@@ -3,14 +3,14 @@ preconditions, so misconfiguration surfaces before a big run rather than as a
 half-finished pipeline that's hard to debug.
 
 Two layers:
-- `preflight_checks` — control-plane checks (project config, the GitHub token's
+- `preflight_checks` — chief checks (project config, the GitHub token's
   read/write on the repo, a usable codex runner). Pure-ish (one GitHub GET);
   unit-tested with the network mocked.
 - a runner self-check task (`TaskKind.preflight`, executed by `runner.run_preflight`)
-  — the agent-facing bits the control plane can't see: that the runner host can
+  — the agent-facing bits the chief can't see: that the runner host can
   `git push` to the repo and that `gh` is authenticated for comments.
 
-`hive preflight <project>` runs the control-plane checks and (if they pass and a
+`hive preflight <project>` runs the chief checks and (if they pass and a
 codex runner is online) queues the runner self-check and reports its result.
 """
 
@@ -71,7 +71,7 @@ def preflight_checks(store, config, project, repo: str | None = None) -> list[Ch
         Check(
             "gh_token_present",
             bool(token),
-            "control-plane GitHub token present"
+            "chief GitHub token present"
             if token
             else "HIVE_GH_TOKEN not set — needed to fetch issues, download images, merge, and close",
         )

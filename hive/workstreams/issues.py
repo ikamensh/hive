@@ -3,7 +3,7 @@ per-issue pipeline (see wiki/issue-solving.md).
 
 Two concerns, kept separate so the store logic is testable without network:
 - GitHub I/O (`fetch_open_issues_full`, `merge_branch`, `resolve_issue_on_github`)
-  — thin httpx calls authed with the control-plane token, like `github_repos.py`.
+  — thin httpx calls authed with the chief token, like `github_repos.py`.
 - Store logic (`reconcile`, `advance_issues`, `create_review_task`) — pure ops
   mapping issues to work items and queuing the codex resolve/review tasks.
 
@@ -215,10 +215,10 @@ def download_issue_attachments(
     token: str,
     workstream: ProjectWorkstream | None = None,
 ) -> tuple[int, int]:
-    """Download every issue-workstream's embedded images on the control plane —
+    """Download every issue-workstream's embedded images on the chief —
     which is authed to the repo — into the blob store, and replace the URL list on
     each workstream with the stored filenames. Runners fetch the bytes back from
-    the control plane (`GET /api/tasks/{id}/attachments/{name}`), so a worker
+    the chief (`GET /api/tasks/{id}/attachments/{name}`), so a worker
     never needs GitHub credentials of its own. Returns (downloaded, failed).
 
     An issue is worth nothing without its screenshots, so attachments are part of

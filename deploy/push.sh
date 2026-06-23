@@ -4,7 +4,7 @@
 # for the tight edit -> test loop. (On reboot the source of truth is still git
 # via deploy/vm_startup.sh; this is for between-reboot iteration.)
 #
-#   deploy/push.sh          # ship sources + restart control plane & runner
+#   deploy/push.sh          # ship sources + restart chief & runner
 #   deploy/push.sh --deps   # also `uv sync` (after a pyproject/uv.lock change)
 #   deploy/push.sh --web    # also rebuild web/dist locally and ship it
 set -euo pipefail
@@ -40,6 +40,6 @@ if [[ " $* " == *" --web "* ]]; then
   rsync -az --delete --rsync-path="sudo rsync" -e "$SSH" web/dist/ "$REMOTE:/opt/hive/web/dist/"
 fi
 
-echo "-> restart control plane + runner"
-$SSH "$REMOTE" "sudo systemctl restart hive-control hive-runner"
-echo "OK: deployed in-place. Control plane: http://$IP:8000 (behind Caddy basic-auth)"
+echo "-> restart chief + runner"
+$SSH "$REMOTE" "sudo systemctl restart hive-chief hive-runner"
+echo "OK: deployed in-place. Chief: http://$IP:8000 (behind Caddy basic-auth)"

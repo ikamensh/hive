@@ -35,14 +35,14 @@ For what each module does and how the pipelines wire together, see `wiki/code-ma
 
 ```bash
 uv run pytest tests/                  # unit + mocked e2e
-uvicorn --factory hive.api:production_app   # control plane (env: HIVE_GCP_PROJECT etc.)
+uvicorn --factory hive.api:production_app   # chief (env: HIVE_GCP_PROJECT etc.)
 python -m hive.runner                 # runner (env: HIVE_URL, HIVE_RUNNER_TOKEN)
 bash scripts/laptop_runner.sh         # laptop runner via SSH tunnel
 ```
 
-## Remote VM (control plane + runner on GCE)
+## Remote VM (chief + runner on GCE)
 
-The remote install runs both the control plane (`hive-control`) and the runner
+The remote install runs both the chief (`hive-chief`) and the runner
 (`hive-runner`) **bare via systemd** — no Docker in the deploy loop (the image
 rebuild was the tax; `deploy/Dockerfile`/`compose.yaml` are kept for a future
 stability mode). Coordinates default to VM `hive-vm` / `hive-ikamen`; override
@@ -53,9 +53,9 @@ bash deploy/create_vm.sh         # create or refresh the VM (resets -> re-runs v
 deploy/push.sh                   # fast iterate: rsync working tree + restart services (~3s)
 deploy/push.sh --deps            #   ...also `uv sync` after a pyproject/uv.lock change
 deploy/push.sh --web             #   ...also rebuild + ship web/dist
-deploy/vm.sh status              # health of control plane + runner
-deploy/vm.sh logs runner 80      # journalctl tail (control|runner)
-deploy/vm.sh tunnel              # localhost:8000 -> control plane (bypasses Caddy basic-auth)
+deploy/vm.sh status              # health of chief + runner
+deploy/vm.sh logs runner 80      # journalctl tail (chief|runner)
+deploy/vm.sh tunnel              # localhost:8000 -> chief (bypasses Caddy basic-auth)
 ```
 
 `deploy/push.sh` is the edit->test loop (ships local state in-place, no commit).

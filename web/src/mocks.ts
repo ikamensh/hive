@@ -1253,7 +1253,7 @@ export const api = {
     ok: true,
     checks: [
       { name: "repo_set", ok: true, detail: "git@github.com:acme/beacon.git", hard: true },
-      { name: "gh_token_present", ok: true, detail: "control-plane GitHub token present", hard: true },
+      { name: "gh_token_present", ok: true, detail: "chief GitHub token present", hard: true },
       { name: "repo_write_access", ok: true, detail: "token can push/merge to acme/beacon", hard: true },
       { name: "codex_runner_usable", ok: true, detail: "an online runner offers a usable 'codex' resource", hard: false },
     ],
@@ -1299,7 +1299,7 @@ export const api = {
     ok: true,
     checks: [
       { name: "repo_set", ok: true, detail: "git@github.com:acme/beacon.git", hard: true },
-      { name: "gh_token_present", ok: true, detail: "control-plane GitHub token present", hard: true },
+      { name: "gh_token_present", ok: true, detail: "chief GitHub token present", hard: true },
       { name: "repo_write_access", ok: true, detail: "token can push/merge to acme/beacon", hard: true },
       { name: "codex_runner_usable", ok: true, detail: "an online runner offers a usable 'codex' resource", hard: false },
     ],

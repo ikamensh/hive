@@ -353,7 +353,7 @@ def test_stored_config_can_enable_runner_autostart(monkeypatch):
     assert any("local runner autostart: enabled" in n for n in notes)
 
 
-def test_run_control_plane_requires_managed_state(monkeypatch, tmp_path, capsys):
+def test_run_chief_requires_managed_state(monkeypatch, tmp_path, capsys):
     import uvicorn
 
     _fake_gh(monkeypatch, "")
@@ -370,7 +370,7 @@ def test_run_control_plane_requires_managed_state(monkeypatch, tmp_path, capsys)
     assert "Hive requires managed state" in capsys.readouterr().err
 
 
-def test_run_control_plane_caps_graceful_shutdown(monkeypatch, tmp_path, capsys):
+def test_run_chief_caps_graceful_shutdown(monkeypatch, tmp_path, capsys):
     import uvicorn
 
     calls = []
@@ -392,10 +392,10 @@ def test_run_control_plane_caps_graceful_shutdown(monkeypatch, tmp_path, capsys)
 
     assert calls
     assert calls[0][1]["timeout_graceful_shutdown"] == UVICORN_GRACEFUL_SHUTDOWN_S
-    assert "starting hive control plane" in capsys.readouterr().out
+    assert "starting hive chief" in capsys.readouterr().out
 
 
-def test_run_control_plane_builds_web_bundle(monkeypatch, tmp_path, capsys):
+def test_run_chief_builds_web_bundle(monkeypatch, tmp_path, capsys):
     import subprocess
     import uvicorn
 
@@ -432,11 +432,11 @@ def test_run_control_plane_builds_web_bundle(monkeypatch, tmp_path, capsys):
     assert "web: building latest web bundle" in out
 
 
-def test_run_control_plane_leader_refusal_is_concise(monkeypatch, tmp_path, capsys):
+def test_run_chief_leader_refusal_is_concise(monkeypatch, tmp_path, capsys):
     import uvicorn
 
     def fake_run(*args, **kwargs):
-        raise RuntimeError("another control plane (host:123) holds the leader lease for workspace default")
+        raise RuntimeError("another chief (host:123) holds the leader lease for workspace default")
 
     _fake_gh(monkeypatch, "")
     monkeypatch.setattr(uvicorn, "run", fake_run)
@@ -453,7 +453,7 @@ def test_run_control_plane_leader_refusal_is_concise(monkeypatch, tmp_path, caps
 
     assert exc.value.code == 1
     err = capsys.readouterr().err
-    assert "Hive control plane did not start" in err
+    assert "Hive chief did not start" in err
     assert "leader lease" in err
     assert "Traceback" not in err
 

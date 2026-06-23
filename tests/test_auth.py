@@ -34,7 +34,7 @@ def make_client(store: MemoryStore, **overrides):
         orch_model="",
         runner_token="t",
         data_dir=None,
-        machine_name="control-test",
+        machine_name="chief-test",
         **overrides,
     )
     supervisor = Supervisor(
@@ -57,7 +57,7 @@ def test_dev_auth_bootstraps_user_workspace_and_machine():
     assert me["workspace"]["id"] == config.workspace_id
     assert "hive_session" in response.headers["set-cookie"]
     machines = store.list(Machine, workspace_id=config.workspace_id)
-    assert [m.name for m in machines] == ["control-test"]
+    assert [m.name for m in machines] == ["chief-test"]
 
 
 def test_dev_auth_disables_github_oauth_routes():
@@ -86,7 +86,7 @@ def test_dev_auth_concurrent_file_store(tmp_path):
         orch_model="",
         runner_token="t",
         data_dir=tmp_path,
-        machine_name="control-test",
+        machine_name="chief-test",
     )
     supervisor = Supervisor(store, lambda p, e: None, machine_name=config.machine_name)
     client = TestClient(create_app(store, supervisor, config))

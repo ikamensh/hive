@@ -57,7 +57,7 @@ export function projectViewModel(
   const hasProjectWork = manualWorkItems.length > 0 || issueWorkItems.length > 0 || testingStories.length > 0 || nonIntakeTasks.length > 0;
   const needsSetup = !configured || (!hasProjectWork && !intakeDone);
   // Backends Hive trusts to run intake, in auto-pick preference order (mirror of
-  // the control plane's TRUSTED_SCOUTS). Setup only needs a yes/no readiness
+  // the chief's TRUSTED_SCOUTS). Setup only needs a yes/no readiness
   // signal per backend; per-machine agent state lives on the machines page.
   const SCOUT_PREFERENCE = ["codex", "claude"];
   const availableScoutBackends = SCOUT_PREFERENCE.filter((backend) =>

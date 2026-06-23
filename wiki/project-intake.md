@@ -52,7 +52,7 @@ intake is approved and the spec is pushed.
 
 The intake scout is a coding-agent style session running in a checkout of the
 project repo. It uses the same runner/task execution machinery as other agent
-work, not a separate control-plane-only LLM path.
+work, not a separate chief-only LLM path.
 
 The scout may:
 

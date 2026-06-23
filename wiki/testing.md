@@ -194,7 +194,7 @@ set in scope so the run is auditable even if the spec changes afterward. Phases:
    (reuse the `model_intel` "smartest available" selection that critique's
    adjudicator uses) **only when intention changed**, committing updated stories
    to the spec home and posting ambiguities as `Question`s; prioritization is
-   deterministic. The control plane reconciles `Story` records and snapshots the
+   deterministic. The chief reconciles `Story` records and snapshots the
    chosen story keys onto the episode.
 3. **Sweep (cheap models, parallel, `test_sweep`).** One task per story (grouping
    is Iteration 2). The agent stands the app up in a **fresh Docker container**

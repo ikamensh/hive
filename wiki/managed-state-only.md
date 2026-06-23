@@ -10,19 +10,19 @@ Hive runtime state should live in managed services by default and by requirement
 
 Local file persistence should stop being a supported runtime mode. It can remain only for tests, offline unit fixtures, and one-time migration tools.
 
-This keeps the VM and MacBook interchangeable as control-plane hosts: either one can start against the same managed state after the other leader stops, and both see the same projects, tasks, runners, resources, traces, org context, and human todos.
+This keeps the VM and MacBook interchangeable as chief hosts: either one can start against the same managed state after the other leader stops, and both see the same projects, tasks, runners, resources, traces, org context, and human todos.
 
 ## Why
 
-The current code lets `HIVE_GCP_PROJECT` and `HIVE_GCS_BUCKET` be configured independently. That creates a dangerous middle state: documents can be in Firestore while blobs stay under `HIVE_DATA_DIR/blobs` on whichever machine happened to run the control plane. A later VM or Mac launch then sees the Firestore documents but cannot read the local traces, attachments, or orchestrator history.
+The current code lets `HIVE_GCP_PROJECT` and `HIVE_GCS_BUCKET` be configured independently. That creates a dangerous middle state: documents can be in Firestore while blobs stay under `HIVE_DATA_DIR/blobs` on whichever machine happened to run the chief. A later VM or Mac launch then sees the Firestore documents but cannot read the local traces, attachments, or orchestrator history.
 
-For Hive's actual goal, "local" should mean "the control plane process is running on my MacBook," not "state lives on my MacBook." Managed state is simpler, more honest, and closer to the deployment model.
+For Hive's actual goal, "local" should mean "the chief process is running on my MacBook," not "state lives on my MacBook." Managed state is simpler, more honest, and closer to the deployment model.
 
 ## Scope
 
 In scope:
 
-- Control-plane structured state.
+- Chief structured state.
 - Blob state.
 - Storage selection, launch checks, CLI notes, UI storage display.
 - Local-to-managed migration for existing file-backed data.
@@ -42,7 +42,7 @@ Out of scope:
 4. The web UI should never label Firestore-only as "cloud persistence." Full cloud persistence requires Firestore plus GCS.
 5. The storage/export endpoint should either be removed from the production app or changed into an explicit migration-only path that cannot run once managed state is active.
 6. Tests may still instantiate `MemoryStore`, `FileStore`, and `LocalBlobStore` directly.
-7. A second control plane against the same workspace should continue to fail on the leader lease; interchangeable means clean handoff, not two live supervisors.
+7. A second chief against the same workspace should continue to fail on the leader lease; interchangeable means clean handoff, not two live supervisors.
 
 ## Implementation Plan
 
@@ -80,7 +80,7 @@ The launch summary should include:
 - Auth mode.
 - Public URL.
 - Local runner autostart.
-- Current leader failure message if another control plane owns the lease.
+- Current leader failure message if another chief owns the lease.
 
 ### 3. Add A Managed-State Doctor
 
@@ -91,7 +91,7 @@ Add `hive doctor storage` or `hive doctor distributed`:
 - Confirms workspace bootstrap.
 - Prints current leader lease holder.
 - Confirms the configured runner token is present.
-- Reports whether the current process is safe to start as control plane or should run only as a runner.
+- Reports whether the current process is safe to start as chief or should run only as a runner.
 
 This should be the first command in the MacBook and VM handoff docs.
 
@@ -118,7 +118,7 @@ uv run hive migrate-local-state \
 
 The migration should:
 
-- Require all control planes to be stopped.
+- Require all chiefs to be stopped.
 - Copy every collection.
 - Copy org context for every workspace.
 - Copy all local blobs.
@@ -135,8 +135,8 @@ Replace "run with local files for a throwaway run" with:
 
 - Local process, managed state.
 - For first setup, run `hive doctor storage`.
-- For a MacBook control-plane handoff, stop the VM control plane or wait for the leader lease to expire.
-- For normal distributed operation, keep the VM control plane running and start the MacBook only as a runner.
+- For a MacBook chief handoff, stop the VM chief or wait for the leader lease to expire.
+- For normal distributed operation, keep the VM chief running and start the MacBook only as a runner.
 
 The README should say GCS is required for cloud persistence, not optional.
 
@@ -161,11 +161,11 @@ Manual preflight:
 
 - `uv run pytest tests/`
 - `hive doctor storage` from the MacBook.
-- Stop VM control plane.
-- Start MacBook control plane against Firestore/GCS.
+- Stop VM chief.
+- Start MacBook chief against Firestore/GCS.
 - Confirm projects/resources/traces match.
-- Stop MacBook control plane.
-- Restart VM control plane.
+- Stop MacBook chief.
+- Restart VM chief.
 - Confirm state continuity.
 
 ## Rollout
@@ -179,7 +179,7 @@ Manual preflight:
 
 ## Open Questions
 
-- Should MacBook control-plane credentials come from local stored config or a helper that pulls Secret Manager values into `~/.config/hive/config.env`?
+- Should MacBook chief credentials come from local stored config or a helper that pulls Secret Manager values into `~/.config/hive/config.env`?
 - Should `hive run` automatically start a local runner after acquiring leadership, or should runner startup remain explicit for handoff clarity?
 - Should the leader lease holder be exposed through an authenticated API endpoint, or only through the doctor command?
 
@@ -187,6 +187,6 @@ Manual preflight:
 
 - A normal `hive run` cannot create local state files.
 - Firestore-only without GCS is impossible in production runtime.
-- MacBook and VM control planes see identical state after a clean handoff.
-- MacBook as runner against the VM control plane remains unchanged.
+- MacBook and VM chiefs see identical state after a clean handoff.
+- MacBook as runner against the VM chief remains unchanged.
 - Tests still use cheap in-memory/file stores without requiring GCP.

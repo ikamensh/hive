@@ -1,4 +1,4 @@
-"""Runner daemon: registers with the control plane, long-polls for tasks,
+"""Runner daemon: registers with the chief, long-polls for tasks,
 executes them with a kodo agent in a local checkout, reports results.
 
 Run directly: `python -m hive.runner.daemon`. Configuration via environment:
@@ -424,9 +424,9 @@ def ensure_probe_repo() -> Path:
 
     Probes only need *some* clean git repo to prove a backend can run and leave
     the tree tidy. Building it locally — rather than cloning a path on the
-    control plane — means a probe needs no shared filesystem and no network, so
-    it works for any runner, including ones on machines remote from the control
-    plane (the normal case for Hive)."""
+    chief — means a probe needs no shared filesystem and no network, so
+    it works for any runner, including ones on machines remote from the
+    chief (the normal case for Hive)."""
     path = WORKDIR / "agent-probe-repo"
     path.mkdir(parents=True, exist_ok=True)
     if not (path / ".git").exists():
@@ -477,7 +477,7 @@ def _checkout_facts(repo_dir: Path) -> dict | None:
 
 def collect_checkouts() -> list[dict]:
     """Git facts for every checkout under WORKDIR, for the heartbeat payload.
-    Lets the control plane track where each project physically exists and
+    Lets the chief track where each project physically exists and
     whether machine-local work has drifted from the remote."""
     if not WORKDIR.is_dir():
         return []
@@ -530,7 +530,7 @@ def run_preflight(project_dir: Path) -> dict:
 def prepare_issue_workspace(project_dir: Path, task: dict, headers: dict, auth) -> None:
     """Issue solving: materialize the issue context into the checkout under
     `.hive/issue-<n>/` (ISSUE.md + attachments), git-excluded so the agent never
-    commits it. Attachments are pulled from the control plane (which downloaded
+    commits it. Attachments are pulled from the chief (which downloaded
     them from GitHub at scan time with repo credentials), so the runner needs no
     GitHub auth of its own."""
     number = task.get("issue_number") or 0
@@ -572,7 +572,7 @@ def _reset_task_scratch(project_dir: Path) -> None:
 
 
 def _upload_trace(task_id: str, log_file, headers: dict, auth) -> None:
-    """Best-effort: ship the kodo JSONL run trace to the control plane so the
+    """Best-effort: ship the kodo JSONL run trace to the chief so the
     operator can inspect what the agent actually did."""
     if not log_file or not Path(log_file).exists():
         return
@@ -610,7 +610,7 @@ def execute(task: dict, headers: dict, auth) -> dict:
     from kodo.agent import Agent
 
     if task["kind"] == "probe":
-        # Probes run in a self-built local repo, never a control-plane path.
+        # Probes run in a self-built local repo, never a chief path.
         project_dir = ensure_probe_repo()
     else:
         try:
@@ -799,7 +799,7 @@ def main(argv: list[str] | None = None) -> None:
 
     def heartbeat() -> None:
         # Keeps last_seen fresh while a long task blocks the main loop;
-        # otherwise the control plane declares us offline and orphans the task.
+        # otherwise the chief declares us offline and orphans the task.
         hb = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=15.0, auth=auth)
         while True:
             time.sleep(30)

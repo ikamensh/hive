@@ -4,7 +4,7 @@ agents Hive can run.
 Adding a backend means adding one `Backend` entry here; everything else (the
 orchestrator's allowed-backend list, the runner's session factory, probe
 support, capability detection) derives from `REGISTRY`. Session factories import
-`kodo` lazily so the control plane can import this module without kodo present —
+`kodo` lazily so the chief can import this module without kodo present —
 only the runner machine needs the agent CLIs installed.
 """
 

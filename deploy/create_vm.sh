@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run locally: creates the hive VM (control plane + runner) in project hive-ikamen.
+# Run locally: creates the hive VM (chief + runner) in project hive-ikamen.
 # Re-runnable: updates the startup script and restarts the VM if it exists.
 set -euo pipefail
 PROJECT=hive-ikamen

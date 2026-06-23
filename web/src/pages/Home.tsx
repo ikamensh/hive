@@ -165,7 +165,7 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
       const p = await api.createProject({ name: name.trim() });
       navigate(`/p/${p.id}`);
     } catch {
-      setError("create failed — is the control plane up?");
+      setError("create failed — is the chief up?");
       setBusy(false);
     }
   };
@@ -216,7 +216,7 @@ export default function Home() {
   if (!data) {
     return (
       <div className="page page-home">
-        {failed ? <p className="muted">control plane unreachable</p> : <HomeSkeleton />}
+        {failed ? <p className="muted">chief unreachable</p> : <HomeSkeleton />}
       </div>
     );
   }

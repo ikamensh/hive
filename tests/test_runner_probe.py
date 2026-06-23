@@ -11,7 +11,7 @@ def _porcelain(path):
 
 
 def test_ensure_probe_repo_builds_clean_repo_and_self_cleans(tmp_path, monkeypatch):
-    """The runner builds its own probe repo (no control-plane path, so remote
+    """The runner builds its own probe repo (no chief path, so remote
     runners can probe), idempotently, and resets it clean each time so a prior
     probe's mess never fails the next."""
     import hive.runner.daemon as daemon

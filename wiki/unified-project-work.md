@@ -303,7 +303,7 @@ PATCH /api/projects/{project_id}/workstreams/{workstream_id}
      enable/disable workstream, update config
 
 POST /api/projects/{project_id}/workstreams/{workstream_id}/preflight
-     run control-plane checks and optionally queue runner self-check
+     run chief checks and optionally queue runner self-check
 
 POST /api/projects/{project_id}/workstreams/{workstream_id}/sync
      fetch and reconcile GitHub issues without starting work

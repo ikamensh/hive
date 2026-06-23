@@ -20,6 +20,10 @@ _Avoid_: Laptop
 A technical access link that lets Hive use one machine for work. A runner belongs to a machine and should not be presented as a machine type; in normal operation, there is one runner per machine.
 _Avoid_: Server, machine, agent
 
+**Chief**:
+The single Hive instance that coordinates everything — it decides what work to do and assigns it to [[Runner]]s across the user's [[Machine]]s. Exactly one per hive, and it is the same thing whether it runs on a [[Personal Computer]] or a [[Cloud Server]]; "Chief" names the orchestrating role, not where it lives.
+_Avoid_: control plane, master, orchestrator (that names the inner LLM decision the Chief invokes, not the instance), server, host
+
 ## Agents & access
 
 **Subscription**:

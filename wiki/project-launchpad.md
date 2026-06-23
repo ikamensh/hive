@@ -113,7 +113,7 @@ class Checkout(BaseModel):
 
 - **Read path (this pass):** the runner reports per-repo git facts for the repos
   it has checked out, piggybacked on its existing 30s heartbeat
-  ([daemon.py register](../hive/runner/daemon.py)). The control plane upserts a
+  ([daemon.py register](../hive/runner/daemon.py)). The chief upserts a
   `Checkout` per `(machine, repo)`. The launchpad shows drift per machine.
 - **Drift** = `ahead > 0` or `dirty`. It means real work may live only on one
   machine.

@@ -60,7 +60,7 @@ kodo's codex session is **text-only** (`query(prompt: str, ...)`); there is no i
 ## Who does what on GitHub
 
 - **Agents** (via `gh` on the runner, using the runner's GitHub auth): post the *qualitative* comments — the clarity-blocked questions and the rejection rationale. These are "from the agent."
-- **Hive control plane** (via the GitHub API with `config.gh_token`): the *mechanical* steps — fetch issues/comments/attachments, merge the branch on accept, close the issue. No PRs are created.
+- **Hive chief** (via the GitHub API with `config.gh_token`): the *mechanical* steps — fetch issues/comments/attachments, merge the branch on accept, close the issue. No PRs are created.
 
 ## Build status
 
@@ -71,7 +71,7 @@ Backend pipeline is built and unit/e2e-tested (`tests/test_issues.py`):
 4. ✅ Deterministic state machine in `hive/task_results.py` (`TaskResultProcessor._land_resolve`/`_land_review`): resolve->review chaining, `merge_branch` (merges API) + idempotent `resolve_issue_on_github` on accept, AI landing integration for merge conflicts, and human escalation only when integration needs input/tradeoffs or another landing failure occurs. Issue task completion advances the issue queue directly instead of waking the planner.
 5. ✅ Strict per-issue sequencing (`advance_issues`): one issue through resolve->review->land before the next starts. Resolve retries get a fresh branch from current default while preserving the old attempt. Interim batch `clarity` task removed (folded into resolve).
 
-6. ✅ Preflight gate (`hive/preflight.py`): control-plane checks + a runner self-check (push + gh auth); `scan-issues` is gated on the hard checks.
+6. ✅ Preflight gate (`hive/preflight.py`): chief checks + a runner self-check (push + gh auth); `scan-issues` is gated on the hard checks.
 7. ✅ UI pass: issue-solving workstream controls, preflight + Scan buttons, structured preflight/scan errors, issue list grouped by lifecycle state with links to issue + branch, task cancel button, and human-task completion for accepted-but-not-yet-marked-done issue lands (`web/`).
 
 ## Live validation notes (2026-06-14)
@@ -80,18 +80,18 @@ Backend pipeline is built and unit/e2e-tested (`tests/test_issues.py`):
 - A new upstream issue #5 appeared during the scan. Because the validation target was #2-#4, its auto-start was cancelled from the UI and it remains queued for a later intentional run. Product decision to revisit: whether an issue-solving run should offer a selected subset/run boundary or always process every open issue.
 - Issue #4 exposed GitHub close idempotency: the fix had landed and GitHub reported the issue closed, but Hive treated the close PATCH's 422 as a failed land. The close helper now verifies closed state after a failed close, and the landing human-task path can mark the matching workstream done from the UI.
 
-Image attachments are downloaded **on the control plane** (authed with `gh_token`) at scan and served to the runner, so the worker needs no GitHub creds; `attachments_failed` in the scan result flags any that didn't resolve.
+Image attachments are downloaded **on the chief** (authed with `gh_token`) at scan and served to the runner, so the worker needs no GitHub creds; `attachments_failed` in the scan result flags any that didn't resolve.
 
 ## Preflight (checked preconditions before a big run)
 
 A real run depends on things the happy-path code can't see; `hive/preflight.py` turns them into checks so misconfiguration surfaces up front, not as a half-finished pipeline. `hive preflight <project>` (→ `POST /api/projects/{id}/issues-preflight`) reports:
 
-- **Control-plane checks** (one GitHub GET): `spec_repo_set`, `gh_token_present`, `repo_write_access` (the token's `permissions.push` — needed for merge-on-accept + issue close), and the soft `issues_enabled` / `codex_runner_usable`.
-- **Runner self-check** (`TaskKind.preflight`, run by `runner.run_preflight` on the codex runner against the real repo): pushes a throwaway branch and deletes it (proves `git push` auth) and runs `gh auth status` (proves the agent can comment). These are the agent-facing risks the control plane can't verify itself.
+- **Chief checks** (one GitHub GET): `spec_repo_set`, `gh_token_present`, `repo_write_access` (the token's `permissions.push` — needed for merge-on-accept + issue close), and the soft `issues_enabled` / `codex_runner_usable`.
+- **Runner self-check** (`TaskKind.preflight`, run by `runner.run_preflight` on the codex runner against the real repo): pushes a throwaway branch and deletes it (proves `git push` auth) and runs `gh auth status` (proves the agent can comment). These are the agent-facing risks the chief can't verify itself.
 
-`scan-issues` re-runs the control-plane checks and refuses (409) if a hard one fails. The scan response also reports `attachments_downloaded` / `attachments_failed` so image-fetch problems are visible on the run itself.
+`scan-issues` re-runs the chief checks and refuses (409) if a hard one fails. The scan response also reports `attachments_downloaded` / `attachments_failed` so image-fetch problems are visible on the run itself.
 
 ## Open questions / to validate
 
-- Image inspection per backend (OCR vs graphical) — test and record. (Image *fetch* now happens control-plane-side at scan and is counted in the scan result; inspection capability is still per-backend.)
+- Image inspection per backend (OCR vs graphical) — test and record. (Image *fetch* now happens chief-side at scan and is counted in the scan result; inspection capability is still per-backend.)
 - Reusing the dormant ordering logic when an ordered variant is wanted.

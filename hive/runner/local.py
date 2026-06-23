@@ -26,16 +26,16 @@ def autostart_enabled(env: dict[str, str] | None = None) -> bool:
     return truthy(env.get("HIVE_AUTOSTART_RUNNER"))
 
 
-def local_control_plane_url(host: str, port: int) -> str:
+def local_chief_url(host: str, port: int) -> str:
     connect_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
     return f"http://{connect_host}:{port}"
 
 
 class LocalRunnerManager:
-    """Starts a runner daemon on the same host as the control plane.
+    """Starts a runner daemon on the same host as the chief.
 
     This is intentionally explicit: the browser cannot start a process on the
-    user's laptop. In local setups the control-plane host and browser machine
+    user's laptop. In local setups the chief host and browser machine
     are usually the same, so this gives the Resources page a safe "enroll this
     host" action.
     """

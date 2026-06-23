@@ -1,6 +1,6 @@
 """First-class testing workstream support.
 
-The control plane owns the deterministic parts: mirror `acceptance/*.md` into
+The chief owns the deterministic parts: mirror `acceptance/*.md` into
 Story records, snapshot a TestEpisode, queue one sweep task per selected story,
 denoise suspected findings with independent confirmation, and file confirmed
 findings as GitHub issues. Agents do the exploratory work; this module parses

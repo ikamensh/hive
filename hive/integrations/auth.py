@@ -110,7 +110,7 @@ def ensure_machine(
     return store.put(machine)
 
 
-def ensure_control_plane_machine(store, config: Config) -> Machine:
+def ensure_chief_machine(store, config: Config) -> Machine:
     name = config.machine_name or socket.gethostname()
     return ensure_machine(
         store,
@@ -118,7 +118,7 @@ def ensure_control_plane_machine(store, config: Config) -> Machine:
         name=name,
         machine_id=config.machine_id,
         hostname=socket.gethostname(),
-        kind="control-plane",
+        kind="chief",
         machine_type=config.machine_type,
         machine_os=config.machine_os,
         machine_arch=config.machine_arch,

@@ -139,12 +139,12 @@ class Supervisor:
         self._wakeup.set()
 
     def acquire_leadership(self) -> None:
-        """Claim the single-control-plane lease or refuse to start. Two control
-        planes on one store would double-dispatch and double-wake."""
+        """Claim the single-chief lease or refuse to start. Two chiefs
+        on one store would double-dispatch and double-wake."""
         owner = self.store.claim_leader(self.holder, LEASE_TTL_S, self.workspace_id)
         if owner != self.holder:
             raise RuntimeError(
-                f"another control plane ({owner}) holds the leader lease for workspace "
+                f"another chief ({owner}) holds the leader lease for workspace "
                 f"{self.workspace_id} — "
                 f"stop it or wait {LEASE_TTL_S:.0f}s for its lease to expire"
             )

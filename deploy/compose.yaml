@@ -1,5 +1,5 @@
 services:
-  control-plane:
+  chief:
     build:
       context: ..
       dockerfile: deploy/Dockerfile

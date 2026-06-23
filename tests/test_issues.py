@@ -302,7 +302,7 @@ def _report(client, task_id, text, is_error=False, structured_result=None):
 
 
 def _pass_preflight(monkeypatch):
-    """Scan runs the control-plane preflight, which hits GitHub for repo perms.
+    """Scan runs the chief preflight, which hits GitHub for repo perms.
     Stub it green so the scan flow tests stay offline (preflight has its own tests)."""
     monkeypatch.setattr("hive.api.preflight_checks", lambda store, config, project: [])
 

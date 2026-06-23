@@ -113,7 +113,7 @@ export default function App() {
               </svg>
               <span className="brand-word">hive</span>
             </div>
-            <h1>Control plane unreachable</h1>
+            <h1>Chief unreachable</h1>
             <p className="modal-hint">Retrying...</p>
           </section>
         </div>
@@ -159,7 +159,7 @@ export default function App() {
               <path d="M12 6.5 16.5 9.25v5.5L12 17.5 7.5 14.75v-5.5z" fill="var(--accent-2)" opacity="0.7" />
             </svg>
             <span className="brand-word">hive</span>
-            <small>control plane</small>
+            <small>chief</small>
           </NavLink>
           {auth.data?.storage && (
             <NavLink
@@ -217,7 +217,7 @@ export default function App() {
 
       {poll.failed && (
         <div className="offline-banner" role="alert">
-          <i className="dot" /> control plane unreachable — retrying every 4s
+          <i className="dot" /> chief unreachable — retrying every 4s
         </div>
       )}
 

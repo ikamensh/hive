@@ -225,10 +225,10 @@ class MemoryStore(StoreBase):
     def claim_leader(
         self, holder: str, ttl_s: float, workspace_id: str = DEFAULT_WORKSPACE_ID
     ) -> str:
-        """Claim or renew the single-control-plane lease. Returns the holder
+        """Claim or renew the single-chief lease. Returns the holder
         that owns the lease after this attempt; callers losing the claim see
         the competing holder's name. A lease is free once its TTL lapses, so
-        a crashed control plane is superseded within ttl_s."""
+        a crashed chief is superseded within ttl_s."""
         with self._lock:
             lease = self._lease if workspace_id == DEFAULT_WORKSPACE_ID else self._leases.get(workspace_id)
             if lease and lease["holder"] != holder and lease["expires"] > time.time():
@@ -280,7 +280,7 @@ def _read_json_file(path: Path, *, strict: bool) -> dict | None:
 
 
 class FileStore(MemoryStore):
-    """JSON-on-disk store for local control-plane runs. Same in-process locking
+    """JSON-on-disk store for local chief runs. Same in-process locking
     as MemoryStore, but every mutation is flushed to ``root/<collection>/<id>.json``."""
 
     def __init__(self, root: Path) -> None:

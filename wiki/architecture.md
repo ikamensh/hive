@@ -82,7 +82,7 @@ In MVP the only channel is the web UI inbox (user visits the page, sees work sta
 ## 5. Distribution: machines and runners
 
 - A **machine** is the capacity unit the user recognizes: either a cloud server expected to stay online or a personal computer that may sleep, travel, or disconnect.
-- A **runner** is the technical access link on a machine. It registers with the control plane and advertises **capabilities**: installed agent CLIs, loaded credentials and their licensing mode, auth freshness, machine specs. The product should not present runner as a peer type to cloud server or personal computer; normally there is one runner per machine.
+- A **runner** is the technical access link on a machine. It registers with the chief and advertises **capabilities**: installed agent CLIs, loaded credentials and their licensing mode, auth freshness, machine specs. The product should not present runner as a peer type to cloud server or personal computer; normally there is one runner per machine.
 - **Push semantics, pull transport**: the orchestrator assigns "task → runner X"; physically the runner long-polls for assignments and streams results back. Works behind NAT, no inbound ports. Timeouts/rejections surface to the orchestrator, which adapts (retry elsewhere, replan).
 - **Escalation channel** (first-class): any agent can file "missing credential / infra problem / harness limitation" → orchestrator grants, rejects, or escalates to the human inbox. These complaints are also valuable logs for improving the harness.
 - Post-MVP: hive provisions cloud-server machines itself (spin up a VM, install backends, inject credentials from the vault, enroll it).
@@ -129,11 +129,11 @@ GEPA-style prompt optimization (reflective mutation from execution traces + natu
 
 ## 11. Deployment & stack
 
-- **Control plane: one small always-on GCE VM** running docker-compose. That cloud server is also enrolled for API-key backends; the user's personal computer is enrolled for subscription-bound backends (e.g. Claude Max). Access via Tailscale (no public exposure, works from phone); no IAP/load-balancer ceremony in MVP.
+- **Chief: one small always-on GCE VM** running docker-compose. That cloud server is also enrolled for API-key backends; the user's personal computer is enrolled for subscription-bound backends (e.g. Claude Max). Access via Tailscale (no public exposure, works from phone); no IAP/load-balancer ceremony in MVP.
 - **State lives off-VM from day one**: **Firestore** for structured state (projects, tasks, questions, resources, episode index), **GCS** for blobs (orchestrator session backups, traces, archives). The VM is disposable: a fresh one re-attaches and resumes, losing at most an in-flight task. Secret Manager from day one.
-- **Monorepo** (`hive`): `control-plane/` (Python/FastAPI — supervisor, orchestrator invocations, Firestore/GCS, GitHub ops), `runner-agent/` (small Python daemon), `web/` (React + Vite + TypeScript SPA), `deploy/` (compose, VM bootstrap).
+- **Monorepo** (`hive`): `chief/` (Python/FastAPI — supervisor, orchestrator invocations, Firestore/GCS, GitHub ops), `runner-agent/` (small Python daemon), `web/` (React + Vite + TypeScript SPA), `deploy/` (compose, VM bootstrap).
 - **Kodo is reused as a library, not as the orchestration**: its raw primitives — backend sessions (Claude Code / Cursor / Codex / Gemini CLI wrappers with session persistence, token/cost parsing, malformed-output hardening), agent = prompt + session + budget, JSONL trace format. Hive builds its own supervisor, planning, distribution, inbox, and UI on top.
-- Migration path when product time comes: control-plane container → Cloud Run (min-instances 1), runners → real fleet, `gh` login → GitHub App, Tailscale → proper auth. All mechanical because everything is containerized and state is already in managed services.
+- Migration path when product time comes: chief container → Cloud Run (min-instances 1), runners → real fleet, `gh` login → GitHub App, Tailscale → proper auth. All mechanical because everything is containerized and state is already in managed services.
 
 ## 12. Open questions
 

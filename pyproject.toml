@@ -1,7 +1,7 @@
 [project]
 name = "hive"
 version = "0.1.0"
-description = "Continuous autonomous software development: control plane + runner"
+description = "Continuous autonomous software development: chief + runner"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115",

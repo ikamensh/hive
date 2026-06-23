@@ -202,7 +202,7 @@ def migrate_local_state(
     if leader := _live_leader(dest_store, workspace_id):
         holder = leader.get("holder", "unknown")
         raise RuntimeError(
-            f"refusing migration: control plane {holder!r} holds the leader lease "
+            f"refusing migration: chief {holder!r} holds the leader lease "
             f"for workspace {workspace_id!r}"
         )
     dest_blobs = GcsBlobStore(gcs_bucket.strip())
@@ -230,7 +230,7 @@ def migrate_local_state(
 
 
 def managed_state_doctor(config: Config) -> dict:
-    """Exercise Firestore + GCS without starting the control plane."""
+    """Exercise Firestore + GCS without starting the chief."""
     missing = managed_state_missing(config)
     checks: list[dict] = [
         {"name": "HIVE_GCP_PROJECT", "ok": "HIVE_GCP_PROJECT" not in missing},

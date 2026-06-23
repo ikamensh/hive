@@ -1,4 +1,4 @@
-"""Environment-driven configuration for the control plane."""
+"""Environment-driven configuration for the chief."""
 
 from __future__ import annotations
 

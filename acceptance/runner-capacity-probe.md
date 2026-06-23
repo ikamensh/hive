@@ -10,7 +10,7 @@ As an operator I can register and probe runner capacity so that Hive dispatches 
 - Pending work whose required backend or capability is unavailable remains `blocked: resources` and is not dispatched.
 
 ## Examples
-- Given a local runner is started against the control plane with a valid token
+- Given a local runner is started against the chief with a valid token
   When I open the Resources page
   Then I see the runner online with resource rows for its advertised backends
 - Given a backend is advertised but its CLI login has expired

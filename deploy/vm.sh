@@ -1,11 +1,11 @@
 #!/bin/bash
-# Operate the remote hive VM (control plane + runner). One place for the gcloud
+# Operate the remote hive VM (chief + runner). One place for the gcloud
 # coordinates so ops are short and repeatable. Override with HIVE_VM* env vars.
 #
-#   deploy/vm.sh status              # control plane + runner health
-#   deploy/vm.sh logs [control|runner] [N]   # journalctl tail (default: control, 50)
+#   deploy/vm.sh status              # chief + runner health
+#   deploy/vm.sh logs [chief|runner] [N]     # journalctl tail (default: chief, 50)
 #   deploy/vm.sh restart             # restart both services
-#   deploy/vm.sh tunnel [port]       # forward localhost:PORT -> control plane (bypasses Caddy auth)
+#   deploy/vm.sh tunnel [port]       # forward localhost:PORT -> chief (bypasses Caddy auth)
 #   deploy/vm.sh ssh [cmd...]        # ssh in, or run a one-off command
 set -euo pipefail
 
@@ -19,11 +19,11 @@ gssh() { gcloud compute ssh "$VM" --zone="$ZONE" --project="$PROJECT" --account=
 cmd=${1:-status}; shift || true
 case "$cmd" in
   status)
-    gssh --command 'echo "control: $(systemctl is-active hive-control) | runner: $(systemctl is-active hive-runner)"; curl -s -o /dev/null -w "health -> %{http_code}\n" localhost:8000' ;;
+    gssh --command 'echo "chief: $(systemctl is-active hive-chief) | runner: $(systemctl is-active hive-runner)"; curl -s -o /dev/null -w "health -> %{http_code}\n" localhost:8000' ;;
   logs)
-    svc=${1:-control}; n=${2:-50}; gssh --command "sudo journalctl -u hive-$svc --no-pager -n $n" ;;
+    svc=${1:-chief}; n=${2:-50}; gssh --command "sudo journalctl -u hive-$svc --no-pager -n $n" ;;
   restart)
-    gssh --command 'sudo systemctl restart hive-control hive-runner && echo restarted' ;;
+    gssh --command 'sudo systemctl restart hive-chief hive-runner && echo restarted' ;;
   tunnel)
     port=${1:-8000}; echo "-> http://localhost:$port (Ctrl-C to stop)"; gssh -- -L "$port:localhost:8000" -N ;;
   ssh)

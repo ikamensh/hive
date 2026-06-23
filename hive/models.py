@@ -44,14 +44,14 @@ class WorkspaceMembership(BaseModel):
 
 
 class Machine(BaseModel):
-    """A durable machine the user recognizes. Runner/control-plane processes
+    """A durable machine the user recognizes. Runner/chief processes
     are ephemeral; this record is what keeps offline machines visible."""
 
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
     name: str
     hostname: str = ""
-    kind: str = "unknown"  # process role: control-plane | runner | unknown
+    kind: str = "unknown"  # process role: chief | runner | unknown
     machine_type: str = ""  # human-facing host type: macbook | linux | win | ...
     os: str = ""
     arch: str = ""
@@ -384,7 +384,7 @@ class Task(BaseModel):
     session_handle: str = ""  # runner resumes this backend session when possible
     issue_number: int = 0  # issue solving: the issue this task resolves/reviews
     issue_doc: str = ""  # issue solving: full issue markdown (title+body+comments) -> .hive ISSUE.md
-    issue_attachments: list[str] = []  # issue solving: image filenames the runner fetches from the control plane
+    issue_attachments: list[str] = []  # issue solving: image filenames the runner fetches from the chief
     required_capabilities: list[str] = []  # testing: runner capabilities such as browser/docker
     backend: str = "cursor"  # kodo backend name: claude | cursor | codex | gemini-cli
     model: str = ""  # backend default when empty
@@ -738,7 +738,7 @@ class Feedback(BaseModel):
 class OrchestratorRun(BaseModel):
     """One orchestrator invocation's LLM usage. Recorded so the planner's own
     spend is visible and counts against the project budget (runner task cost is
-    tracked on Task; this is the control-plane side of the bill)."""
+    tracked on Task; this is the chief side of the bill)."""
 
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
@@ -786,7 +786,7 @@ class Checkout(BaseModel):
     "where does this project physically exist, and is any work there missing
     from the remote?" (see CONTEXT.md "Checkout"). One per (machine, repo).
 
-    The runner reports the git facts in its heartbeat; the control plane upserts
+    The runner reports the git facts in its heartbeat; the chief upserts
     this record. The remote is authoritative — a checkout is observed, not a
     source of truth. `drift()` is the signal that real work may live only here."""
 

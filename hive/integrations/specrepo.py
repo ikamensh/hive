@@ -1,4 +1,4 @@
-"""Spec-home repo access for the control plane.
+"""Spec-home repo access for the chief.
 
 The orchestrator reads the spec digest (mission, iteration, wiki) from a local
 shallow clone and writes distilled knowledge back via small commits. Auth uses

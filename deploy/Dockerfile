@@ -1,5 +1,5 @@
-# Control-plane image: FastAPI app + built web UI. Build from repo root:
-#   docker build -f deploy/Dockerfile -t hive-control .
+# Chief image: FastAPI app + built web UI. Build from repo root:
+#   docker build -f deploy/Dockerfile -t hive-chief .
 FROM node:22-slim AS webbuild
 WORKDIR /web
 COPY web/package*.json ./

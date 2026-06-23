@@ -2,7 +2,7 @@
 
 LLM transport is a callable `prompt -> response text`, so the engine runs
 identically under tests (scripted), locally (kodo CLI agents, see
-scripts/spec_critique.py), or later as control-plane tasks. Malformed model
+scripts/spec_critique.py), or later as chief tasks. Malformed model
 output raises — a critique run is cheap to redo and a clear error beats a
 silently empty report.
 """

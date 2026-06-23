@@ -1,7 +1,7 @@
 """Hive's machine-local config file.
 
 This is separate from the runtime ``Config`` object because the CLI and local
-control-plane API both need to read/write the durable machine preference file.
+chief API both need to read/write the durable machine preference file.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 
 
-# Keys hive will store for itself and apply when launching the control plane.
+# Keys hive will store for itself and apply when launching the chief.
 # Restricting the set keeps `config set` self-documenting and the file tidy.
 CONFIG_KEYS: dict[str, str] = {
     "HIVE_GH_TOKEN": "GitHub token for clone/push (auto-detected from `gh auth token`)",
@@ -22,8 +22,8 @@ CONFIG_KEYS: dict[str, str] = {
     "HIVE_GCP_PROJECT": "Firestore project for required managed runtime state",
     "HIVE_GCS_BUCKET": "GCS bucket for required managed blob state",
     "HIVE_RUNNER_TOKEN": "shared token runners present as X-Hive-Token",
-    "HIVE_URL": "control plane base URL the CLI sends commands to (client target)",
-    "HIVE_BASIC_AUTH": "user:pass for a control plane behind basic auth, e.g. Caddy (client)",
+    "HIVE_URL": "chief base URL the CLI sends commands to (client target)",
+    "HIVE_BASIC_AUTH": "user:pass for a chief behind basic auth, e.g. Caddy (client)",
     "HIVE_TOKEN": "bearer token for app-level (github) auth when driving a remote (client)",
     "HIVE_AUTOSTART_RUNNER": "true/false: start a local runner with `hive run`",
     "HIVE_AUTH_MODE": "auth mode: dev | github",
@@ -32,7 +32,7 @@ CONFIG_KEYS: dict[str, str] = {
     "HIVE_GITHUB_CLIENT_SECRET": "GitHub OAuth app client secret",
     "HIVE_AUTH_SECRET": "secret used to sign Hive browser sessions",
     "HIVE_PUBLIC_URL": "public base URL for OAuth callbacks",
-    "HIVE_WORKSPACE_ID": "active workspace ID for this control-plane process",
+    "HIVE_WORKSPACE_ID": "active workspace ID for this chief process",
     "HIVE_WORKSPACE_NAME": "display name for the active workspace",
     "HIVE_MACHINE_ID": "stable ID for this machine",
     "HIVE_MACHINE_NAME": "display name for this machine",

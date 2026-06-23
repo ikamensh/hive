@@ -103,7 +103,7 @@ def test_register_auto_probes_new_resource_and_records_discovery():
     assert len(tasks) == 1
     assert tasks[0].kind == TaskKind.probe
     assert tasks[0].runner_id == rid
-    # A probe carries a sentinel, not a control-plane filesystem path: the runner
+    # A probe carries a sentinel, not a chief filesystem path: the runner
     # builds its own local probe repo, so a runner on a remote machine can probe.
     assert tasks[0].repo == "probe:local"
 

@@ -1,6 +1,6 @@
 """Structured result contracts for runner-executed coding agents.
 
-The worker agent reports what happened; Hive's control plane still owns the
+The worker agent reports what happened; Hive's chief still owns the
 state transition.  A task kind can opt into a Pydantic result model, which the
 runner asks the agent to write to `.hive/result.json`.  The same warm session is
 given validation errors and a chance to repair the JSON before the runner falls

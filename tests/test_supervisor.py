@@ -240,7 +240,7 @@ def test_cooldown_resource_not_used():
     assert sup.refresh_state(project) == ProjectState.blocked_resources
 
 
-def test_leader_lease_excludes_second_control_plane():
+def test_leader_lease_excludes_second_chief():
     store = MemoryStore()
     sup1, sup2 = make_supervisor(store), make_supervisor(store)
     sup2.holder = "other-host:1"  # same process → same default holder; force a distinct one
@@ -248,7 +248,7 @@ def test_leader_lease_excludes_second_control_plane():
     sup1.acquire_leadership()  # renewal by the owner is fine
     try:
         sup2.acquire_leadership()
-        raise AssertionError("second control plane must be refused")
+        raise AssertionError("second chief must be refused")
     except RuntimeError as exc:
         assert sup1.holder in str(exc)
     store._lease["expires"] = time.time() - 1  # leader died; lease lapsed

@@ -903,7 +903,7 @@ class TaskResultProcessor:
                 self.store,
                 f"Repair testing refresh for {project.name}",
                 instructions=(
-                    "Hive's test-refresh task finished, but the control plane could not "
+                    "Hive's test-refresh task finished, but the chief could not "
                     "sync/reconcile `acceptance/` afterward.\n\n"
                     f"Task: `{task.id}`\n\nError:\n\n```\n{type(exc).__name__}: {str(exc)[:1500]}\n```"
                 ),

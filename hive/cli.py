@@ -6,7 +6,7 @@ web UI does.
 
 Where it sends commands and how it authenticates is a *client target*:
 HIVE_URL (default http://localhost:8000), HIVE_BASIC_AUTH="user:pass" for a
-control plane behind basic auth (Caddy), and HIVE_TOKEN for app-level (github)
+chief behind basic auth (Caddy), and HIVE_TOKEN for app-level (github)
 auth. Each can be a one-off env var or persisted with `hive config set …`
 (env wins, so ad-hoc targeting overrides the saved default). `hive whoami`
 resolves the target and reports the authenticated identity.
@@ -36,7 +36,7 @@ from hive.config.file import (
 UVICORN_GRACEFUL_SHUTDOWN_S = 6
 
 # Keys that describe where the CLI *sends* commands and how it authenticates,
-# as opposed to the secrets a control plane *runs* with. They are persisted in
+# as opposed to the secrets a chief *runs* with. They are persisted in
 # the same store but never injected into a `hive run` server process.
 CLIENT_KEYS = ("HIVE_URL", "HIVE_BASIC_AUTH", "HIVE_TOKEN")
 
@@ -44,7 +44,7 @@ DEFAULT_HIVE_URL = "http://localhost:8000"
 
 
 class Target(NamedTuple):
-    """A resolved control-plane connection: where + how to authenticate."""
+    """A resolved chief connection: where + how to authenticate."""
 
     base_url: str
     auth: tuple[str, str] | None  # basic auth (Caddy perimeter)
@@ -96,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="hive", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("run", help="launch the local control plane (auto-detects tokens)")
+    p = sub.add_parser("run", help="launch the local chief (auto-detects tokens)")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--reload", action="store_true", help="auto-reload on code changes")
@@ -130,7 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser(
         "whoami",
-        help="show the resolved control-plane target and current auth identity",
+        help="show the resolved chief target and current auth identity",
     )
 
     p = sub.add_parser("projects", help="list projects")
@@ -252,7 +252,7 @@ def _csv(value: str) -> list[str]:
 
 
 def prepare_run_env(env: dict[str, str], stored: dict[str, str]) -> list[str]:
-    """Resolve the tokens/settings the control plane will run with, mutating
+    """Resolve the tokens/settings the chief will run with, mutating
     `env`, and return human-readable lines (with provenance) describing them.
 
     Precedence, highest first: hive's own `stored` config, then ambient env,
@@ -263,7 +263,7 @@ def prepare_run_env(env: dict[str, str], stored: dict[str, str]) -> list[str]:
 
     Client-target keys (`CLIENT_KEYS`) are skipped: they describe where the CLI
     *sends* commands, not how this server *runs*, so they never leak into the
-    control-plane process."""
+    chief process."""
     stored = {k: v for k, v in stored.items() if v and k not in CLIENT_KEYS}
     for key, value in stored.items():
         env[key] = value
@@ -430,12 +430,12 @@ def _prepare_web_bundle(skip_build: bool) -> None:
     _run_checked(["npm", "run", "build"], web_dir, "npm run build")
 
 
-def _run_control_plane(args: argparse.Namespace) -> None:
+def _run_chief(args: argparse.Namespace) -> None:
     import uvicorn
 
-    from hive.runner.local import local_control_plane_url
+    from hive.runner.local import local_chief_url
 
-    os.environ.setdefault("HIVE_PUBLIC_URL", local_control_plane_url(args.host, args.port))
+    os.environ.setdefault("HIVE_PUBLIC_URL", local_chief_url(args.host, args.port))
     for line in prepare_run_env(os.environ, load_stored_config()):
         print(f"  {line}")
     if missing := _managed_state_missing(os.environ):
@@ -452,7 +452,7 @@ def _run_control_plane(args: argparse.Namespace) -> None:
         )
         raise SystemExit(2)
     _prepare_web_bundle(skip_build=args.no_web_build)
-    print(f"starting hive control plane on {args.host}:{args.port}\n")
+    print(f"starting hive chief on {args.host}:{args.port}\n")
     try:
         uvicorn.run(
             "hive.api:production_app",
@@ -464,7 +464,7 @@ def _run_control_plane(args: argparse.Namespace) -> None:
         )
     except RuntimeError as exc:
         if "leader lease" in str(exc):
-            print(f"Hive control plane did not start: {exc}", file=sys.stderr)
+            print(f"Hive chief did not start: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
         raise
 
@@ -647,7 +647,7 @@ def main(argv: list[str] | None = None) -> None:
 
     args = build_parser().parse_args(argv)
     if args.command == "run":
-        _run_control_plane(args)
+        _run_chief(args)
         return
     if args.command == "config":
         _run_config(args)
@@ -676,7 +676,7 @@ def main(argv: list[str] | None = None) -> None:
         if code in (401, 403):
             print(
                 f"Not authorized at {target.base_url} (HTTP {code}). Set credentials with "
-                "`hive config set HIVE_BASIC_AUTH user:pass` (control plane behind basic auth) "
+                "`hive config set HIVE_BASIC_AUTH user:pass` (chief behind basic auth) "
                 "or `hive config set HIVE_TOKEN …` (app-level auth).",
                 file=sys.stderr,
             )

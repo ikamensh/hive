@@ -1,4 +1,4 @@
-"""FastAPI control plane: web API + runner protocol + app wiring.
+"""FastAPI chief: web API + runner protocol + app wiring.
 
 Build with `create_app()` for production (env config) or pass explicit pieces
 in tests. Web endpoints are unauthenticated (the service sits behind
@@ -26,7 +26,7 @@ from hive.integrations.auth import (
     SESSION_TTL_S,
     AuthContext,
     AuthManager,
-    ensure_control_plane_machine,
+    ensure_chief_machine,
     ensure_machine,
 )
 from hive.runner.backends import probe_instructions
@@ -290,7 +290,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     app = FastAPI(title="hive")
     auth = AuthManager(store, config)
     auth.validate_config()
-    control_machine = ensure_control_plane_machine(store, config)
+    chief_machine = ensure_chief_machine(store, config)
 
     def current(request: Request) -> AuthContext:
         return auth.require(request)
@@ -455,7 +455,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
         Production has HIVE_GH_TOKEN; tests and local smoke runs often use a
         filesystem path. Other remotes can still be handled by the orchestrator
-        via commit_to_spec, but the control plane only auto-writes when it has
+        via commit_to_spec, but the chief only auto-writes when it has
         an obvious write path.
         """
         url = project.spec_repo
@@ -704,7 +704,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             store,
             f"Repair spec logging for {project.name}",
             instructions=(
-                "Hive saved a clarification answer in the control-plane DB, but could not "
+                "Hive saved a clarification answer in the chief DB, but could not "
                 "append the raw answer to the spec repo input log.\n\n"
                 f"Question: `{question.id}`\n\n"
                 f"Spec repo: `{project.spec_repo}`\n\n"
@@ -718,8 +718,8 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @contextlib.asynccontextmanager
     async def lifespan(_app):
-        ensure_control_plane_machine(store, config)
-        supervisor.acquire_leadership()  # raises if another control plane is live
+        ensure_chief_machine(store, config)
+        supervisor.acquire_leadership()  # raises if another chief is live
         if config.autostart_runner and local_runner is not None:
             status = local_runner.start()
             log.info(
@@ -743,7 +743,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     app.state.supervisor = supervisor
     app.state.store = store
     app.state.auth = auth
-    app.state.machine = control_machine
+    app.state.machine = chief_machine
 
     def active_probe_task(resource: Resource) -> Task | None:
         if not resource.last_probe_task_id:
@@ -1501,14 +1501,14 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if can_write_spec_repo(project):
             try:
                 input_log_note = (
-                    "Control plane already appended the raw answer to "
+                    "Chief already appended the raw answer to "
                     f"{record_answer_input_log(project, question, body.answer, answered_at)}.\n"
                 )
             except Exception as exc:
                 log.warning("failed to append question %s to spec input-log: %s", question.id, exc)
                 file_spec_log_failure(project, question, exc)
                 input_log_note = (
-                    "Control plane could not append the raw answer to input-log automatically; "
+                    "Chief could not append the raw answer to input-log automatically; "
                     "a human todo was filed with the write error.\n"
                 )
         question.status = QuestionStatus.answered
@@ -1615,7 +1615,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @app.get("/api/tasks/{task_id}/attachments/{name}")
     def get_attachment(task_id: str, name: str, workspace_id: str = Depends(runner_auth)):
-        """Runner-auth: serve an issue's image (downloaded on the control plane at
+        """Runner-auth: serve an issue's image (downloaded on the chief at
         scan time) so the worker can materialize `.hive/issue-<n>/attachments/`
         without its own GitHub credentials."""
         task = store.get(Task, task_id)
@@ -2036,7 +2036,7 @@ def production_app() -> FastAPI:
     blobs = make_blob_store(config)
     from hive.control.orchestrator import Orchestrator
 
-    machine = ensure_control_plane_machine(store, config)
+    machine = ensure_chief_machine(store, config)
     orchestrator = Orchestrator(store, blobs, config)
     supervisor = Supervisor(
         store,
