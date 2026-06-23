@@ -153,6 +153,7 @@ export default function ProjectPage() {
   };
 
   const needsStart = false;
+  const showInbox = inboxCount > 0;
   const toggleIssueSelection = (issueNumber: number) => {
     setSelectedIssueNumbers((numbers) =>
       numbers.includes(issueNumber)
@@ -358,7 +359,7 @@ export default function ProjectPage() {
                 : drill === "none"
                   ? "columns-launchpad"
                   : ""
-            }`}
+            }${showInbox ? "" : " no-inbox"}`}
           >
             {drill === "issues" ? (
               <section className="col col-ws col-issues-main">
@@ -423,7 +424,7 @@ export default function ProjectPage() {
             ) : (
               launchpadHome
             )}
-            {needsYouCol}
+            {showInbox && needsYouCol}
             {activityCol}
           </div>
         </>

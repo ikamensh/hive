@@ -1479,6 +1479,16 @@ textarea:focus {
 .columns-launchpad {
   grid-template-columns: minmax(440px, 1.7fr) minmax(280px, 0.95fr) minmax(320px, 1fr);
 }
+/* Empty per-project inbox: drop its track so main + activity get the room. */
+.columns.no-inbox {
+  grid-template-columns: 280px minmax(380px, 1fr);
+}
+.columns-issues.no-inbox {
+  grid-template-columns: minmax(420px, 1.6fr) minmax(340px, 1fr);
+}
+.columns-launchpad.no-inbox {
+  grid-template-columns: minmax(440px, 1.8fr) minmax(320px, 1fr);
+}
 @media (max-width: 1100px) {
   .columns,
   .columns-issues,
