@@ -132,6 +132,28 @@ def test_build_adapter_resolves_provider_and_guards_credentials():
         build_adapter(_config(orch_provider="gemini", orch_model="gemini-3"))
 
 
+# -- OpenAI auto-select (no network) -----------------------------------------
+
+def test_select_model_skips_responses_only_pro_tier():
+    """Auto-select must ignore the "-pro" reasoning tier: it sorts newest but is
+    Responses-API-only, so it 404s on /chat/completions ("not a chat model").
+    Regression for the orchestrator picking gpt-5.5-pro and failing to plan."""
+    from hive.llm.openai import OpenAIAdapter
+
+    class _Scripted(OpenAIAdapter):
+        def _get(self, path):
+            assert path == "/models"
+            return {"data": [
+                {"id": "gpt-5.5-pro", "created": 300},      # newest, but Responses-only
+                {"id": "gpt-5.5", "created": 200},          # newest real chat model
+                {"id": "gpt-5.4", "created": 100},
+                {"id": "gpt-4o-realtime-preview", "created": 250},  # non-chat, skipped
+            ]}
+
+    adapter = _Scripted(api_key="k", base_url="https://api.openai.com/v1")
+    assert adapter._select_model() == "gpt-5.5"
+
+
 # -- Gemini adapter translation (no network) ---------------------------------
 
 class _FakeFunctionCall:

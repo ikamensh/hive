@@ -7,7 +7,11 @@ from __future__ import annotations
 from hive.llm.core import Completion, ToolCall, ToolResult, ToolSet, Usage
 
 # Substrings marking non-chat models we must not auto-select for tool calling.
+# "-pro" is the reasoning tier (gpt-5.x-pro, o*-pro): Responses-API-only, so it
+# 404s on /chat/completions with "not a chat model" — and it sorts newest, so it
+# would otherwise win the auto-select.
 MODEL_SKIP = (
+    "-pro",
     "audio",
     "dall-e",
     "embedding",
