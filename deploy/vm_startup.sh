@@ -98,7 +98,10 @@ WEB_PASS=$(secret hive-web-password)
 WEB_HASH=$(caddy hash-password --plaintext "$WEB_PASS")
 cat > /etc/caddy/Caddyfile <<EOF
 hive.tachyon-ai.eu, hive.34-62-218-54.sslip.io {
-    basic_auth {
+    # The CI webhook is its own bearer-authed endpoint (HIVE_GITHUB_WEBHOOK_SECRET),
+    # so GitHub can reach it without the site's basic-auth password.
+    @protected not path /api/ci/webhook
+    basic_auth @protected {
         ilya $WEB_HASH
     }
     reverse_proxy localhost:8000
