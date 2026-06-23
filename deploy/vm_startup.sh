@@ -57,6 +57,7 @@ CURSOR_API_KEY=$(secret_optional hive-cursor-api-key)
 HIVE_GH_TOKEN=$(secret hive-gh-token)
 GH_TOKEN=$(secret hive-gh-token)
 HIVE_RUNNER_TOKEN=$(secret hive-runner-token)
+HIVE_GITHUB_WEBHOOK_SECRET=$(secret_optional hive-github-webhook-secret)
 EOF
 chmod 600 /etc/hive/env
 
