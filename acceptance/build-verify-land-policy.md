@@ -6,7 +6,9 @@ As an operator I can watch Hive build, verify, and land work according to policy
 - Tasks for different repos may run in parallel when resources allow.
 - Every work task is followed by an independent verify task that checks actual behavior against acceptance criteria and rejects unjustified bloat.
 - A rejected verify queues a fix or parks with a clear question after the bounded retry limit.
-- PR mode lands work on a workstream branch with a PR, while direct-push mode follows the configured landing policy and still requires accepted verification before the goal can complete.
+- PR mode keeps each workstream's work on its own branch (`hive/<ws>`) with a PR, where the verify task reviews that branch before merging.
+- Direct-push mode lands work on the default branch immediately, using verification as an after-the-fact safety net where a verification rejection queues a fix task.
+- Both modes are gated at the finish line: `mark_goal_complete` is rejected in code unless every done workstream's most recent task is a verify that ACCEPTed.
 - `idle: goal complete` is reachable only when there are no active tasks, pending tasks, open questions, or unaccepted completed workstreams.
 
 ## Examples
@@ -19,6 +21,6 @@ As an operator I can watch Hive build, verify, and land work according to policy
 - Given the project autonomy is set to PR mode
   When a worker finishes a change
   Then the result is visible on a Hive workstream branch or PR instead of silently landing as an unchecked default-branch change
-
-## Questions
-- `iteration.md` says direct-push mode requires verification before pushing to the target branch, while `wiki/architecture.md` says `direct_push` lands on the default branch immediately and verification is an after-the-fact safety net. Which ordering should acceptance enforce?
+- Given the project autonomy is set to direct-push mode
+  When a worker finishes a change
+  Then the result is pushed directly to the default branch immediately, and a following verify task reviews the default branch after-the-fact

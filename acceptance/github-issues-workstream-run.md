@@ -9,11 +9,15 @@ As an operator I can trigger a GitHub issues workstream run so that Hive fixes s
 - At most one issue in a GitHub issues workstream is resolving or reviewing at a time, and the lowest selected queued issue starts first.
 - A blocked resolve posts a GitHub comment explaining the missing clarification or unreproducible bug and makes no code change.
 - A fixed issue gets a fresh independent review; accept merges into the default branch and closes the issue, while reject or landing failure leaves the default branch untouched and needs attention.
+- Cancelling an issue run signals delivered running tasks to terminate and hard-cancels any undelivered tasks, matching testing-episode cancellation semantics, and ensures no nested live workstreams are left running.
 
 ## Examples
 - Given a project has a GitHub issues workstream for a member repo
   When I open the project Issues view
   Then I can preflight, sync, or start a manual issue run without changing the project's source mode
+- Given an issue run is cancelled while a resolve or review task is executing
+  When the cancellation is processed
+  Then the executing task is terminated, undelivered tasks are hard-cancelled, and no further tasks in the run are dispatched
 - Given I select issues 2 through 4 for a run
   When issue 5 is opened upstream during the scan
   Then issue 5 is visible in the workstream but is not started as part of the selected run

@@ -8,6 +8,7 @@ As an operator I can start Hive locally against managed state so that my MacBook
 - `hive projects`, `hive resources`, and the web Resources page report the same managed-state projects, runners, backend resources, cooldowns, and human todos.
 - If the local API is unreachable, the CLI and web UI show a clear unreachable or error state instead of stale successful data.
 - A second live chief against the same workspace is refused by the leader lease instead of running concurrently.
+- A restarted chief or runner recovers gracefully from persisted state: the restarted chief reloads projects, tasks, and resources, in-flight tasks are requeued or failed with an event, and the orchestrator history can cold-start from the spec digest.
 
 ## Examples
 - Given the VM chief is stopped or its leader lease has expired
@@ -22,3 +23,6 @@ As an operator I can start Hive locally against managed state so that my MacBook
 - Given another chief still owns the workspace leader lease
   When I try to start a local chief against that workspace
   Then startup fails with the current leader information and no second supervisor begins dispatching work
+- Given the chief process is restarted while tasks are in-flight
+  When the chief boots up
+  Then it reloads all projects, tasks, and resources from the managed state, requeues or fails in-flight tasks with a system event, and cold-starts its orchestrator from the spec digest

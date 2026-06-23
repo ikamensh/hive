@@ -12,11 +12,16 @@ As an operator I can run a testing episode from acceptance stories so that Hive 
 - Suspected bugs require independent reproduction before Hive files or updates a GitHub issue.
 - UX-smell findings require independent adjudication before filing and may be recorded as constrained or rejected instead.
 - The project UI shows story status, stale status, achieved fidelity, evidence, and linked issues.
+- A sweep can return `SWEEP: BLOCKED` or structured `outcome: blocked`; Hive escalates the blocked sweep result with the story, task, summary, output, and artifacts as a concrete human todo or attention item instead of silently failing or blocking without context.
+- Cancelling an episode signals delivered running tasks to terminate, hard-cancels undelivered running tasks, and suppresses/parks follow-on testing tasks so that active runners do not continue executing sweep tasks.
 
 ## Examples
 - Given `acceptance/` is missing in a spec home
   When a story refresh runs
   Then Hive creates a bounded first backlog of core user-facing stories from the intention artifacts only
+- Given an episode cancellation is requested while a sweep task is executing on a runner
+  When the cancellation is processed
+  Then the executing task receives a termination signal, any undelivered sweep tasks are cancelled, and no further testing tasks are dispatched to polling runners
 - Given a sweep finds behavior that violates an acceptance example
   When an independent reproduction confirms it in a fresh environment
   Then Hive files or updates one deduplicated GitHub issue with the story key, repro steps, oracle, evidence, and trace links
