@@ -3037,7 +3037,6 @@ a.needs-scope:hover { color: var(--accent); }
 
 .home-head { display: flex; align-items: center; gap: 18px; }
 .home-head h1 { font-size: 22px; letter-spacing: 0.01em; font-weight: 600; }
-.home-head button { margin-left: auto; }
 
 /* --- vital-signs tiles --- */
 .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
@@ -3082,6 +3081,42 @@ a.needs-scope:hover { color: var(--accent); }
   transition: border-color 0.15s;
 }
 .home-project:hover { border-left-color: var(--accent); }
+.home-project-new {
+  grid-template-columns: auto minmax(0, 1fr);
+  width: 100%;
+  min-height: 72px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  letter-spacing: 0;
+}
+.home-project-new:hover:not(:disabled) {
+  border-color: var(--line);
+  border-left-color: var(--accent);
+  box-shadow: none;
+  filter: none;
+}
+.home-project-new .hp-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.hp-new-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  color: var(--accent);
+  font-family: var(--display);
+  font-size: 19px;
+  line-height: 1;
+}
+.home-project-new:hover .hp-new-icon {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
 .hp-content {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
