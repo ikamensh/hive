@@ -419,6 +419,31 @@ def _git(args: list[str], cwd: Path, timeout: float = 120.0) -> subprocess.Compl
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
 
 
+def ensure_probe_repo() -> Path:
+    """A throwaway local git repo the runner builds itself for usability probes.
+
+    Probes only need *some* clean git repo to prove a backend can run and leave
+    the tree tidy. Building it locally — rather than cloning a path on the
+    control plane — means a probe needs no shared filesystem and no network, so
+    it works for any runner, including ones on machines remote from the control
+    plane (the normal case for Hive)."""
+    path = WORKDIR / "agent-probe-repo"
+    path.mkdir(parents=True, exist_ok=True)
+    if not (path / ".git").exists():
+        _git(["init", "-b", "main"], path, 60)
+        _git(["config", "user.email", "hive-probe@example.invalid"], path)
+        _git(["config", "user.name", "Hive Probe"], path)
+        (path / "README.md").write_text(
+            "# Hive agent probe\n\nThis repository is only for backend usability checks.\n"
+        )
+        _git(["add", "README.md"], path)
+        _git(["commit", "-m", "Initial probe repo"], path)
+    else:  # reuse across probes, but always start from a clean tree
+        _git(["reset", "--hard"], path, 60)
+        _git(["clean", "-fd"], path, 60)
+    return path
+
+
 def _checkout_facts(repo_dir: Path) -> dict | None:
     """Read the git drift facts for one checkout: origin URL, HEAD, branch,
     ahead/behind vs its upstream, and whether the tree is dirty. Best-effort —
@@ -584,16 +609,20 @@ def execute(task: dict, headers: dict, auth) -> dict:
     from kodo import log as kodo_log
     from kodo.agent import Agent
 
-    try:
-        project_dir = checkout(
-            task["repo"],
-            task.get("branch", ""),
-            fresh_branch=bool(task.get("fresh_branch")),
-        )
-    except CheckoutError as exc:
-        return {"text": str(exc), "is_error": True}
-    except subprocess.SubprocessError as exc:
-        return {"text": f"checkout failed: {exc}", "is_error": True}
+    if task["kind"] == "probe":
+        # Probes run in a self-built local repo, never a control-plane path.
+        project_dir = ensure_probe_repo()
+    else:
+        try:
+            project_dir = checkout(
+                task["repo"],
+                task.get("branch", ""),
+                fresh_branch=bool(task.get("fresh_branch")),
+            )
+        except CheckoutError as exc:
+            return {"text": str(exc), "is_error": True}
+        except subprocess.SubprocessError as exc:
+            return {"text": f"checkout failed: {exc}", "is_error": True}
     _reset_task_scratch(project_dir)
     if task["kind"] == "preflight":
         with _git_auth_environment(task["repo"]):

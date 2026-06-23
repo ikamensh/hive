@@ -13,7 +13,6 @@ import datetime
 import logging
 import os
 import re
-import subprocess
 import time
 from pathlib import Path
 
@@ -127,7 +126,9 @@ log = logging.getLogger("hive.api")
 
 RUNNER_POLL_WAIT_S = 5.0
 RUNNER_POLL_SLEEP_S = 1.0
-PROBE_REPO_DIR = "agent-probe-repo"
+# Probe tasks carry this sentinel instead of a real repo: the runner builds its
+# own local probe repo (works for remote runners, no shared filesystem).
+PROBE_REPO = "probe:local"
 
 
 def _iso_utc(epoch: float) -> str:
@@ -283,19 +284,6 @@ class ResourcePatch(BaseModel):
 
 class LocalRunnerPatch(BaseModel):
     autostart: bool
-
-
-def _ensure_probe_repo(data_dir: Path) -> Path:
-    repo = data_dir / PROBE_REPO_DIR
-    repo.mkdir(parents=True, exist_ok=True)
-    if not (repo / ".git").exists():
-        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, timeout=60)
-        subprocess.run(["git", "config", "user.email", "hive-probe@example.invalid"], cwd=repo, check=True)
-        subprocess.run(["git", "config", "user.name", "Hive Probe"], cwd=repo, check=True)
-        (repo / "README.md").write_text("# Hive agent probe\n\nThis repository is only for backend usability checks.\n")
-        subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, timeout=60)
-        subprocess.run(["git", "commit", "-m", "Initial probe repo"], cwd=repo, check=True, timeout=60)
-    return repo
 
 
 def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_runner=None) -> FastAPI:
@@ -778,13 +766,12 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if task := active_probe_task(resource):
             return task, resource
 
-        repo = _ensure_probe_repo(Path(config.data_dir or "/tmp/hive-data"))
         task = store.put(
             Task(
                 workspace_id=resource.workspace_id,
                 project_id="",
                 workstream_id="",
-                repo=str(repo),
+                repo=PROBE_REPO,  # sentinel; the runner builds its own local probe repo
                 kind=TaskKind.probe,
                 instructions=probe_instructions(resource.backend),
                 backend=resource.backend,

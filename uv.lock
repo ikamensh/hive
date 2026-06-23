@@ -1125,7 +1125,7 @@ requires-dist = [
     { name = "google-cloud-storage", specifier = ">=2.18" },
     { name = "google-genai", specifier = ">=1.0" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "kodo-agent", specifier = ">=0.5.0" },
+    { name = "kodo-agent", specifier = ">=0.5.1" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
@@ -1487,7 +1487,7 @@ wheels = [
 
 [[package]]
 name = "kodo-agent"
-version = "0.5.0"
+version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "chardet" },
@@ -1503,9 +1503,9 @@ dependencies = [
     { name = "summarization-pydantic-ai" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/87/18/7bf052b44fa4e85d539af0df4cb0e8565e84e1c562deda2643aba065fee7/kodo_agent-0.5.0.tar.gz", hash = "sha256:594e303aa0d956fcea33d17a1d1ac319351bafbdecf50e0d01fc5c342655b8b7", size = 375263 }
+sdist = { url = "https://files.pythonhosted.org/packages/0c/a4/3d7d3c675b80ece7bf558cbdc37048f93eee3f1700132af83b8e7d093941/kodo_agent-0.5.1.tar.gz", hash = "sha256:f037b184133a91c003d060141b2b9e79a35810e7cb6a096e1b81c3dbb0d97e2a", size = 382936 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/35/6e/f6f3705b623a2a9409c3521f882b4985b2ea7f36583ca5d61f06ede1d4a9/kodo_agent-0.5.0-py3-none-any.whl", hash = "sha256:4dc3ddd250b63f370304a5636f522c5ee87d3b961367cd76ea63338cae17e9b4", size = 358316 },
+    { url = "https://files.pythonhosted.org/packages/e9/94/324368bdd5dfb4b62fd065fb6f176d010f356c7b46647d38795c8fcc4085/kodo_agent-0.5.1-py3-none-any.whl", hash = "sha256:b8659c7869eb5f54cc10d31e6317c2093c200329500fdafe70ddf49810a00ecb", size = 361906 },
 ]
 
 [[package]]
