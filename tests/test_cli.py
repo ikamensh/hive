@@ -310,6 +310,11 @@ def _fake_gh(monkeypatch, token):
                         lambda *a, **k: subprocess.CompletedProcess(a, rc, stdout=token, stderr=""))
 
 
+def _clear_managed_state_env(monkeypatch):
+    for key in ("HIVE_GCP_PROJECT", "HIVE_GCS_BUCKET"):
+        monkeypatch.delenv(key, raising=False)
+
+
 def test_prepare_run_env_extracts_gh_token(monkeypatch):
     _fake_gh(monkeypatch, "ghp_abc\n")
     env = {"OPENAI_API_KEY": "sk-x"}
@@ -368,6 +373,7 @@ def test_run_chief_requires_managed_state(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
     monkeypatch.setattr("hive.cli.load_stored_config", lambda: {})
     monkeypatch.setenv("HIVE_DATA_DIR", str(tmp_path))
+    _clear_managed_state_env(monkeypatch)
 
     from hive.cli import main
 
@@ -375,7 +381,10 @@ def test_run_chief_requires_managed_state(monkeypatch, tmp_path, capsys):
         main(["run", "--host", "127.0.0.1", "--port", "8765"])
 
     assert exc.value.code == 2
-    assert "Hive requires managed state" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "Hive requires managed state" in err
+    assert "HIVE_GCP_PROJECT" in err
+    assert "HIVE_GCS_BUCKET" in err
 
 
 def test_run_chief_caps_graceful_shutdown(monkeypatch, tmp_path, capsys):
@@ -516,6 +525,23 @@ def test_doctor_storage_uses_managed_state_config(monkeypatch, capsys):
     assert shown["ok"] is True
     assert shown["gcp_project"] == "proj"
     assert shown["gcs_bucket"] == "bucket"
+
+
+def test_doctor_storage_reports_missing_managed_state(monkeypatch, capsys):
+    _fake_gh(monkeypatch, "")
+    monkeypatch.setattr("hive.cli.load_stored_config", lambda: {})
+    _clear_managed_state_env(monkeypatch)
+
+    from hive.cli import main
+
+    with pytest.raises(SystemExit) as exc:
+        main(["doctor", "storage"])
+
+    assert exc.value.code == 1
+    shown = __import__("json").loads(capsys.readouterr().out)
+    assert shown["ok"] is False
+    assert "HIVE_GCP_PROJECT" in shown["error"]
+    assert "HIVE_GCS_BUCKET" in shown["error"]
 
 
 def test_migrate_local_state_command(monkeypatch, tmp_path, capsys):
