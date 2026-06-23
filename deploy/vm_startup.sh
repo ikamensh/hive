@@ -10,13 +10,9 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y git curl ca-certificates gnupg docker.io
 
-# docker compose v2 plugin (no Debian package)
-if ! docker compose version >/dev/null 2>&1; then
-  mkdir -p /usr/local/lib/docker/cli-plugins
-  curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" \
-    -o /usr/local/lib/docker/cli-plugins/docker-compose
-  chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-fi
+# docker.io stays installed for the runner's `docker` capability, but the
+# control plane runs bare (systemd) below — no image build in the deploy loop.
+# `deploy/Dockerfile` + `deploy/compose.yaml` remain for a future stability mode.
 
 # --- gh CLI ---
 if ! command -v gh >/dev/null; then
@@ -98,12 +94,34 @@ EOF
 systemctl enable --now caddy
 systemctl reload caddy || systemctl restart caddy
 
-# --- control plane (docker compose) ---
-cd /opt/hive
-docker compose -f deploy/compose.yaml up -d --build
+# --- python env (shared by the control plane + runner) ---
+/usr/local/bin/uv sync --directory /opt/hive --frozen --no-dev
+
+# --- web UI bundle (served statically by the bare control plane) ---
+(cd /opt/hive/web && npm ci && npm run build)
+
+# --- control plane (bare, systemd) ---
+cat > /etc/systemd/system/hive-control.service <<EOF
+[Unit]
+Description=hive control plane
+After=network-online.target
+[Service]
+EnvironmentFile=/etc/hive/env
+Environment=HOME=/root
+Environment=HIVE_WEB_DIST=/opt/hive/web/dist
+WorkingDirectory=/opt/hive
+ExecStart=/opt/hive/.venv/bin/uvicorn --factory hive.api:production_app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now hive-control
+systemctl restart hive-control
 
 # --- runner (bare, systemd) ---
-/usr/local/bin/uv sync --directory /opt/hive --frozen --no-dev
 cat > /etc/systemd/system/hive-runner.service <<EOF
 [Unit]
 Description=hive runner
