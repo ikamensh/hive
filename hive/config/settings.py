@@ -25,6 +25,7 @@ class Config:
     openai_base_url: str = "https://api.openai.com/v1"
     issue_backend: str = "codex"
     issue_model: str = ""  # empty = let the backend/CLI use its current configured default
+    github_webhook_secret: str = ""  # HMAC secret for the CI webhook; empty = webhook disabled
     test_refresh_backend: str = "codex"
     test_refresh_model: str = ""
     test_sweep_backend: str = "codex"
@@ -68,6 +69,7 @@ class Config:
             ),
             issue_backend=os.environ.get("HIVE_ISSUE_BACKEND", "codex"),
             issue_model=os.environ.get("HIVE_ISSUE_MODEL", ""),
+            github_webhook_secret=os.environ.get("HIVE_GITHUB_WEBHOOK_SECRET", ""),
             test_refresh_backend=os.environ.get("HIVE_TEST_REFRESH_BACKEND", "codex"),
             test_refresh_model=os.environ.get("HIVE_TEST_REFRESH_MODEL", ""),
             test_sweep_backend=os.environ.get("HIVE_TEST_SWEEP_BACKEND", "codex"),

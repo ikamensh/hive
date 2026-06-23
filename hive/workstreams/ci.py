@@ -163,33 +163,36 @@ def ci_issue_title(status: CiStatus) -> str:
     return f"[{CI_LABEL}] CI failing on {status.branch} ({status.sha[:7]})"
 
 
-def ci_issue_body(status: CiStatus) -> str:
+def ci_issue_body(status: CiStatus, details: str = "") -> str:
     checks = "\n".join(
         f"- {c['name']}" + (f" — {c['url']}" if c.get("url") else "")
         for c in status.failing_checks
     ) or "- (no individual check details reported)"
-    return "\n".join(
-        [
-            "Hive filed this automatically because the default-branch CI is red.",
-            "",
-            f"<!-- {ci_marker(status.sha)} -->",
-            "",
-            f"- Branch: `{status.branch}`",
-            f"- Commit: `{status.sha}`",
-            f"- Commits view: {status.html_url}",
-            "",
-            "## Failing checks",
-            checks,
-            "",
-            "## What to do",
-            "Reproduce the failing check(s) locally, find and fix the root cause, and make "
-            "CI pass again. Open the check links above for the failing logs. If the failure "
-            "is a flaky test or infra issue rather than a real regression, say so and explain.",
-        ]
-    )
+    parts = [
+        "Hive filed this automatically because the default-branch CI is red.",
+        "",
+        f"<!-- {ci_marker(status.sha)} -->",
+        "",
+        f"- Branch: `{status.branch}`",
+        f"- Commit: `{status.sha}`",
+        f"- Commits view: {status.html_url}",
+        "",
+        "## Failing checks",
+        checks,
+    ]
+    if details.strip():
+        parts += ["", "## Failing CI logs", "```", details.strip()[:6000], "```"]
+    parts += [
+        "",
+        "## What to do",
+        "Reproduce the failing check(s) locally, find and fix the root cause, and make "
+        "CI pass again. Open the check links above for the failing logs. If the failure "
+        "is a flaky test or infra issue rather than a real regression, say so and explain.",
+    ]
+    return "\n".join(parts)
 
 
-def file_ci_issue(repo_ref: str, status: CiStatus, token: str) -> tuple[int, str]:
+def file_ci_issue(repo_ref: str, status: CiStatus, token: str, details: str = "") -> tuple[int, str]:
     """Create the CI issue, labeled `hive-ci`. Returns (number, html_url)."""
     owner_repo = parse_repo_ref(repo_ref)
     headers = _headers(token)
@@ -199,7 +202,7 @@ def file_ci_issue(repo_ref: str, status: CiStatus, token: str) -> tuple[int, str
         headers=headers,
         timeout=30.0,
     )  # 201 created or 422 already-exists; either is fine
-    body = {"title": ci_issue_title(status), "body": ci_issue_body(status), "labels": [CI_LABEL]}
+    body = {"title": ci_issue_title(status), "body": ci_issue_body(status, details), "labels": [CI_LABEL]}
     response = httpx.post(
         f"https://api.github.com/repos/{owner_repo}/issues",
         json=body,
@@ -230,10 +233,12 @@ def check_and_autofix(
     issue_backend: str = RESOLVE_BACKEND,
     issue_model: str = DEFAULT_ISSUE_MODEL,
     advance: bool = True,
+    details: str = "",
 ) -> CiCheckResult:
     """Check one repo's CI; when red and not already filed, open a GitHub issue
     and (when `advance`) hand it to the issue-solving pipeline. Green/pending/no-CI
-    repos are left untouched — no store writes, no issue spam."""
+    repos are left untouched — no store writes, no issue spam. `details` (e.g. the
+    failing-run logs a webhook forwarded) is embedded in the filed issue."""
     repo = workstream.repo
     status = fetch_ci_status(repo, token)
     result = CiCheckResult(
@@ -255,7 +260,7 @@ def check_and_autofix(
         result.filed_issue = existing["number"]
         result.filed_issue_url = existing["url"]
     else:
-        number, url = file_ci_issue(repo, status, token)
+        number, url = file_ci_issue(repo, status, token, details)
         result.filed_issue = number
         result.filed_issue_url = url
         open_full = open_full + [
@@ -263,7 +268,7 @@ def check_and_autofix(
                 "number": number,
                 "title": ci_issue_title(status),
                 "url": url,
-                "doc": ci_issue_body(status),
+                "doc": ci_issue_body(status, details),
                 "attachments": [],
             }
         ]

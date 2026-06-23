@@ -16,12 +16,32 @@ doing the fixing and makes the whole thing a thin, testable add-on.
 ## The toggle
 
 `Project.ci_autofix` (default off) is the per-project switch, shown in the policy
-grid next to *prod deploys* and *paused*. When on, the supervisor polls CI for
-each of the project's repos (spec home + members) every
-`Supervisor.CI_CHECK_INTERVAL_S` (5 min) and runs the check below. A manual
-"check CI" button on the Issues toolbar (and `POST
-/api/projects/{id}/workstreams/{ws}/check-ci`, `hive check-ci`) runs the same
-check on demand for one repo.
+grid next to *prod deploys* and *paused*. When on, all three triggers below run
+the same check; the toggle is the single "Hive reacts to red CI for this project"
+control.
+
+## Triggers (all run the same check)
+
+1. **Webhook (real-time).** A repo's GitHub Actions workflow forwards a CI
+   failure to `POST /api/ci/webhook`, bearer-authed by
+   `HIVE_GITHUB_WEBHOOK_SECRET`. This is the low-latency path: Hive files the
+   issue seconds after the build goes red. The forwarder template is
+   `deploy/ci-autofix.github-workflow.yml` (copy it into a repo as
+   `.github/workflows/hive-ci-autofix.yml` and set the `HIVE_URL` +
+   `HIVE_GITHUB_WEBHOOK_SECRET` repo secrets). It posts `{repo, ref, event:
+   ci_failure, run_id, details}` where `details` is the tail of the failing-run
+   logs — embedded into the issue so the resolve agent has them. Modelled on the
+   `ci-assistant` VPS service (`~/ai-workspace/vps/ci-assistant`). The endpoint
+   re-confirms with `fetch_ci_status`, so a feature-branch failure that left the
+   default branch green is a no-op.
+2. **Poll (safety net).** With the toggle on, the supervisor polls each repo
+   (spec home + members) every `Supervisor.CI_CHECK_INTERVAL_S` (5 min) — catches
+   anything the webhook missed (workflow not installed, delivery failure).
+3. **Manual.** A "check CI" button on the Issues toolbar, `POST
+   /api/projects/{id}/workstreams/{ws}/check-ci`, and `hive check-ci`.
+
+All three are idempotent through the same per-sha dedup, so overlapping triggers
+never double-file.
 
 ## The check (`hive/workstreams/ci.py`)
 

@@ -23,6 +23,7 @@ from hive.models import (
 )
 from hive.persistence.store import MemoryStore
 from hive.workstreams.ci import (
+    CiCheckResult,
     CiConclusion,
     CiStatus,
     check_and_autofix,
@@ -101,7 +102,7 @@ def test_red_ci_files_issue_and_queues_a_resolve(monkeypatch):
     project = ci_project(store)
     ws = ensure_issue_workstream(store, project)
     _stub_failing(monkeypatch, open_issues=[])
-    monkeypatch.setattr("hive.workstreams.ci.file_ci_issue", lambda repo, status, token: (99, "https://gh/99"))
+    monkeypatch.setattr("hive.workstreams.ci.file_ci_issue", lambda repo, status, token, details="": (99, "https://gh/99"))
 
     result = check_and_autofix(store, project, ws, "tok", issue_backend="codex")
 
@@ -136,6 +137,15 @@ def test_red_ci_does_not_refile_same_commit(monkeypatch):
     assert result.already_filed and result.filed_issue == 42
     items = [w for w in store.list(Workstream, project_id=project.id) if w.source == WorkstreamSource.issue]
     assert [w.issue_number for w in items] == [42]  # the existing issue, ingested once
+
+
+def test_ci_issue_body_embeds_webhook_logs():
+    status = CiStatus(repo="o/r", branch="main", sha="abc", conclusion=CiConclusion.failing,
+                      failing_checks=[{"name": "Tests", "url": "u"}])
+    body = ci_issue_body(status, details="E   assert 1 == 2\nFAILED tests/test_x.py")
+    assert "## Failing CI logs" in body
+    assert "FAILED tests/test_x.py" in body
+    assert "hive-ci sha=abc" in body  # dedup marker still present
 
 
 def test_green_ci_files_nothing(monkeypatch):
@@ -185,21 +195,77 @@ def test_run_ci_check_invokes_callback_and_clears_busy():
     assert seen == ["pid"] and "pid" not in sup._ci_busy
 
 
-# -- API: the toggle persists ------------------------------------------------
+# -- API: toggle + webhook ---------------------------------------------------
 
 
-def test_patch_ci_autofix_persists(tmp_path):
+def _client(tmp_path, store, *, webhook_secret=""):
     from fastapi.testclient import TestClient
 
     from hive.api import create_app
     from hive.persistence.blobstore import LocalBlobStore
 
-    store = MemoryStore()
     config = Config(gcp_project="", gcs_bucket="", gh_token="t", gemini_api_key="",
-                    orch_model="", runner_token="test-token", data_dir=tmp_path)
-    client = TestClient(create_app(store, Supervisor(store, lambda p, e: None), config,
-                                   blobs=LocalBlobStore(tmp_path / "blobs")))
+                    orch_model="", runner_token="test-token", data_dir=tmp_path,
+                    github_webhook_secret=webhook_secret)
+    return TestClient(create_app(store, Supervisor(store, lambda p, e: None), config,
+                                 blobs=LocalBlobStore(tmp_path / "blobs")))
+
+
+def test_patch_ci_autofix_persists(tmp_path):
+    store = MemoryStore()
+    client = _client(tmp_path, store)
     pid = client.post("/api/projects", json={"name": "ci"}).json()["id"]
     body = client.patch(f"/api/projects/{pid}", json={"ci_autofix": True}).json()
     assert body["ci_autofix"] is True
     assert store.get(Project, pid).ci_autofix is True
+
+
+def _captured_autofix(calls):
+    def fake(store, project, workstream, token, *, issue_backend="", issue_model="", advance=True, details=""):
+        calls.append({"project": project.id, "repo": workstream.repo, "details": details})
+        return CiCheckResult(repo=workstream.repo, conclusion=CiConclusion.failing,
+                             filed_issue=7, resolve_queued=1)
+    return fake
+
+
+def test_webhook_requires_configured_secret(tmp_path):
+    store = MemoryStore()
+    client = _client(tmp_path, store, webhook_secret="")  # disabled
+    r = client.post("/api/ci/webhook", json={"repo": "o/r"}, headers={"Authorization": "Bearer x"})
+    assert r.status_code == 503
+
+
+def test_webhook_rejects_bad_secret(tmp_path):
+    store = MemoryStore()
+    client = _client(tmp_path, store, webhook_secret="s3cret")
+    r = client.post("/api/ci/webhook", json={"repo": "o/r"}, headers={"Authorization": "Bearer nope"})
+    assert r.status_code == 401
+
+
+def test_webhook_triggers_autofix_for_matching_ci_project(tmp_path, monkeypatch):
+    store = MemoryStore()
+    project = store.put(Project(name="p", spec_repo="https://github.com/o/r.git", ci_autofix=True))
+    calls: list[dict] = []
+    monkeypatch.setattr("hive.api.check_and_autofix", _captured_autofix(calls))
+    client = _client(tmp_path, store, webhook_secret="s3cret")
+
+    r = client.post(
+        "/api/ci/webhook",
+        json={"repo": "o/r", "ref": "main", "event": "ci_failure", "details": "FAILED test_x"},
+        headers={"Authorization": "Bearer s3cret"},
+    )
+
+    assert r.status_code == 200 and r.json()["matched"] == 1
+    assert calls == [{"project": project.id, "repo": "https://github.com/o/r.git", "details": "FAILED test_x"}]
+
+
+def test_webhook_skips_project_with_ci_autofix_off(tmp_path, monkeypatch):
+    store = MemoryStore()
+    store.put(Project(name="p", spec_repo="https://github.com/o/r.git", ci_autofix=False))
+    calls: list[dict] = []
+    monkeypatch.setattr("hive.api.check_and_autofix", _captured_autofix(calls))
+    client = _client(tmp_path, store, webhook_secret="s3cret")
+
+    r = client.post("/api/ci/webhook", json={"repo": "o/r"}, headers={"Authorization": "Bearer s3cret"})
+
+    assert r.status_code == 200 and r.json()["matched"] == 0 and calls == []

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+import hmac
 import logging
 import os
 import re
@@ -209,6 +210,18 @@ class IssueRunCreate(BaseModel):
     issue_numbers: list[int] = []
     backend: str = ""
     model: str = ""
+
+
+class CiWebhookPayload(BaseModel):
+    """A CI signal forwarded by a repo's GitHub Actions workflow (see
+    deploy/ci-autofix.github-workflow.yml). Bearer-authed, not HMAC — the
+    forwarder is trusted and posts exactly the fields we need."""
+
+    repo: str  # "owner/repo" (github.repository)
+    ref: str = ""  # the failing run's head branch
+    event: str = "ci_failure"
+    run_id: int = 0
+    details: str = ""  # tail of the failing-run logs, embedded into the issue
 
 
 class TestRefreshCreate(BaseModel):
@@ -1365,6 +1378,63 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if result.resolve_queued:
             supervisor.wake(project_id, f"CI red on {workstream.repo}; queued a fix for #{result.filed_issue}.")
         return result.model_dump()
+
+    @app.post("/api/ci/webhook")
+    def ci_webhook(body: CiWebhookPayload, authorization: str = Header(default="")):
+        """Real-time CI signal forwarded by a repo's GitHub Actions workflow
+        (`deploy/ci-autofix.github-workflow.yml`). Bearer-authed by
+        `HIVE_GITHUB_WEBHOOK_SECRET`; for every ci_autofix project that owns the
+        repo it runs the same file→reconcile→advance path as the periodic poll
+        (which `fetch_ci_status` re-confirms, so a feature-branch failure that
+        left the default branch green is a no-op)."""
+        secret = config.github_webhook_secret.strip()
+        if not secret:
+            raise HTTPException(503, "CI webhook is disabled; set HIVE_GITHUB_WEBHOOK_SECRET")
+        presented = authorization.removeprefix("Bearer ").strip()
+        if not hmac.compare_digest(presented, secret):
+            raise HTTPException(401, "bad webhook secret")
+        if body.event not in ("ci_failure", "workflow_run", ""):
+            return {"matched": 0, "skipped": f"event {body.event!r} not handled"}
+        target = canonical_repo(body.repo)
+        if not target:
+            raise HTTPException(400, "repo is required")
+        results: list[dict] = []
+        for project in store.list(Project, workspace_id=config.workspace_id):
+            if project.archived or project.paused or not project.ci_autofix:
+                continue
+            repos = {
+                canonical_repo(r): r
+                for r in [project.spec_repo, *project.member_repos]
+                if r.strip()
+            }
+            repo_url = repos.get(target)
+            if not repo_url:
+                continue
+            try:
+                workstream = ensure_issue_workstream(store, project, repo=repo_url)
+                if not workstream.enabled:
+                    continue
+                result = check_and_autofix(
+                    store,
+                    project,
+                    workstream,
+                    config.gh_token,
+                    issue_backend=config.issue_backend,
+                    issue_model=config.issue_model,
+                    details=body.details,
+                )
+                if result.resolve_queued:
+                    supervisor.wake(
+                        project.id,
+                        f"CI red on {repo_url} (webhook); queued a fix for #{result.filed_issue}.",
+                    )
+                results.append(
+                    {"project_id": project.id, "conclusion": result.conclusion, "filed_issue": result.filed_issue}
+                )
+            except Exception as exc:
+                log.exception("CI webhook handling failed for project %s repo %s", project.id, repo_url)
+                results.append({"project_id": project.id, "error": str(exc)})
+        return {"matched": len(results), "results": results}
 
     @app.post("/api/projects/{project_id}/workstreams/{workstream_id}/test-refresh")
     def refresh_testing_workstream(
