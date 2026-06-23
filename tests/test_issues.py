@@ -13,6 +13,7 @@ from hive.config.settings import Config
 from hive.workstreams.issues import (
     activate_next,
     advance_issues,
+    delete_branch,
     ensure_issue_workstream,
     issue_branch,
     LANDING_FAILED_PREFIX,
@@ -214,6 +215,34 @@ def test_resolve_issue_close_is_idempotent_when_already_closed(monkeypatch):
     assert calls == ["patch"]
 
 
+class _DeleteResp:
+    def __init__(self, status_code, text=""):
+        self.status_code = status_code
+        self.text = text
+
+    def json(self):
+        return {"message": self.text}
+
+
+def test_delete_branch_is_idempotent_when_branch_already_gone(monkeypatch):
+    # Landing already merged+closed the issue; a 404 on the branch must not raise.
+    seen = []
+    monkeypatch.setattr(
+        "hive.workstreams.issues.httpx.delete",
+        lambda url, **k: seen.append(url) or _DeleteResp(404, "Not Found"),
+    )
+    delete_branch("https://github.com/o/r", "hive/issue-9", "token")
+    assert seen[0].endswith("/repos/o/r/git/refs/heads/hive/issue-9")
+
+
+def test_delete_branch_raises_on_unexpected_status(monkeypatch):
+    monkeypatch.setattr(
+        "hive.workstreams.issues.httpx.delete", lambda *a, **k: _DeleteResp(500, "server error")
+    )
+    with pytest.raises(RuntimeError, match="delete branch hive/issue-9"):
+        delete_branch("https://github.com/o/r", "hive/issue-9", "token")
+
+
 # -- supervisor state --------------------------------------------------------
 
 
@@ -384,6 +413,8 @@ def test_scan_resolve_review_accept_lands(app, monkeypatch):
         merged["comment"] = comment
 
     monkeypatch.setattr("hive.api.resolve_issue_on_github", close_issue)
+    monkeypatch.setattr("hive.api.delete_branch",
+                        lambda repo, branch, token: merged.setdefault("deleted", branch))
     _report(
         client,
         review["id"],
@@ -406,6 +437,8 @@ def test_scan_resolve_review_accept_lands(app, monkeypatch):
     assert "OUTCOME:" not in merged["comment"]
     assert "REVIEW:" not in merged["comment"]
     assert store.get(Workstream, ws_id).status == WorkstreamStatus.done
+    # The merged work branch is cleaned up so issue branches don't pile up.
+    assert merged["deleted"] == "hive/issue-1"
 
 
 def test_strict_sequencing_starts_next_issue_only_after_landing(app, monkeypatch):

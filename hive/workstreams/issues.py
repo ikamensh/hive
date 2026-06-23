@@ -184,6 +184,22 @@ def merge_branch(repo_ref: str, head: str, token: str, message: str = "") -> Non
     response.raise_for_status()  # 201 merged, 204 nothing to merge
 
 
+def delete_branch(repo_ref: str, branch: str, token: str) -> None:
+    """Delete a now-merged work branch via the git refs API. Idempotent: a 404/422
+    (already gone / not deletable) is treated as success. The caller lands the
+    issue first and deletes best-effort — a leftover branch is only cruft, never a
+    reason to fail a merge that already succeeded."""
+    owner_repo = parse_repo_ref(repo_ref)
+    response = httpx.delete(
+        f"https://api.github.com/repos/{owner_repo}/git/refs/heads/{branch}",
+        headers=_headers(token),
+        timeout=30.0,
+    )
+    if response.status_code in (204, 404, 422):
+        return
+    raise _github_error(response, f"delete branch {branch}")
+
+
 def _github_error(response: httpx.Response, action: str) -> RuntimeError:
     detail = response.text.strip()
     try:

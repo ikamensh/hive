@@ -30,6 +30,7 @@ from hive.workstreams.issues import (
     advance_issues,
     create_landing_integration_task,
     create_review_task,
+    delete_branch as default_delete_branch,
     issue_branch,
     issue_is_closed as default_issue_is_closed,
     merge_branch as default_merge_branch,
@@ -234,6 +235,7 @@ class TaskResultProcessor:
         *,
         merge_branch_func: Callable[..., None] = default_merge_branch,
         resolve_issue_func: Callable[..., None] = default_resolve_issue_on_github,
+        delete_branch_func: Callable[..., None] = default_delete_branch,
         file_finding_issue_func: Callable[..., tuple[int, str]] = default_file_or_update_finding_issue,
         close_story_issue_func: Callable[..., None] = default_close_story_issue,
     ) -> None:
@@ -242,6 +244,7 @@ class TaskResultProcessor:
         self.config = config
         self.merge_branch = merge_branch_func
         self.resolve_issue_on_github = resolve_issue_func
+        self.delete_branch = delete_branch_func
         self.file_or_update_finding_issue = file_finding_issue_func
         self.close_story_issue = close_story_issue_func
 
@@ -683,6 +686,10 @@ class TaskResultProcessor:
                 refresh_issue_run(self.store, project, run)
             return
         log.info("issue #%s landed: merged + closed; workstream done", ws.issue_number)
+        try:
+            self.delete_branch(task.repo, branch, self.config.gh_token)
+        except Exception as exc:  # never fail a completed landing over branch cleanup
+            log.info("issue #%s landed; leftover branch %s not deleted: %s", ws.issue_number, branch, exc)
         _set_ws_status(self.store, ws.id, WorkstreamStatus.done, "")
         project = self.store.get(Project, task.project_id)
         run = self.store.get(IssueRun, task.run_id) if task.run_id else None

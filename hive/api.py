@@ -38,6 +38,7 @@ from hive.integrations.specrepo import REQUIRED_INTAKE_FILES, SpecRepo, SpecStat
 from hive.workstreams.issues import (
     advance_issues,
     attachment_key,
+    delete_branch,
     download_issue_attachments,
     ensure_issue_workstream,
     fetch_open_issues_full,
@@ -928,6 +929,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         resolve_issue_func=lambda repo, number, comment, token: resolve_issue_on_github(
             repo, number, comment, token
         ),
+        delete_branch_func=lambda repo, branch, token: delete_branch(repo, branch, token),
         file_finding_issue_func=lambda repo_ref, finding, story, token: file_or_update_finding_issue(
             repo_ref, finding, story, token
         ),
