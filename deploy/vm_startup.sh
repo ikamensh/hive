@@ -1,5 +1,5 @@
 #!/bin/bash
-# GCE startup script: provisions the hive VM (control plane in docker + bare runner).
+# GCE startup script: provisions the hive VM (chief in docker + bare runner).
 # Idempotent — safe to re-run on every boot. Logs: /var/log/hive-startup.log
 set -euxo pipefail
 exec >>/var/log/hive-startup.log 2>&1
@@ -11,7 +11,7 @@ apt-get update
 apt-get install -y git curl ca-certificates gnupg docker.io rsync
 
 # docker.io stays installed for the runner's `docker` capability, but the
-# control plane runs bare (systemd) below — no image build in the deploy loop.
+# chief runs bare (systemd) below — no image build in the deploy loop.
 # `deploy/Dockerfile` + `deploy/compose.yaml` remain for a future stability mode.
 
 # --- gh CLI ---
@@ -28,7 +28,10 @@ if ! command -v node >/dev/null; then
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   apt-get install -y nodejs
 fi
-npm install -g @openai/codex @google/gemini-cli || true
+npm install -g @openai/codex @google/gemini-cli @anthropic-ai/claude-code || true
+# cursor-agent (subscription/API-key backend) — official installer drops it in ~/.local/bin
+curl -fsS https://cursor.com/install | bash || true
+ln -sf /root/.local/bin/cursor-agent /usr/local/bin/cursor-agent 2>/dev/null || true
 
 # --- uv ---
 if ! command -v /usr/local/bin/uv >/dev/null; then
@@ -39,12 +42,18 @@ fi
 secret() { gcloud secrets versions access latest --secret="$1"; }
 secret_optional() { gcloud secrets versions access latest --secret="$1" 2>/dev/null || true; }
 mkdir -p /etc/hive
+# CLAUDE_CODE_OAUTH_TOKEN / CURSOR_API_KEY are the headless tokens for the
+# subscription backends (mint with `claude setup-token` / a Cursor dashboard API
+# key, then `gcloud secrets create …`). Empty until those secrets exist, which
+# just leaves the backend non-usable — the runner's probe gates it.
 cat > /etc/hive/env <<EOF
 HIVE_GCP_PROJECT=hive-ikamen
 HIVE_GCS_BUCKET=hive-ikamen-blobs
 HIVE_ORCH_PROVIDER=auto
 GEMINI_API_KEY=$(secret_optional hive-gemini-api-key)
 OPENAI_API_KEY=$(secret_optional hive-openai-api-key)
+CLAUDE_CODE_OAUTH_TOKEN=$(secret_optional hive-claude-oauth-token)
+CURSOR_API_KEY=$(secret_optional hive-cursor-api-key)
 HIVE_GH_TOKEN=$(secret hive-gh-token)
 GH_TOKEN=$(secret hive-gh-token)
 HIVE_RUNNER_TOKEN=$(secret hive-runner-token)
@@ -72,6 +81,9 @@ cat > /root/.gemini/settings.json <<'EOF'
 EOF
 # API-key login only as a fallback — never overwrite an existing (subscription) login.
 codex login status || printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key || true
+# claude and cursor-agent authenticate purely from the env tokens above
+# (CLAUDE_CODE_OAUTH_TOKEN / CURSOR_API_KEY) — no interactive login step, and no
+# copied desktop credential (those expire/rotate; see wiki note on backend auth).
 
 # --- caddy: public HTTPS with basic auth (web UI + laptop runners) ---
 if ! command -v caddy >/dev/null; then
@@ -94,16 +106,16 @@ EOF
 systemctl enable --now caddy
 systemctl reload caddy || systemctl restart caddy
 
-# --- python env (shared by the control plane + runner) ---
+# --- python env (shared by the chief + runner) ---
 /usr/local/bin/uv sync --directory /opt/hive --frozen --no-dev
 
-# --- web UI bundle (served statically by the bare control plane) ---
+# --- web UI bundle (served statically by the bare chief) ---
 (cd /opt/hive/web && npm ci && npm run build)
 
-# --- control plane (bare, systemd) ---
-cat > /etc/systemd/system/hive-control.service <<EOF
+# --- chief (bare, systemd) ---
+cat > /etc/systemd/system/hive-chief.service <<EOF
 [Unit]
-Description=hive control plane
+Description=hive chief
 After=network-online.target
 [Service]
 EnvironmentFile=/etc/hive/env
@@ -118,8 +130,8 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable --now hive-control
-systemctl restart hive-control
+systemctl enable --now hive-chief
+systemctl restart hive-chief
 
 # --- runner (bare, systemd) ---
 cat > /etc/systemd/system/hive-runner.service <<EOF
@@ -133,6 +145,11 @@ Environment=HIVE_URL=http://localhost:8000
 Environment=HIVE_RUNNER_NAME=hive-vm
 Environment=HIVE_RUNNER_WORKDIR=/var/lib/hive-work
 Environment=HOME=/root
+# The runner runs as root, but Claude Code refuses --dangerously-skip-permissions
+# under root unless it believes it is sandboxed. This VM is a dedicated, disposable
+# agent box (rebuilt from this script), so we assert the sandbox signal; the cleaner
+# alternative is to run the runner as a non-root user. Other backends ignore it.
+Environment=IS_SANDBOX=1
 ExecStart=/opt/hive/.venv/bin/python -m hive.runner
 Restart=always
 RestartSec=10

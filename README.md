@@ -10,7 +10,7 @@ The point isn't just "an agent writes code." It's the loop around it: hive decom
 
 ## Quickstart: run hive on your laptop
 
-This runs the control-plane process and a runner on one machine, but runtime state still lives in managed services: Firestore for documents and GCS for blobs. Local file persistence is only for tests and one-time migration of old data.
+This runs the chief process and a runner on one machine, but runtime state still lives in managed services: Firestore for documents and GCS for blobs. Local file persistence is only for tests and one-time migration of old data.
 
 ### 0. Prerequisites
 
@@ -31,7 +31,7 @@ uv sync          # creates .venv (Python 3.13, pinned in .python-version) and in
 
 `uv sync` is optional in practice — every `uv run …` below auto-creates and updates the venv on first use — but running it once up front gives you a ready `.venv` and surfaces install errors immediately. Activate it (`source .venv/bin/activate`) if you'd rather drop the `uv run` prefix.
 
-### 2. Start the control plane
+### 2. Start the chief
 
 ```bash
 uv run hive doctor storage
@@ -48,7 +48,7 @@ server at that bundle, and prints what it found (and from where) before booting:
   blobs: GCS (hive-ikamen-blobs, from stored config)
   workspace: default (ikamen)
   public url: http://127.0.0.1:8000
-hive control plane → http://127.0.0.1:8000
+hive chief → http://127.0.0.1:8000
 ```
 
 If `HIVE_GCP_PROJECT` or `HIVE_GCS_BUCKET` is missing, `hive run` refuses to start and prints the exact variables to set. Leave it running. (Flags: `--host`, `--port`, `--reload`, `--no-web-build`.)
@@ -117,7 +117,7 @@ Prefer clicking? Run the web UI (below) and do steps 5–6 there instead.
 
 `hive` (or `uv run python -m hive.cli`) covers the full web API — everything the UI can do, with JSON output — so coding agents and scripts can drive hive exactly like you do.
 
-**Where it points.** Commands go to a *client target*: `HIVE_URL` (default `http://localhost:8000`), with `HIVE_BASIC_AUTH=user:pass` for a control plane behind basic auth and `HIVE_TOKEN` for app-level auth. Set them as one-off env vars or persist them with `hive config set` (an explicit env var overrides the saved value), so you point at a remote once and every command follows. `hive whoami` resolves the target and reports who you're authenticated as — run it first to confirm you're driving the right control plane. See [Keep Hive working while your laptop is off](#keep-hive-working-while-your-laptop-is-off).
+**Where it points.** Commands go to a *client target*: `HIVE_URL` (default `http://localhost:8000`), with `HIVE_BASIC_AUTH=user:pass` for a chief behind basic auth and `HIVE_TOKEN` for app-level auth. Set them as one-off env vars or persist them with `hive config set` (an explicit env var overrides the saved value), so you point at a remote once and every command follows. `hive whoami` resolves the target and reports who you're authenticated as — run it first to confirm you're driving the right chief. See [Keep Hive working while your laptop is off](#keep-hive-working-while-your-laptop-is-off).
 
 ```bash
 hive whoami                        # resolved target URL + authenticated identity
@@ -144,14 +144,14 @@ hive subs | hive todos | hive org-context
 
 ### Web UI
 
-`web/` is the control-plane SPA (React + Vite + TypeScript): a project list with live state badges, a project page (workstream board, question inbox, activity feed, policy toggles), and a resources page (runners, backend cooldowns, human todos, subscriptions, org context). It polls the API every 4s and shows a clear "control plane unreachable" banner when the backend is down.
+`web/` is the chief SPA (React + Vite + TypeScript): a project list with live state badges, a project page (workstream board, question inbox, activity feed, policy toggles), and a resources page (runners, backend cooldowns, human todos, subscriptions, org context). It polls the API every 4s and shows a clear "chief unreachable" banner when the backend is down.
 
 ```bash
 cd web
 npm install
 npm run dev              # dev server, proxies /api → http://localhost:8000
 VITE_MOCK=1 npm run dev  # canned fixtures, no backend needed
-npm run build            # tsc --noEmit + vite build → web/dist (served by the control plane)
+npm run build            # tsc --noEmit + vite build → web/dist (served by the chief)
 ```
 
 For normal local launches, prefer `uv run hive run`: it runs the production web
@@ -170,11 +170,11 @@ uv run pre-commit run --all-files
 
 ## Keep Hive working while your laptop is off
 
-The laptop quickstart runs the control plane *and* a runner on your machine — close the lid and everything stops. To let work continue overnight, run the control plane on an always-on server (a small VM) with its own runner, and drive it from your laptop's CLI.
+The laptop quickstart runs the chief *and* a runner on your machine — close the lid and everything stops. To let work continue overnight, run the chief on an always-on server (a small VM) with its own runner, and drive it from your laptop's CLI.
 
-**The model.** There is exactly one control plane per project database — a Firestore leader lease makes a second one refuse to start — and runners attach to it:
+**The model.** There is exactly one chief per project database — a Firestore leader lease makes a second one refuse to start — and runners attach to it:
 
-- **The server** runs the control plane *and* an always-on runner. The control plane's planning loop keeps decomposing the goal, dispatching work, and verifying results on its own, so **iteration work progresses with no human in the loop** while your laptop is closed.
+- **The server** runs the chief *and* an always-on runner. The chief's planning loop keeps decomposing the goal, dispatching work, and verifying results on its own, so **iteration work progresses with no human in the loop** while your laptop is closed.
 - **Your laptop** is just a client. You point the `hive` CLI at the server to set goals, answer questions, and trigger issue/test runs. You can *also* attach your laptop as an extra runner; closing it simply removes that runner and the server's runner keeps going.
 
 **Point your CLI at the server (once):**
@@ -185,7 +185,7 @@ hive config set HIVE_BASIC_AUTH you:your-password    # if it sits behind basic a
 hive whoami                                           # confirm: prints the target URL + identity
 ```
 
-From there every command — `hive start`, `hive answer`, `hive scan`, `hive test-refresh`, `hive iterate` — runs against the server. Submit once and walk away; the server carries it out. Don't *also* run `hive run` locally against the same database — the leader lease will refuse it. With a remote control plane your laptop never needs its own.
+From there every command — `hive start`, `hive answer`, `hive scan`, `hive test-refresh`, `hive iterate` — runs against the server. Submit once and walk away; the server carries it out. Don't *also* run `hive run` locally against the same database — the leader lease will refuse it. With a remote chief your laptop never needs its own.
 
 **Match the always-on backends to the work you want unattended.** A runner can only execute work for the agent CLIs it has logged in. So which work continues while your laptop is off depends on what the *server's* runner has:
 
@@ -194,7 +194,7 @@ From there every command — `hive start`, `hive answer`, `hive scan`, `hive tes
 | Server (always-on) | API-key backends, e.g. **codex**, **gemini-cli** | always |
 | Your laptop | subscription backends, e.g. **claude**, **cursor** | only while the laptop is on |
 
-If the planner routes a task to a backend only your laptop has, that task parks as `blocked: resources` until the laptop reattaches. The planner is backend-aware and will prefer available backends, but for true laptop-off continuity, keep the project's work on backends the always-on runner offers (or give the server a runner logged into the backend you want).
+If the planner routes a task to a backend only your laptop has, that task parks as `blocked: resources` until the laptop reattaches. The planner is backend-aware and will prefer available backends. For true laptop-off continuity, give the always-on runner a headless credential for the backend you want — `claude setup-token` for claude, a Cursor API key (`CURSOR_API_KEY`) for cursor — rather than copying your desktop login (those tokens expire/rotate). The [deployed-instance notes](#the-deployed-instance-maintainer-notes) show the one-time secret upload.
 
 **What is *not* automatic yet.** Iteration work is autonomous, but new GitHub issues are only picked up when you trigger a scan (`hive scan`) — there's no scheduled sync. Since the CLI now drives the remote, you can trigger one from any machine (or phone over SSH); a scheduled scan would remove even that step.
 
@@ -221,7 +221,7 @@ The iteration goal is always set *through hive* (`hive iterate` / the UI), which
 HIVE_GCP_PROJECT=<gcp-project> HIVE_GCS_BUCKET=<bucket> uv run hive run
 ```
 
-For a legacy local file store, migrate it explicitly while control planes are stopped:
+For a legacy local file store, migrate it explicitly while chiefs are stopped:
 
 ```bash
 uv run hive migrate-local-state \
@@ -232,7 +232,7 @@ uv run hive migrate-local-state \
 
 The Settings page shows whether the active runtime is fully managed. Firestore without GCS is not a supported runtime mode.
 
-A leader lease in Firestore (`settings/leader_lease`) makes a *second* control plane on the same database refuse to start — so if a deployed instance owns that project, stop it first.
+A leader lease in Firestore (`settings/leader_lease`) makes a *second* chief on the same database refuse to start — so if a deployed instance owns that project, stop it first.
 
 ---
 
@@ -260,8 +260,9 @@ Built on primitives from [kodo](https://github.com/ikamensh/kodo) (agent/session
 
 ## The deployed instance (maintainer notes)
 
-This repo is also hive's own **spec home** (dogfooding the spec format it defines). The MVP is deployed and demo-verified: control plane (FastAPI + Firestore + GCS) and a runner live on a GCE VM (`hive-vm`, project `hive-ikamen`); a greenfield demo project ([wordfreq-demo](https://github.com/ikamensh/wordfreq-demo)) was planned, built, verified, and completed autonomously end-to-end.
+This repo is also hive's own **spec home** (dogfooding the spec format it defines). The MVP is deployed and demo-verified: chief (FastAPI + Firestore + GCS) and a runner live on a GCE VM (`hive-vm`, project `hive-ikamen`); a greenfield demo project ([wordfreq-demo](https://github.com/ikamensh/wordfreq-demo)) was planned, built, verified, and completed autonomously end-to-end.
 
+- **Reaching it (UI + CLI).** The chief serves its own web UI same-origin, so you just open its URL in a browser — there's no separate/local UI to run, and no tunnel needed for normal use. Two routes to the same chief: the public HTTPS URL below (Caddy basic-auth) works from any device incl. phone; `deploy/vm.sh tunnel` → `http://localhost:8000` is *only* for bypassing Caddy auth or developing against it (that's all the SSH forward is for). The `hive` CLI targets the same URL. Caveat: today's address is IP-based (`sslip.io` encodes the VM's *ephemeral* public IP), so it changes if the VM is recreated — a stable name (Tailscale or static-IP+domain) is a deferred decision, see [TODO.md](TODO.md).
 - Web UI: https://hive.34-62-218-54.sslip.io, user `ilya`, password in Secret Manager `hive-web-password`. (`hive.ilyakamen.com` awaits a manual GoDaddy A record → 34.62.218.54; Caddy already serves both names.)
 - Drive it from the laptop CLI (the [laptop-off workflow](#keep-hive-working-while-your-laptop-is-off)):
   ```bash
@@ -269,6 +270,13 @@ This repo is also hive's own **spec home** (dogfooding the spec format it define
   hive config set HIVE_BASIC_AUTH "ilya:$(gcloud secrets versions access latest --secret=hive-web-password --project=hive-ikamen)"
   hive whoami
   ```
-  The VM's always-on runner serves **codex + gemini-cli**; `scripts/laptop_runner.sh` adds **claude + cursor** while your laptop is attached.
+  The VM's always-on runner serves **codex + gemini-cli** out of the box. To make it *also* serve the subscription backends unattended (so claude/cursor work continues with your laptop off), give it headless tokens once — the VM startup installs both CLIs and reads these secrets into the runner's env:
+  ```bash
+  claude setup-token        # on your laptop; mints a long-lived subscription token
+  gcloud secrets create hive-claude-oauth-token --data-file=- --project=hive-ikamen   # paste the token
+  gcloud secrets create hive-cursor-api-key      --data-file=- --project=hive-ikamen   # a Cursor dashboard API key
+  # then refresh the VM so it picks them up: bash deploy/create_vm.sh
+  ```
+  Don't copy your desktop login files — those access tokens expire and their refresh tokens rotate, so a copied blob 401s (tested). `scripts/laptop_runner.sh` still adds your laptop's claude + cursor while it's attached.
 - Attach your laptop as a runner to the deployed instance: `bash scripts/laptop_runner.sh`.
 - Secrets live in GCP Secret Manager (`hive-gemini-api-key`, `hive-gh-token`, `hive-runner-token`, `hive-openai-api-key`, `hive-web-password`); the VM startup script materializes `/etc/hive/env`. GCP project `hive-ikamen`, Firestore `(default)` + bucket `hive-ikamen-blobs`, both `europe-west1`.

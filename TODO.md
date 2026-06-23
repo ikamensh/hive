@@ -23,7 +23,7 @@ the `conversations/` gz files, not just `log.jsonl`.
 ## Gap 6 — Durable-memory enforcement
 `commit_to_spec` distillation is voluntary today; if the model skips it, an
 answer survives only in loseable history. Options: detect answered questions
-not reflected in a spec commit and nudge/require it; or have the control plane
+not reflected in a spec commit and nudge/require it; or have the chief
 append raw answers to `input-log/` deterministically.
 
 ## Gap 9 — iteration.md editing ownership
@@ -57,18 +57,46 @@ today, but the story has friction worth smoothing:
   `HIVE_TOKEN` (the CLI already sends it as a bearer). Then `github` auth mode is
   reachable from the CLI without the browser, and the shared password can retire.
 - **Backend continuity is on the operator.** Work routed to a backend only the
-  (off) laptop has parks as `blocked: resources`. Same root gap as the "Subscription
-  recovery flow" item above — wire subscriptions as a recovery source so the always-on
-  side can self-serve a portable credential or file a login todo, and/or surface
-  "this project's work needs a backend no always-on runner offers" in preflight/UI.
+  (off) laptop has parks as `blocked: resources`. The VM startup now installs claude +
+  cursor-agent and reads `hive-claude-oauth-token` / `hive-cursor-api-key` from Secret
+  Manager (`deploy/vm_startup.sh`), so the always-on runner serves them once those
+  secrets exist — the manual step is minting the tokens (`claude setup-token`, Cursor
+  dashboard) and `gcloud secrets create`. Tested why *copying* the desktop login fails:
+  claude's stored OAuth blob (Keychain on mac, `~/.claude/.credentials.json` on Linux)
+  carries an access token that expires and a refresh token that rotates, so a copied
+  blob 401s; cursor has no copyable token file and wants `CURSOR_API_KEY`. The durable
+  fix is headless/minted tokens, not copied logins. Still open: the deeper automation —
+  same root as the "Subscription recovery flow" item above (consult subscriptions on
+  `blocked_resources` and self-serve a portable credential / file a login todo) and
+  surfacing "no always-on runner offers this backend" in preflight/UI.
 - **One client target, no named contexts.** `HIVE_URL` is a single stored value;
   switching local↔remote is manual. A `hive target` with named contexts (kubectl-style)
   would make running both pleasant. Lower priority for single-user MVP.
 - **No scheduled issue scan.** New GitHub issues are only ingested on a human-triggered
-  `hive scan`. A periodic scan (control-plane cron) would make issue solving truly
+  `hive scan`. A periodic scan (chief cron) would make issue solving truly
   unattended; until then it relies on a remote trigger from any machine.
 - **`scripts/laptop_runner.sh` is hardcoded** to the sslip.io URL and a specific gcloud
   account — fine for the maintainer, but generalize (env/args) before it's onboarding.
+
+## Remote UI/CLI access — stable address (decision deferred)
+Today you reach the remote either by opening the public `sslip.io` URL (Caddy basic-auth,
+serves the UI same-origin) or via `deploy/vm.sh tunnel` (SSH forward that bypasses Caddy
+auth / for dev). Decision (2026-06-23): keep this for now. The friction is real though —
+the address is the VM's *ephemeral* public IP encoded in `sslip.io`, so it breaks on VM
+recreate, and the tunnel is an awkward per-session forward. When ready to fix:
+- **Preferred: Tailscale** (this is the architecture doc's original intent — see
+  `wiki/architecture.md` "Access via Tailscale"). Enroll the VM (`tailscale up` in
+  `vm_startup.sh`, auth key as a GCP secret); open the stable MagicDNS `http://hive-vm:8000`
+  from laptop/phone; CLI targets the same URL with no `HIVE_BASIC_AUTH`. Drops the tunnel
+  *and* Caddy/basic-auth (the tailnet is the auth boundary), no domain/static-IP needed,
+  not publicly exposed. Tailscale Serve gives `https://…ts.net` if HTTPS is wanted.
+- **Alt: public domain + static IP.** Reserve a static external IP (currently none — see
+  `create_vm.sh`), point `hive.ilyakamen.com` at it, keep Caddy auto-TLS + login. Shareable
+  with non-tailnet users; publicly exposed; more moving parts.
+- **Verify regardless:** confirm the GCP firewall does *not* expose chief `:8000`
+  publicly (the chief binds `0.0.0.0:8000` and runs `dev` auth mode — Caddy on :443
+  is meant to be the only public surface). Couldn't check from here (no `compute.firewalls.list`
+  permission on `hive-ikamen` with the current account).
 
 ## Issue solving — selectable run scope
 The 2026-06-14 live validation target was issues #2-#4, but scanning the repo
