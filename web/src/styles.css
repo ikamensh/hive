@@ -455,6 +455,10 @@ textarea:focus {
   .shell {
     padding: 0 16px 48px;
   }
+  .intake-turn {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
   .topbar {
     flex-wrap: wrap;
     gap: 10px 12px;
@@ -1111,6 +1115,29 @@ textarea:focus {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+.intake-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.intake-turn {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--surface-inset);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+}
+.intake-turn-user {
+  background: var(--panel);
+}
+.intake-turn-role {
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
 }
 .intake-actions {
   display: flex;

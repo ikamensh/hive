@@ -18,6 +18,15 @@ export function buildSetupPatch(fields: {
   };
 }
 
+function intakeTranscript(conversation: AgentConversation) {
+  const turns = conversation.transcript.filter((item) => item.text.trim());
+  if (turns.length > 0) return turns;
+  if (conversation.latest_brief.trim()) {
+    return [{ role: "assistant", text: conversation.latest_brief.trim() }];
+  }
+  return [];
+}
+
 export function ProjectSetup({
   project,
   conversation,
@@ -52,6 +61,7 @@ export function ProjectSetup({
   const intakeDone = conversation?.status === "done";
   const intakeFailed = conversation?.status === "failed";
   const scoutLabel = (backend: string) => (backend === "codex" ? "codex" : "claude");
+  const transcript = conversation ? intakeTranscript(conversation) : [];
 
   const save = async () => {
     setBusy(true);
@@ -195,7 +205,18 @@ export function ProjectSetup({
                 or fix an agent in <Link to="/machines">machines</Link>.
               </p>
             )}
-            {conversation.latest_brief ? <Markdown text={conversation.latest_brief} /> : <p className="muted">waiting for the scout brief</p>}
+            {transcript.length > 0 ? (
+              <div className="intake-thread" aria-label="intake conversation">
+                {transcript.map((item, index) => (
+                  <article className={`intake-turn intake-turn-${item.role || "unknown"}`} key={`${index}-${item.role}`}>
+                    <div className="intake-turn-role">{item.role || "message"}</div>
+                    <Markdown text={item.text} />
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="muted">waiting for the scout brief</p>
+            )}
             {intakeFailed ? (
               <div className="intake-actions">
                 <div className="setup-actions">
