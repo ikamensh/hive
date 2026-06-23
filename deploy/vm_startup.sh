@@ -96,7 +96,7 @@ fi
 WEB_PASS=$(secret hive-web-password)
 WEB_HASH=$(caddy hash-password --plaintext "$WEB_PASS")
 cat > /etc/caddy/Caddyfile <<EOF
-hive.ilyakamen.com, hive.34-62-218-54.sslip.io {
+hive.tachyon-ai.eu, hive.34-62-218-54.sslip.io {
     basic_auth {
         ilya $WEB_HASH
     }
