@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from hive.integrations.specrepo import SpecRepo, authed_url
+from hive.integrations.specrepo import SpecRepo, authed_url, spec_status_dir
 
 
 @pytest.fixture
@@ -67,3 +67,20 @@ def test_authed_url():
     )
     assert authed_url("/local/path", "tok") == "/local/path"
     assert authed_url("https://github.com/a/b.git", "") == "https://github.com/a/b.git"
+
+
+def test_spec_status_requires_mission_and_iteration(tmp_path):
+    status = spec_status_dir(tmp_path)
+    assert not status.ready
+    assert status.missing_files == ("mission.md", "iteration.md")
+
+    (tmp_path / "mission.md").write_text("# Mission\nBuild the thing.\n")
+    status = spec_status_dir(tmp_path)
+    assert not status.ready
+    assert status.present_files == ("mission.md",)
+    assert status.missing_files == ("iteration.md",)
+
+    (tmp_path / "iteration.md").write_text("# Iteration\nFirst loop.\n")
+    status = spec_status_dir(tmp_path)
+    assert status.ready
+    assert status.missing_files == ()

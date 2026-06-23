@@ -108,9 +108,21 @@ export default function ProjectPage() {
     refresh();
   };
 
+  const writeMission = async (p: ProjectPatch) => {
+    await api.patchProject(id, p);
+    await api.writeMission(id);
+    refresh();
+  };
+
+  const finalizeIntake = async (p: ProjectPatch) => {
+    await api.patchProject(id, p);
+    await api.finalizeIntake(id);
+    refreshProjectAndOverview();
+  };
+
   const sendIntakeMessage = async (
     conversationId: string,
-    action: "message" | "proceed" | "approve",
+    action: "message" | "proceed",
     message = "",
   ) => {
     await api.conversationMessage(conversationId, { action, message });
@@ -331,6 +343,8 @@ export default function ProjectPage() {
           onSave={saveSetup}
           onCreateRepo={createRepo}
           onStartIntake={startIntake}
+          onWriteMission={writeMission}
+          onFinalizeIntake={finalizeIntake}
           onConversationMessage={sendIntakeMessage}
         />
       ) : (

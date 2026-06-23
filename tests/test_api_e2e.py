@@ -46,6 +46,26 @@ def _configure_project(client, pid, spec_repo="https://example.com/spec.git", **
     client.patch(f"/api/projects/{pid}", json={"spec_repo": spec_repo, **patch})
 
 
+def _git(args, cwd):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+def _spec_origin(tmp_path, files: dict[str, str]):
+    origin = tmp_path / "origin.git"
+    _git(["init", "--bare", "-b", "main", str(origin)], tmp_path)
+    seed = tmp_path / "seed"
+    _git(["clone", str(origin), str(seed)], tmp_path)
+    for rel, content in files.items():
+        target = seed / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+    _git(["add", "-A"], seed)
+    if files:
+        _git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "spec"], seed)
+        _git(["push", "origin", "main"], seed)
+    return origin
+
+
 def _complete_intake(client, pid):
     store = client.app.state.store
     project = store.get(Project, pid)
@@ -973,70 +993,64 @@ def test_human_todo_done_wakes_project(harness):
     assert sup._events.get(pid)  # completing the action re-evaluates work that waited on it
 
 
-def test_intake_conversation_queues_scout_and_handoff_to_orchestrator(harness):
+def test_manual_spec_files_finalize_intake_and_handoff_to_orchestrator(harness, tmp_path):
     client, store, orch = harness
+    origin = _spec_origin(tmp_path, {
+        "mission.md": "# Mission\nBuild Hive.\n",
+        "iteration.md": "# Iteration\nMake intake file-based.\n",
+    })
+    project = client.post("/api/projects", json={"name": "intake-demo"}).json()
+    pid = project["id"]
+    _configure_project(client, pid, str(origin))
+
+    accepted = client.post(f"/api/projects/{pid}/intake/finalize")
+    assert accepted.status_code == 200
+    body = accepted.json()
+    assert body["spec_status"]["ready"] is True
+    assert body["conversation"]["backend"] == "manual"
+    assert body["conversation"]["status"] == "done"
+    assert store.get(Project, pid).intake_conversation_id == body["conversation"]["id"]
+
+    # Finalization is chief-side: no scout task is required, but normal planning
+    # wakes from the same durable-spec event.
+    _pump(client, store)
+    assert any("Intake accepted from durable spec files" in event for batch in orch.invocations for event in batch)
+
+
+def test_write_mission_queues_scout_to_write_dedicated_files(harness):
+    client, store, _orch = harness
     project = client.post("/api/projects", json={"name": "intake-demo"}).json()
     pid = project["id"]
     _configure_project(client, pid, "https://example.com/spec.git")
     rid = _register_usable_runner(client, backend="codex")
 
     conversation = client.post(f"/api/projects/{pid}/intake/start").json()
-    assert conversation["backend"] == "codex"
-    assert conversation["model"] == "gpt-5.5"
-
     _pump(client, store)
     first = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
-    assert first["kind"] == "intake"
-    assert first["conversation_id"] == conversation["id"]
-    assert first["conversation_turn"] == "initial"
-    assert "Mission:" in first["instructions"]
-
     client.post(
         f"/api/tasks/{first['id']}/result",
-        json={
-            "text": (
-                "Mission:\nBuild Hive.\n\n"
-                "Next iteration:\nMake intake work.\n\n"
-                "Likely next steps:\n- Wire scout turns\n- Persist approved specs\n\n"
-                "Assumptions:\n- Push mode is acceptable.\n\n"
-                "Questions:\n(none)"
-            ),
-            "session_handle": "session-1",
-        },
+        json={"text": "We should make intake file-based.", "session_handle": "session-1"},
         headers=RUNNER_HEADERS,
     )
-    saved = store.get(AgentConversation, conversation["id"])
-    assert saved.status == "open"
-    assert saved.session_handle == "session-1"
-    assert "Make intake work" in saved.latest_brief
 
-    queued = client.post(
-        f"/api/conversations/{conversation['id']}/message",
-        json={"action": "approve"},
-    ).json()["task"]
-    assert queued["conversation_turn"] == "finalize"
+    queued = client.post(f"/api/projects/{pid}/intake/write-mission").json()["task"]
+    assert queued["conversation_turn"] == "write_mission"
+    assert queued["session_handle"] == "session-1"
     _pump(client, store)
-    final = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
-    assert final["id"] == queued["id"]
-    assert final["session_handle"] == "session-1"
-    assert "Commit and push" in final["instructions"]
-
-    client.post(
-        f"/api/tasks/{final['id']}/result",
-        json={"text": "Committed and pushed abc123", "session_handle": "session-2"},
-        headers=RUNNER_HEADERS,
-    )
-    _pump(client, store)
-    finished = store.get(AgentConversation, conversation["id"])
-    assert finished.status == "done"
-    assert any("Intake accepted" in event for batch in orch.invocations for event in batch)
+    write_task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert write_task["id"] == queued["id"]
+    assert "mission.md" in write_task["instructions"]
+    assert "iteration.md" in write_task["instructions"]
+    assert "Commit and push" in write_task["instructions"]
+    assert store.get(AgentConversation, conversation["id"]).status == "running"
 
 
-def test_intake_approval_requires_ready_brief(harness):
+def test_intake_finalize_requires_spec_files_not_ready_brief(harness, tmp_path):
     client, store, _orch = harness
+    origin = _spec_origin(tmp_path, {"mission.md": "# Mission\nBuild Hive.\n"})
     project = client.post("/api/projects", json={"name": "intake-questions"}).json()
     pid = project["id"]
-    _configure_project(client, pid, "https://example.com/spec.git")
+    _configure_project(client, pid, str(origin))
     rid = _register_usable_runner(client, backend="codex")
     conversation = client.post(f"/api/projects/{pid}/intake/start").json()
 
@@ -1058,16 +1072,15 @@ def test_intake_approval_requires_ready_brief(harness):
 
     blocked = client.post(f"/api/conversations/{conversation['id']}/message", json={"action": "approve"})
     assert blocked.status_code == 409
+    assert "iteration.md" in blocked.json()["detail"]
     proceed = client.post(f"/api/conversations/{conversation['id']}/message", json={"action": "proceed"})
     assert proceed.status_code == 200
     proceed_task = proceed.json()["task"]
-    # Regression: "proceed with assumptions" must produce the next approval
-    # brief, not a file-finalization report that keeps approval disabled.
+    # Regression: proceed stays conversational; canonical readiness comes from
+    # dedicated spec files, not from a regex-shaped brief.
     assert proceed_task["conversation_turn"] == "proceed"
-    assert "Return a compact approval-ready brief" in proceed_task["instructions"]
+    assert "Return a compact updated brief" in proceed_task["instructions"]
     assert "Do not edit files" in proceed_task["instructions"]
-    assert "Mission:" in proceed_task["instructions"]
-    assert "Questions:" in proceed_task["instructions"]
 
 
 CLAUDE_SUBSCRIPTION_DISABLED = (

@@ -9,13 +9,33 @@ public repos and local paths work for tests.
 from __future__ import annotations
 
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 DIGEST_FILES = ("mission.md", "iteration.md")
 DIGEST_DIRS = ("wiki", "input-log")
+REQUIRED_INTAKE_FILES = ("mission.md", "iteration.md")
 # ~50k tokens. Not a context limit (models take far more) but an anti-bloat
 # tripwire: a spec home this big needs distillation, not silent acceptance.
 MAX_DIGEST_CHARS = 200_000
+
+
+@dataclass(frozen=True)
+class SpecStatus:
+    required_files: tuple[str, ...]
+    present_files: tuple[str, ...]
+    missing_files: tuple[str, ...]
+    ready: bool
+    error: str = ""
+
+    def model_dump(self) -> dict:
+        return {
+            "required_files": list(self.required_files),
+            "present_files": list(self.present_files),
+            "missing_files": list(self.missing_files),
+            "ready": self.ready,
+            "error": self.error,
+        }
 
 
 def digest_dir(path: Path) -> str:
@@ -36,6 +56,21 @@ def digest_dir(path: Path) -> str:
             f"distill the wiki or add selective spec reading before growing further"
         )
     return text or "(spec repo is empty — no mission.md/iteration.md yet)"
+
+
+def spec_status_dir(path: Path, required_files: tuple[str, ...] = REQUIRED_INTAKE_FILES) -> SpecStatus:
+    present = tuple(
+        rel
+        for rel in required_files
+        if (path / rel).is_file() and (path / rel).read_text().strip()
+    )
+    missing = tuple(rel for rel in required_files if rel not in present)
+    return SpecStatus(
+        required_files=required_files,
+        present_files=present,
+        missing_files=missing,
+        ready=not missing,
+    )
 
 
 def _run(args: list[str], cwd: Path | None = None) -> str:

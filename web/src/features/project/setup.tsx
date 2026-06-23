@@ -18,33 +18,6 @@ export function buildSetupPatch(fields: {
   };
 }
 
-function intakeSection(text: string, heading: string): string {
-  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = text.match(
-    new RegExp(`(?:^|\\n)(?:#+\\s*)?${escaped}\\s*:?\\s*\\n([\\s\\S]*?)(?=\\n(?:#+\\s*)?[A-Za-z][A-Za-z ]{1,40}\\s*:?\\s*\\n|$)`, "i"),
-  );
-  return match?.[1]?.trim() ?? "";
-}
-
-function intakeBriefReady(text: string): boolean {
-  const required = ["Mission", "Next iteration", "Likely next steps", "Assumptions", "Questions"];
-  if (required.some((heading) => !intakeSection(text, heading))) return false;
-  const normalized = intakeSection(text, "Questions")
-    .replace(/^[\s>*#`\-0-9.)]+/gm, "")
-    .toLowerCase()
-    .replace(/[^a-z]+/g, " ")
-    .trim();
-  return new Set([
-    "",
-    "none",
-    "n a",
-    "no questions",
-    "no material questions",
-    "no remaining questions",
-    "no remaining material questions",
-  ]).has(normalized);
-}
-
 export function ProjectSetup({
   project,
   conversation,
@@ -52,6 +25,8 @@ export function ProjectSetup({
   onSave,
   onCreateRepo,
   onStartIntake,
+  onWriteMission,
+  onFinalizeIntake,
   onConversationMessage,
 }: {
   project: Project;
@@ -60,7 +35,9 @@ export function ProjectSetup({
   onSave: (patch: ProjectPatch) => Promise<void>;
   onCreateRepo: (repoName: string) => Promise<void>;
   onStartIntake: (patch: ProjectPatch, backend?: string) => Promise<void>;
-  onConversationMessage: (conversationId: string, action: "message" | "proceed" | "approve", message?: string) => Promise<void>;
+  onWriteMission: (patch: ProjectPatch) => Promise<void>;
+  onFinalizeIntake: (patch: ProjectPatch) => Promise<void>;
+  onConversationMessage: (conversationId: string, action: "message" | "proceed", message?: string) => Promise<void>;
 }) {
   const [specRepo, setSpecRepo] = useState(project.spec_repo);
   const [memberRepos, setMemberRepos] = useState(project.member_repos);
@@ -74,7 +51,6 @@ export function ProjectSetup({
   const intakeRunning = conversation?.status === "running" || conversation?.status === "finalizing";
   const intakeDone = conversation?.status === "done";
   const intakeFailed = conversation?.status === "failed";
-  const intakeReady = intakeBriefReady(conversation?.latest_brief ?? "");
   const scoutLabel = (backend: string) => (backend === "codex" ? "codex" : "claude");
 
   const save = async () => {
@@ -126,7 +102,7 @@ export function ProjectSetup({
     setBusy(false);
   };
 
-  const sendConversation = async (action: "message" | "proceed" | "approve") => {
+  const sendConversation = async (action: "message" | "proceed") => {
     if (!conversation) return;
     setBusy(true);
     setError("");
@@ -135,6 +111,28 @@ export function ProjectSetup({
       if (action === "message") setIntakeMessage("");
     } catch (e) {
       setError((e as Error).message || "could not send intake message");
+    }
+    setBusy(false);
+  };
+
+  const writeMission = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await onWriteMission(buildSetupPatch(fields));
+    } catch (e) {
+      setError((e as Error).message || "could not write mission");
+    }
+    setBusy(false);
+  };
+
+  const finalizeIntake = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await onFinalizeIntake(buildSetupPatch(fields));
+    } catch (e) {
+      setError((e as Error).message || "could not finalize intake");
     }
     setBusy(false);
   };
@@ -235,9 +233,6 @@ export function ProjectSetup({
                     <button type="button" className="ghost" onClick={() => sendConversation("proceed")} disabled={busy || intakeRunning}>
                       proceed with assumptions
                     </button>
-                    <button type="button" onClick={() => sendConversation("approve")} disabled={busy || intakeRunning || !intakeReady}>
-                      approve and finalize
-                    </button>
                   </div>
                 </div>
               )
@@ -253,6 +248,23 @@ export function ProjectSetup({
             disabled={busy || !specRepo.trim() || intakeRunning || intakeDone || Boolean(conversation)}
           >
             {busy ? "starting..." : intakeFailed ? "intake failed" : conversation ? "intake started" : "start intake"}
+          </button>
+        </div>
+        <div className="setup-actions">
+          <button
+            type="button"
+            className="ghost"
+            onClick={writeMission}
+            disabled={busy || intakeRunning || !specRepo.trim() || availableScoutBackends.length === 0}
+          >
+            write mission
+          </button>
+          <button
+            type="button"
+            onClick={finalizeIntake}
+            disabled={busy || intakeRunning || !specRepo.trim()}
+          >
+            approve and finalize
           </button>
         </div>
       </form>

@@ -33,6 +33,7 @@ from hive.config.settings import Config
 from hive.control.escalation import escalate
 from hive.integrations.github_repos import all_repos as list_github_repos
 from hive.integrations.github_repos import create_repo as create_github_repo
+from hive.integrations.specrepo import REQUIRED_INTAKE_FILES, SpecRepo, SpecStatus, spec_status_dir
 from hive.workstreams.issues import (
     advance_issues,
     attachment_key,
@@ -493,6 +494,110 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             "probe or fix a trusted scout, then retry",
         )
 
+    def spec_status(project: Project) -> SpecStatus:
+        if not project.spec_repo.strip():
+            return SpecStatus((), (), (), False, "spec_repo is not set")
+        try:
+            local = Path(project.spec_repo)
+            is_bare_git = (
+                local.exists()
+                and local.is_dir()
+                and (local / "HEAD").is_file()
+                and (local / "objects").is_dir()
+            )
+            if local.exists() and local.is_dir() and not is_bare_git:
+                return spec_status_dir(local)
+            repo = SpecRepo(project.spec_repo, Path(config.data_dir) / "specs", config.gh_token)
+            repo.sync()
+            return spec_status_dir(repo.path)
+        except Exception as exc:
+            return SpecStatus(REQUIRED_INTAKE_FILES, (), REQUIRED_INTAKE_FILES, False, str(exc))
+
+    def require_spec_files_ready(project: Project) -> SpecStatus:
+        status = spec_status(project)
+        if status.ready:
+            return status
+        if status.error:
+            raise HTTPException(409, f"could not verify spec files: {status.error}")
+        raise HTTPException(
+            409,
+            "missing required spec files: " + ", ".join(status.missing_files),
+        )
+
+    def create_intake_conversation(project: Project, prefer_backend: str = "") -> AgentConversation:
+        backend, model, _runner_id = trusted_intake_capacity(project.workspace_id, prefer_backend)
+        conversation = store.put(
+            AgentConversation(
+                workspace_id=project.workspace_id,
+                project_id=project.id,
+                repo=project.spec_repo,
+                backend=backend,
+                model=model,
+                status=ConversationStatus.open,
+            )
+        )
+        project.intake_conversation_id = conversation.id
+        project.state = ProjectState.intake
+        store.put(project)
+        return conversation
+
+    def writable_intake_conversation(project: Project, prefer_backend: str = "") -> AgentConversation:
+        existing = (
+            store.get(AgentConversation, project.intake_conversation_id)
+            if project.intake_conversation_id
+            else None
+        )
+        if existing and existing.status in (ConversationStatus.running, ConversationStatus.finalizing):
+            return existing
+        if existing and existing.status == ConversationStatus.open:
+            return existing
+        return create_intake_conversation(project, prefer_backend)
+
+    def accept_project_intake(
+        project: Project,
+        conversation: AgentConversation | None = None,
+    ) -> tuple[AgentConversation, SpecStatus]:
+        if conversation and conversation.status in (ConversationStatus.running, ConversationStatus.finalizing):
+            raise HTTPException(409, "intake scout is already running")
+        status = require_spec_files_ready(project)
+        accepted_at = time.time()
+        summary = (
+            "Accepted durable spec files: "
+            + ", ".join(status.present_files)
+            + ". Planning can use the spec repo as source of truth."
+        )
+        if conversation:
+            def mark(conv: AgentConversation) -> None:
+                conv.status = ConversationStatus.done
+                conv.latest_brief = conv.latest_brief or summary
+                conv.transcript.append({"role": "system", "text": summary})
+                conv.updated_at = accepted_at
+
+            accepted = store.update(AgentConversation, conversation.id, mark) or conversation
+        else:
+            accepted = store.put(
+                AgentConversation(
+                    workspace_id=project.workspace_id,
+                    project_id=project.id,
+                    repo=project.spec_repo,
+                    backend="manual",
+                    model="",
+                    status=ConversationStatus.done,
+                    latest_brief=summary,
+                    transcript=[{"role": "system", "text": summary}],
+                    updated_at=accepted_at,
+                )
+            )
+        project.intake_conversation_id = accepted.id
+        project.state = ProjectState.idle
+        store.put(project)
+        supervisor.wake(
+            project.id,
+            "Intake accepted from durable spec files. Plan from the spec repo.\n"
+            f"Files: {', '.join(status.present_files)}",
+        )
+        return accepted, status
+
     def intake_context(conversation: AgentConversation) -> str:
         recent = conversation.transcript[-8:]
         transcript = "\n\n".join(
@@ -512,35 +617,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 "",
             ]
         )
-
-    def _intake_section(text: str, heading: str) -> str:
-        pattern = re.compile(
-            rf"(?ims)^(?:#+\s*)?{re.escape(heading)}\s*:?\s*$\s*(.*?)(?=^(?:#+\s*)?[A-Za-z][A-Za-z ]{{1,40}}\s*:?\s*$|\Z)"
-        )
-        match = pattern.search(text)
-        return match.group(1).strip() if match else ""
-
-    def intake_brief_ready(text: str) -> bool:
-        """Derive approval readiness from the scout brief itself, not a label.
-
-        The prompt asks for these section headings; if the scout omits them or
-        leaves material questions, the user can answer/correct or choose
-        proceed-with-assumptions to get a revised brief.
-        """
-        required = ["Mission", "Next iteration", "Likely next steps", "Assumptions", "Questions"]
-        if any(not _intake_section(text, heading) for heading in required):
-            return False
-        questions = re.sub(r"^[\\s>*#`\\-•0-9.)]+", "", _intake_section(text, "Questions").strip(), flags=re.M)
-        normalized = re.sub(r"[^a-z]+", " ", questions.lower()).strip()
-        return normalized in {
-            "",
-            "none",
-            "n a",
-            "no questions",
-            "no material questions",
-            "no remaining questions",
-            "no remaining material questions",
-        }
 
     def intake_prompt(
         project: Project,
@@ -596,32 +672,23 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 + "\n"
                 "The user chose to proceed with current information and accepts the risk of "
                 "wrong assumptions.\n\n"
-                "Return a compact approval-ready brief using the current repo/spec context. "
-                "Do not edit files, commit, push, or report on file changes. Do not ask more "
+                "Return a compact updated brief using the current repo/spec context. Do not "
+                "edit files, commit, push, or report on file changes. Do not ask more "
                 "questions unless work would be impossible rather than merely risky. Clearly "
-                "list the assumptions you are making.\n\n"
-                "Use exactly these sections:\n"
-                "Mission:\n"
-                "Next iteration:\n"
-                "Likely next steps:\n"
-                "Assumptions:\n"
-                "Questions:\n"
-                "Evidence:\n\n"
-                "If there are no material questions, write `Questions:\\nNone`."
+                "list the assumptions you are making."
             )
-        if turn == "finalize":
+        if turn == "write_mission":
             return (
                 intake_context(conversation)
                 + "\n"
-                "The user approved the latest intake brief.\n\n"
-                "Update durable spec files to match it. You may edit:\n"
-                "- mission.md\n"
-                "- iteration.md\n"
-                "- wiki/intake.md\n"
-                "- input-log/* intake records\n\n"
-                "Preserve coherent existing mission/iteration text. Rewrite stale or wrong "
-                "content when needed. Do not modify product code. Commit and push the spec "
-                "changes. Report the commit SHA."
+                "Write the durable project-intake files in the spec repo. The canonical "
+                "outputs are dedicated files, not markdown sections in this chat.\n\n"
+                "Edit or create:\n"
+                "- mission.md — the long-term mission and operating principles.\n"
+                "- iteration.md — the concrete next iteration goal and acceptance signal.\n\n"
+                "You may also update wiki/intake.md and input-log/* if useful for provenance. "
+                "Do not modify product code. Commit and push the spec changes. Report the "
+                "commit SHA and the files changed."
             )
         return (
             intake_context(conversation)
@@ -967,8 +1034,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         ctx: AuthContext = Depends(current),
     ):
         project = require_project(project_id, ctx)
-        if project.autonomy != Autonomy.direct_push:
-            raise HTTPException(400, "intake currently supports direct_push projects only")
         if not project.spec_repo.strip():
             raise HTTPException(400, "spec_repo must be set before intake")
         if project.intake_conversation_id:
@@ -982,22 +1047,38 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 ConversationStatus.finalizing,
             ):
                 return existing.model_dump()
-        backend, model, _runner_id = trusted_intake_capacity(ctx.workspace_id, body.backend.strip())
-        conversation = store.put(
-            AgentConversation(
-                workspace_id=ctx.workspace_id,
-                project_id=project.id,
-                repo=project.spec_repo,
-                backend=backend,
-                model=model,
-                status=ConversationStatus.open,
-            )
-        )
-        project.intake_conversation_id = conversation.id
-        project.state = ProjectState.intake
-        store.put(project)
+        conversation = create_intake_conversation(project, body.backend.strip())
         queue_intake_turn(project, conversation, "initial")
         return store.get(AgentConversation, conversation.id).model_dump()
+
+    @app.post("/api/projects/{project_id}/intake/write-mission")
+    def write_mission(
+        project_id: str,
+        body: IntakeStart = IntakeStart(),
+        ctx: AuthContext = Depends(current),
+    ):
+        project = require_project(project_id, ctx)
+        if project.autonomy != Autonomy.direct_push:
+            raise HTTPException(400, "write mission currently supports direct_push projects only")
+        if not project.spec_repo.strip():
+            raise HTTPException(400, "spec_repo must be set before writing mission")
+        conversation = writable_intake_conversation(project, body.backend.strip())
+        task = queue_intake_turn(project, conversation, "write_mission")
+        return {
+            "conversation": store.get(AgentConversation, conversation.id).model_dump(),
+            "task": task.model_dump(),
+        }
+
+    @app.post("/api/projects/{project_id}/intake/finalize")
+    def finalize_intake(project_id: str, ctx: AuthContext = Depends(current)):
+        project = require_project(project_id, ctx)
+        conversation = (
+            store.get(AgentConversation, project.intake_conversation_id)
+            if project.intake_conversation_id
+            else None
+        )
+        conversation, status = accept_project_intake(project, conversation)
+        return {"conversation": conversation.model_dump(), "spec_status": status.model_dump()}
 
     @app.post("/api/projects/{project_id}/repo")
     def create_project_repo(
@@ -1054,14 +1135,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             raise HTTPException(400, "action must be message, proceed, or approve")
         if action == "message" and not body.message.strip():
             raise HTTPException(400, "message is required")
-        if action == "approve" and project.autonomy != Autonomy.direct_push:
-            raise HTTPException(400, "intake finalization currently supports direct_push projects only")
-        if action == "approve" and not intake_brief_ready(conversation.latest_brief):
-            raise HTTPException(
-                409,
-                "intake brief is not ready to approve; answer/correct it or proceed with assumptions first",
-            )
-        turn = "finalize" if action == "approve" else ("proceed" if action == "proceed" else "message")
+        if action == "approve":
+            conversation, status = accept_project_intake(project, conversation)
+            return {"conversation": conversation.model_dump(), "spec_status": status.model_dump()}
+        turn = "proceed" if action == "proceed" else "message"
         task = queue_intake_turn(project, conversation, turn, body.message)
         return {"conversation": store.get(AgentConversation, conversation.id).model_dump(), "task": task.model_dump()}
 

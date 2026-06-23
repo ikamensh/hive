@@ -1159,29 +1159,91 @@ export const api = {
     return structuredClone(conversation);
   },
 
+  writeMission: async (id: string, backend = ""): Promise<{ conversation: AgentConversation; task: Task }> => {
+    const project = projects.find((p) => p.id === id);
+    if (!project) throw new Error("not found");
+    if (!project.spec_repo.trim()) throw new Error("spec_repo required");
+    let conversation = conversations.find((c) => c.id === project.intake_conversation_id && c.status === "open");
+    if (!conversation) {
+      conversation = {
+        id: `conv-${Math.random().toString(36).slice(2, 8)}`,
+        project_id: id,
+        role: "intake",
+        repo: project.spec_repo,
+        backend: backend || "codex",
+        model: backend === "claude" ? "opus" : "gpt-5.5",
+        status: "open",
+        session_handle: "",
+        latest_brief: "",
+        transcript: [],
+        last_task_id: "",
+        created_at: Date.now() / 1000,
+        updated_at: Date.now() / 1000,
+      };
+      conversations.push(conversation);
+      project.intake_conversation_id = conversation.id;
+    }
+    const task = makeIntakeTask(project, conversation, "write_mission", "running", "Write mission.md and iteration.md.");
+    conversation.status = "running";
+    conversation.last_task_id = task.id;
+    project.state = "intake";
+    return structuredClone({ conversation, task });
+  },
+
+  finalizeIntake: async (id: string): Promise<{ conversation: AgentConversation }> => {
+    const project = projects.find((p) => p.id === id);
+    if (!project) throw new Error("not found");
+    if (!project.spec_repo.trim()) throw new Error("spec_repo required");
+    let conversation = conversations.find((c) => c.id === project.intake_conversation_id);
+    if (!conversation) {
+      conversation = {
+        id: `conv-${Math.random().toString(36).slice(2, 8)}`,
+        project_id: id,
+        role: "intake",
+        repo: project.spec_repo,
+        backend: "manual",
+        model: "",
+        status: "done",
+        session_handle: "",
+        latest_brief: "Accepted durable spec files.",
+        transcript: [{ role: "system", text: "Accepted durable spec files." }],
+        last_task_id: "",
+        created_at: Date.now() / 1000,
+        updated_at: Date.now() / 1000,
+      };
+      conversations.push(conversation);
+      project.intake_conversation_id = conversation.id;
+    }
+    conversation.status = "done";
+    conversation.latest_brief = conversation.latest_brief || "Accepted durable spec files.";
+    conversation.updated_at = Date.now() / 1000;
+    project.state = "idle";
+    return structuredClone({ conversation });
+  },
+
   conversationMessage: async (
     id: string,
     body: IntakeMessage,
-  ): Promise<{ conversation: AgentConversation; task: Task }> => {
+  ): Promise<{ conversation: AgentConversation; task?: Task }> => {
     const conversation = conversations.find((c) => c.id === id);
     if (!conversation) throw new Error("not found");
     const project = projects.find((p) => p.id === conversation.project_id);
     if (!project) throw new Error("project not found");
     const action = body.action || "message";
-    const status = action === "approve" ? "done" : "open";
-    const turn = action === "approve" ? "finalize" : action === "proceed" ? "proceed" : "message";
+    if (action === "approve") {
+      conversation.status = "done";
+      project.state = "idle";
+      return structuredClone({ conversation });
+    }
+    const turn = action === "proceed" ? "proceed" : "message";
     const task = makeIntakeTask(project, conversation, turn, "done", body.message || "");
-    conversation.status = status;
+    conversation.status = "open";
     conversation.session_handle = conversation.session_handle || "mock-intake-session";
-    conversation.latest_brief =
-      action === "approve"
-        ? `${conversation.latest_brief || "## Approved intake\n\nSpecs accepted."}\n\nSpecs were finalized and pushed.`
-        : `${conversation.latest_brief || "## Intake brief"}\n\n${body.message ? `User said: ${body.message}` : "Proceeding with stated assumptions."}`;
+    conversation.latest_brief = `${conversation.latest_brief || "## Intake brief"}\n\n${body.message ? `User said: ${body.message}` : "Proceeding with stated assumptions."}`;
     conversation.transcript.push({ role: "user", text: body.message || action });
     conversation.transcript.push({ role: "assistant", text: conversation.latest_brief });
     conversation.last_task_id = task.id;
     conversation.updated_at = Date.now() / 1000;
-    if (action === "approve") project.state = "idle";
     return structuredClone({ conversation, task });
   },
 

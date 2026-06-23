@@ -158,7 +158,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("intake-proceed", help="tell intake to proceed with current assumptions")
     p.add_argument("conversation_id")
 
-    p = sub.add_parser("intake-approve", help="approve the latest intake brief and finalize specs")
+    p = sub.add_parser("intake-write-mission", help="ask a scout to write mission.md and iteration.md")
+    p.add_argument("project_id")
+
+    p = sub.add_parser("intake-approve", help="accept existing mission.md and iteration.md as finalized intake")
     p.add_argument("conversation_id")
 
     p = sub.add_parser("show", help="project detail: workstreams, tasks, questions")
@@ -538,6 +541,8 @@ def run(args: argparse.Namespace, client) -> dict | list:
         r = client.post(f"/api/conversations/{args.conversation_id}/message", json={
             "action": "proceed",
         })
+    elif c == "intake-write-mission":
+        r = client.post(f"/api/projects/{args.project_id}/intake/write-mission")
     elif c == "intake-approve":
         r = client.post(f"/api/conversations/{args.conversation_id}/message", json={
             "action": "approve",

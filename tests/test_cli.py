@@ -10,7 +10,7 @@ import os
 import pytest
 import httpx
 from fastapi.testclient import TestClient
-from test_api_e2e import ScriptedOrchestrator, _pump, _register_usable_runner
+from test_api_e2e import ScriptedOrchestrator, _pump, _register_usable_runner, _spec_origin
 
 from hive.cli import (
     UVICORN_GRACEFUL_SHUTDOWN_S,
@@ -44,12 +44,16 @@ def harness(tmp_path):
     yield TestClient(create_app(store, supervisor, config)), store
 
 
-def test_cli_drives_full_loop(harness):
+def test_cli_drives_full_loop(harness, tmp_path):
     client, store = harness
+    origin = _spec_origin(tmp_path, {
+        "mission.md": "# Mission\nShip the demo.\n",
+        "iteration.md": "# Iteration\nBuild the first loop.\n",
+    })
 
     project = cli(client, "create", "demo")
     pid = project["id"]
-    cli(client, "set", pid, "--spec-repo", "https://example.com/spec.git",
+    cli(client, "set", pid, "--spec-repo", str(origin),
         "--member-repos", "https://example.com/app.git")
 
     scout_rid = _register_usable_runner(client, name="scout", backend="codex")
@@ -72,15 +76,8 @@ def test_cli_drives_full_loop(harness):
         headers=RUNNER_HEADERS,
     )
     approved = cli(client, "intake-approve", conversation["id"])
-    assert approved["task"]["conversation_turn"] == "finalize"
-    _pump(client, store)
-    finalize = client.post(f"/api/runners/{scout_rid}/poll", headers=RUNNER_HEADERS).json()["task"]
-    assert finalize["conversation_turn"] == "finalize"
-    client.post(
-        f"/api/tasks/{finalize['id']}/result",
-        json={"text": "Specs pushed at abc123."},
-        headers=RUNNER_HEADERS,
-    )
+    assert approved["conversation"]["status"] == "done"
+    assert approved["spec_status"]["ready"] is True
     # The scripted planner queues normal work on cursor; make that resource
     # visible before planning so the resource-aware tool accepts the task.
     rid = _register_usable_runner(client, name="fake")
