@@ -5,6 +5,7 @@ import type {
   AgentConversation,
   AuthInfo,
   Checkout,
+  CiCheckResult,
   Directive,
   GithubRepo,
   HumanTodo,
@@ -96,6 +97,7 @@ const projects: Project[] = [
     autonomy: "direct_push",
     guess_propensity: "sometimes",
     prod_deploys: false,
+    ci_autofix: false,
     paused: false,
     archived: false,
     goal_complete: false,
@@ -114,6 +116,7 @@ const projects: Project[] = [
     autonomy: "pr",
     guess_propensity: "often",
     prod_deploys: true,
+    ci_autofix: false,
     paused: false,
     archived: false,
     goal_complete: false,
@@ -132,6 +135,7 @@ const projects: Project[] = [
     autonomy: "direct_push",
     guess_propensity: "rarely",
     prod_deploys: true,
+    ci_autofix: false,
     paused: false,
     archived: false,
     goal_complete: true,
@@ -151,6 +155,7 @@ const projects: Project[] = [
     autonomy: "direct_push",
     guess_propensity: "never",
     prod_deploys: false,
+    ci_autofix: false,
     paused: true,
     archived: false,
     goal_complete: false,
@@ -169,6 +174,7 @@ const projects: Project[] = [
     autonomy: "direct_push",
     guess_propensity: "rarely",
     prod_deploys: false,
+    ci_autofix: false,
     paused: false,
     archived: false,
     goal_complete: false,
@@ -1100,6 +1106,7 @@ export const api = {
       autonomy: "direct_push",
       guess_propensity: "sometimes",
       prod_deploys: false,
+      ci_autofix: false,
       paused: false,
       archived: false,
       daily_budget_usd: 0,
@@ -1436,6 +1443,24 @@ export const api = {
     run.finished_at = Date.now() / 1000;
     run.counts = { ...run.counts, cancelled_tasks: 0 };
     return structuredClone(run);
+  },
+
+  checkCi: async (projectId: string, workstreamId: string): Promise<CiCheckResult> => {
+    const stream = projectWorkstreams.find((w) => w.project_id === projectId && w.id === workstreamId);
+    if (!stream) throw new Error("not found");
+    return {
+      repo: stream.repo,
+      branch: "main",
+      sha: "deadbee",
+      conclusion: "passing",
+      failing_checks: [],
+      html_url: "",
+      filed_issue: 0,
+      filed_issue_url: "",
+      already_filed: false,
+      open_issues: 0,
+      resolve_queued: 0,
+    };
   },
 
   refreshTests: async (projectId: string, workstreamId: string): Promise<{ task: Task }> => {

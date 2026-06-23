@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AuthInfo,
   AgentConversation,
+  CiCheckResult,
   Directive,
   HumanTodo,
   GithubRepo,
@@ -154,6 +155,8 @@ const realApi = {
       body: JSON.stringify(body),
     }),
   cancelIssueRun: (id: string) => http<IssueRun>(`/api/issue-runs/${id}/cancel`, { method: "POST" }),
+  checkCi: (projectId: string, workstreamId: string) =>
+    http<CiCheckResult>(`/api/projects/${projectId}/workstreams/${workstreamId}/check-ci`, { method: "POST" }),
   refreshTests: (projectId: string, workstreamId: string) =>
     http<{ task: Task }>(`/api/projects/${projectId}/workstreams/${workstreamId}/test-refresh`, {
       method: "POST",

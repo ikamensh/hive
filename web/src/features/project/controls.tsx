@@ -422,6 +422,18 @@ export function ProjectSettings({
             </button>
           </div>
           <div className="toggle-cell">
+            <span className="toggle-label" title="poll each repo's CI; file + auto-fix an issue when the build is red">
+              CI auto-fix
+            </span>
+            <button
+              className={`switch ${project.ci_autofix ? "on" : ""}`}
+              onClick={() => onPatch({ ci_autofix: !project.ci_autofix })}
+              aria-pressed={project.ci_autofix}
+            >
+              <i />
+            </button>
+          </div>
+          <div className="toggle-cell">
             <span className="toggle-label">paused</span>
             <button
               className={`switch warn ${project.paused ? "on" : ""}`}

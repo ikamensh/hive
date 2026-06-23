@@ -2,6 +2,7 @@ import { Fragment, useState } from "react";
 import { api, repoShort } from "../../api";
 import { Markdown } from "../../components/shared";
 import type {
+  CiCheckResult,
   PreflightCheck,
   PreflightResult,
   Project,
@@ -33,8 +34,9 @@ export function IssuesToolbar({
   selectedNumbers: number[];
   onChanged: () => void;
 }) {
-  const [busyAction, setBusyAction] = useState<"preflight" | "sync" | "run" | "">("");
+  const [busyAction, setBusyAction] = useState<"preflight" | "sync" | "run" | "ci" | "">("");
   const [result, setResult] = useState<ScanResult | null>(null);
+  const [ci, setCi] = useState<CiCheckResult | null>(null);
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
   const [error, setError] = useState("");
   const [errorChecks, setErrorChecks] = useState<PreflightCheck[]>([]);
@@ -70,6 +72,22 @@ export function IssuesToolbar({
       onChanged();
     } catch (e) {
       setError((e as Error).message || "sync failed");
+      setErrorChecks(checksFromError(e));
+    }
+    setBusyAction("");
+  };
+
+  const checkCi = async () => {
+    if (!stream) return;
+    setBusyAction("ci");
+    setError("");
+    setErrorChecks([]);
+    setCi(null);
+    try {
+      setCi(await api.checkCi(project.id, stream.id));
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message || "CI check failed");
       setErrorChecks(checksFromError(e));
     }
     setBusyAction("");
@@ -119,6 +137,14 @@ export function IssuesToolbar({
           <button className="ghost" onClick={sync} disabled={busy || noRepo || streamDisabled} title={noRepo ? "set a GitHub repo first" : undefined}>
             {busyAction === "sync" ? "syncing..." : "sync"}
           </button>
+          <button
+            className="ghost"
+            onClick={checkCi}
+            disabled={busy || noRepo || streamDisabled}
+            title={noRepo ? "set a GitHub repo first" : "check this repo's CI and auto-fix a red build"}
+          >
+            {busyAction === "ci" ? "checking CI..." : "check CI"}
+          </button>
           <button onClick={() => setDrawerOpen((v) => !v)} disabled={busy || noRepo || streamDisabled} title={noRepo ? "set a GitHub repo first" : undefined}>
             run issues
           </button>
@@ -159,6 +185,24 @@ export function IssuesToolbar({
             <span className="form-error">{error}</span>
             <CheckList checks={errorChecks} />
           </div>
+        )}
+        {ci && !error && (
+          <span className="scan-summary">
+            CI {ci.conclusion} on {ci.branch || "default"}
+            {ci.conclusion === "failing" ? (
+              ci.already_filed ? (
+                <> - already tracking <a href={ci.filed_issue_url} target="_blank" rel="noreferrer">#{ci.filed_issue}</a></>
+              ) : ci.filed_issue ? (
+                <>
+                  {" "}- filed{" "}
+                  <a href={ci.filed_issue_url} target="_blank" rel="noreferrer">#{ci.filed_issue}</a>
+                  {ci.resolve_queued > 0 ? " - fix queued" : ""}
+                </>
+              ) : null
+            ) : (
+              <> - nothing to fix</>
+            )}
+          </span>
         )}
         {preflight && !error && <PreflightSummary result={preflight} />}
         {result && !error && (

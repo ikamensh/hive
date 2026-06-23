@@ -25,6 +25,7 @@ export interface Project {
   autonomy: Autonomy;
   guess_propensity: GuessPropensity;
   prod_deploys: boolean;
+  ci_autofix: boolean;
   paused: boolean;
   archived: boolean;
   daily_budget_usd: number;
@@ -629,6 +630,7 @@ export interface ProjectPatch {
   autonomy?: Autonomy;
   guess_propensity?: GuessPropensity;
   prod_deploys?: boolean;
+  ci_autofix?: boolean;
   paused?: boolean;
   daily_budget_usd?: number;
   member_repos?: string[];
@@ -659,6 +661,22 @@ export interface ScanResult {
 
 export interface IssueRunResult extends ScanResult {
   run: IssueRun;
+}
+
+export type CiConclusion = "passing" | "failing" | "pending" | "none";
+
+export interface CiCheckResult {
+  repo: string;
+  branch: string;
+  sha: string;
+  conclusion: CiConclusion;
+  failing_checks: { name: string; url: string }[];
+  html_url: string;
+  filed_issue: number;
+  filed_issue_url: string;
+  already_filed: boolean;
+  open_issues: number;
+  resolve_queued: number;
 }
 
 export interface TestEpisodeResult {
