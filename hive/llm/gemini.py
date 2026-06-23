@@ -9,7 +9,16 @@ function-call content each round so per-call ids / thought signatures survive.
 
 from __future__ import annotations
 
-from hive.llm.core import Completion, ToolCall, ToolResult, ToolSet, Usage
+from hive.llm.core import Completion, ProviderUnavailable, ToolCall, ToolResult, ToolSet, Usage
+
+
+def _reraise_if_unavailable(exc: Exception) -> None:
+    """Re-raise google-genai quota/auth/availability errors as ProviderUnavailable
+    so the orchestrator can fall back. The SDK's APIError carries the HTTP status
+    on `.code`; anything else (a real bug) propagates untouched."""
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    if code in (401, 403, 404, 429) or (isinstance(code, int) and code >= 500):
+        raise ProviderUnavailable(f"Gemini API error {code}: {exc}") from exc
 
 
 def _usage(metadata) -> Usage:
@@ -53,15 +62,19 @@ class GeminiAdapter:
     def step(self) -> Completion:
         from google.genai import types
 
-        response = self._client.models.generate_content(
-            model=self.model,
-            contents=self._contents,
-            config=types.GenerateContentConfig(
-                system_instruction=self._system,
-                tools=self._callables,
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-            ),
-        )
+        try:
+            response = self._client.models.generate_content(
+                model=self.model,
+                contents=self._contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=self._system,
+                    tools=self._callables,
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                ),
+            )
+        except Exception as exc:
+            _reraise_if_unavailable(exc)
+            raise
         usage = _usage(getattr(response, "usage_metadata", None))
         calls = response.function_calls or []
         if not calls:

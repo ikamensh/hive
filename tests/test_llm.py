@@ -154,6 +154,54 @@ def test_select_model_skips_responses_only_pro_tier():
     assert adapter._select_model() == "gpt-5.5"
 
 
+def test_openai_classifies_quota_as_provider_unavailable_but_not_bad_request(monkeypatch):
+    """A 429 (quota) is another provider's chance to answer; a 400 (our malformed
+    request) is a real bug we must not mask as a fallback signal."""
+    import httpx
+
+    from hive.llm import ProviderUnavailable
+    from hive.llm.openai import OpenAIAdapter
+
+    class _Resp:
+        def __init__(self, code):
+            self.status_code, self.text = code, "{}"
+
+    adapter = OpenAIAdapter(api_key="k", base_url="https://api.openai.com/v1", model="gpt-5.5")
+    monkeypatch.setattr(httpx, "request", lambda *a, **k: _Resp(429))
+    with pytest.raises(ProviderUnavailable, match="429"):
+        adapter.step()
+    monkeypatch.setattr(httpx, "request", lambda *a, **k: _Resp(400))
+    with pytest.raises(RuntimeError) as exc:
+        adapter.step()
+    assert not isinstance(exc.value, ProviderUnavailable)
+
+
+# -- provider fallback chain --------------------------------------------------
+
+def test_candidate_providers_lists_all_keyed_for_auto_fallback():
+    from hive.llm import candidate_providers
+
+    # auto + both keys: try both, preferred first — so one being down can fall back
+    assert candidate_providers(_config(openai_api_key="k", gemini_api_key="g")) == ["openai", "gemini"]
+    assert candidate_providers(_config(gemini_api_key="g")) == ["gemini"]
+    # an explicit provider or model prefix pins exactly one (no cross fallback)
+    assert candidate_providers(_config(orch_provider="gemini", gemini_api_key="g")) == ["gemini"]
+    assert candidate_providers(
+        _config(orch_model="gpt-5.5", openai_api_key="k", gemini_api_key="g")
+    ) == ["openai"]
+
+
+def test_build_adapters_gives_gemini_fallback_a_concrete_model():
+    from hive.llm import build_adapters
+    from hive.llm.openai import OpenAIAdapter
+    from hive.llm.provider import DEFAULT_GEMINI_MODEL
+
+    adapters = build_adapters(_config(openai_api_key="k", gemini_api_key="g"))
+    assert [type(a) for a in adapters] == [OpenAIAdapter, GeminiAdapter]
+    # Gemini has no auto-select, so the fallback adapter needs a default model.
+    assert adapters[1].model == DEFAULT_GEMINI_MODEL
+
+
 # -- Gemini adapter translation (no network) ---------------------------------
 
 class _FakeFunctionCall:

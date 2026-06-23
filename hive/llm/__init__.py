@@ -5,6 +5,7 @@ from hive.llm.core import (
     Completion,
     LLMAdapter,
     LoopResult,
+    ProviderUnavailable,
     ToolCall,
     ToolLoop,
     ToolResult,
@@ -12,12 +13,13 @@ from hive.llm.core import (
     Usage,
 )
 from hive.llm.parsing import extract_json
-from hive.llm.provider import build_adapter, resolve_provider
+from hive.llm.provider import build_adapter, build_adapters, candidate_providers, resolve_provider
 
 __all__ = [
     "Completion",
     "LLMAdapter",
     "LoopResult",
+    "ProviderUnavailable",
     "ToolCall",
     "ToolLoop",
     "ToolResult",
@@ -25,5 +27,7 @@ __all__ = [
     "Usage",
     "extract_json",
     "build_adapter",
+    "build_adapters",
+    "candidate_providers",
     "resolve_provider",
 ]

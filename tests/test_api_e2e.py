@@ -164,8 +164,8 @@ class AdapterOrchestrator(Orchestrator):
         super().__init__(store, blobs, config)
         self.adapter = adapter
 
-    def _build_adapter(self):
-        return self.adapter
+    def _build_adapters(self):
+        return [self.adapter]
 
 
 @pytest.fixture
@@ -478,6 +478,48 @@ def test_openai_orchestrator_auto_selects_model(tmp_path):
 
     assert orch._generate(project, [], "event", Tools(store, project, spec=None)).text == "ok"
     assert adapter.posts[0]["model"] == "gpt-test-new"
+
+
+def test_orchestrator_falls_back_when_first_provider_is_out_of_quota(tmp_path):
+    """The build loop must survive one provider going down. When the preferred
+    adapter raises ProviderUnavailable before any tool ran, the orchestrator
+    retries the next adapter instead of failing the whole invocation. Regression
+    for the OpenAI 429 insufficient_quota that stalled the project."""
+    from hive.llm import Completion, ProviderUnavailable, Usage
+
+    class _OutOfQuota:
+        model = "gpt-5.5"
+
+        def start(self, *a):
+            pass
+
+        def step(self):
+            raise ProviderUnavailable("OpenAI-compatible API error 429: insufficient_quota")
+
+        def add_tool_results(self, results):
+            pass
+
+    class _Works(_OutOfQuota):
+        model = "gemini-3.1-pro-preview"
+
+        def step(self):
+            return Completion(text="planned the work", usage=Usage(10, 5))
+
+    class _FallbackOrch(Orchestrator):
+        def _build_adapters(self):
+            return [_OutOfQuota(), _Works()]
+
+    store = MemoryStore()
+    project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
+    config = Config(
+        gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="g",
+        orch_model="", runner_token="test-token", data_dir=tmp_path,
+        openai_api_key="k",
+    )
+    orch = _FallbackOrch(store, LocalBlobStore(tmp_path / "blobs"), config)
+    result = orch._generate(project, [], "event", Tools(store, project, spec=None))
+    assert result.text == "planned the work"
+    assert result.model == "gemini-3.1-pro-preview"  # fell back to the working provider
 
 
 def test_openai_orchestrator_requires_api_key_for_official_api(tmp_path):

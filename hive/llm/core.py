@@ -20,6 +20,13 @@ from typing import Callable, Protocol, runtime_checkable
 log = logging.getLogger("hive.llm")
 
 
+class ProviderUnavailable(RuntimeError):
+    """A provider can't serve the request for a reason another provider might not
+    share — out of quota, bad credentials, model not found, provider down (HTTP
+    401/403/404/429/5xx). Signals the caller to fall back to the next configured
+    provider rather than treating it as a hard failure."""
+
+
 @dataclass
 class ToolCall:
     name: str

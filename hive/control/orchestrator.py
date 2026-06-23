@@ -15,7 +15,7 @@ from pathlib import Path
 
 from hive.runner.backends import BACKEND_NAMES
 from hive.workstreams.issues import ensure_iteration_workstream
-from hive.llm import LoopResult, ToolLoop, ToolSet, build_adapter
+from hive.llm import LoopResult, ProviderUnavailable, ToolLoop, ToolSet, build_adapters
 from hive.models import (
     Autonomy,
     Feedback,
@@ -509,16 +509,32 @@ class Orchestrator:
     def _generate(
         self, project: Project, history: list[dict], user_msg: str, tools: Tools
     ) -> LoopResult:
-        adapter = self._build_adapter()
-        result = ToolLoop(MAX_REMOTE_CALLS).run(
-            adapter, self._system_prompt(project), history, user_msg, ToolSet(tools.functions())
-        )
-        result.model = getattr(adapter, "model", "")
-        return result
+        system = self._system_prompt(project)
+        toolset = ToolSet(tools.functions())
+        adapters = self._build_adapters()
+        last_unavailable: ProviderUnavailable | None = None
+        for adapter in adapters:
+            try:
+                result = ToolLoop(MAX_REMOTE_CALLS).run(adapter, system, history, user_msg, toolset)
+            except ProviderUnavailable as exc:
+                # Falling back is only safe before any tool ran: a provider that
+                # died mid-loop may have already created workstreams/tasks, and
+                # restarting on another provider would duplicate them.
+                if tools.actions:
+                    raise
+                model = getattr(adapter, "model", "") or type(adapter).__name__
+                log.warning("orchestrator provider %s unavailable: %s — trying next", model, exc)
+                last_unavailable = exc
+                continue
+            result.model = getattr(adapter, "model", "")
+            return result
+        raise last_unavailable  # only reached when every provider was unavailable
 
-    def _build_adapter(self):
-        """The provider seam: tests override this to inject a scripted adapter."""
-        return build_adapter(self.config)
+    def _build_adapters(self):
+        """The provider seam: tests override this to inject scripted adapters.
+        A list, tried in order — the orchestrator falls back when one is out of
+        quota or otherwise unavailable."""
+        return build_adapters(self.config)
 
     def _record_cost(self, project: Project, result: LoopResult) -> None:
         cost = estimate_cost(result.model, result.usage.input_tokens, result.usage.output_tokens)
