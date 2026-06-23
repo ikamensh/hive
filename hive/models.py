@@ -101,6 +101,7 @@ class Project(BaseModel):
     autonomy: Autonomy = Autonomy.direct_push
     guess_propensity: GuessPropensity = GuessPropensity.sometimes
     prod_deploys: bool = False
+    ci_autofix: bool = False  # poll each repo's default-branch CI; file+fix an issue when red
     paused: bool = False
     archived: bool = False  # hidden from the default list; data retained
     daily_budget_usd: float = 0.0  # 0 = no cap; else soft cap on today's task spend

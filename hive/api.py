@@ -48,6 +48,7 @@ from hive.workstreams.issues import (
     RESOLVE_BACKEND,
     resolve_issue_on_github,
 )
+from hive.workstreams.ci import check_and_autofix
 from hive.workstreams.preflight import (
     checks_payload,
     codex_runner_usable,
@@ -171,6 +172,7 @@ class ProjectPatch(BaseModel):
     autonomy: Autonomy | None = None
     guess_propensity: GuessPropensity | None = None
     prod_deploys: bool | None = None
+    ci_autofix: bool | None = None
     paused: bool | None = None
     daily_budget_usd: float | None = None
     member_repos: list[str] | None = None
@@ -1338,6 +1340,32 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         run = store.update(IssueRun, run.id, mark) or run
         return run.model_dump()
 
+    @app.post("/api/projects/{project_id}/workstreams/{workstream_id}/check-ci")
+    def check_workstream_ci(
+        project_id: str,
+        workstream_id: str,
+        ctx: AuthContext = Depends(current),
+    ):
+        """Check this repo's default-branch CI; if red, file a GitHub issue and
+        hand it to the issue-solving pipeline (the same resolve→review→land path
+        that fixes human-filed issues)."""
+        project = require_project(project_id, ctx)
+        workstream = require_project_workstream(project, workstream_id, ctx)
+        if workstream.kind != ProjectWorkstreamKind.github_issues:
+            raise HTTPException(400, "workstream does not read GitHub issues")
+        require_enabled_workstream(workstream)
+        result = check_and_autofix(
+            store,
+            project,
+            workstream,
+            config.gh_token,
+            issue_backend=config.issue_backend,
+            issue_model=config.issue_model,
+        )
+        if result.resolve_queued:
+            supervisor.wake(project_id, f"CI red on {workstream.repo}; queued a fix for #{result.filed_issue}.")
+        return result.model_dump()
+
     @app.post("/api/projects/{project_id}/workstreams/{workstream_id}/test-refresh")
     def refresh_testing_workstream(
         project_id: str,
@@ -2152,11 +2180,43 @@ def production_app() -> FastAPI:
     from hive.control.orchestrator import Orchestrator
 
     orchestrator = Orchestrator(store, blobs, config)
+
+    def ci_check(project_id: str) -> None:
+        """Supervisor callback: poll each repo's CI for a ci_autofix project and
+        file+queue a fix when red. Needs a GitHub token; a no-op without one."""
+        project = store.get(Project, project_id)
+        if not project or not project.ci_autofix or not config.gh_token.strip():
+            return
+        from hive.workstreams.ci import check_and_autofix
+        from hive.workstreams.issues import ensure_issue_workstream
+
+        repos = dict.fromkeys(
+            r.strip() for r in [project.spec_repo, *project.member_repos] if r.strip()
+        )
+        for repo in repos:
+            try:
+                workstream = ensure_issue_workstream(store, project, repo=repo)
+                if not workstream.enabled:
+                    continue
+                check_and_autofix(
+                    store,
+                    project,
+                    workstream,
+                    config.gh_token,
+                    issue_backend=config.issue_backend,
+                    issue_model=config.issue_model,
+                )
+            except Exception:
+                logging.getLogger("hive.api").exception(
+                    "CI auto-check failed for project %s repo %s", project_id, repo
+                )
+
     supervisor = Supervisor(
         store,
         orchestrator.invoke,
         workspace_id=config.workspace_id,
         machine_name=config.machine_name,
+        ci_check=ci_check,
     )
     from hive.runner.local import LocalRunnerManager
 

@@ -176,6 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--autonomy")
     p.add_argument("--guess-propensity")
     p.add_argument("--prod-deploys", choices=["true", "false"])
+    p.add_argument("--ci-autofix", choices=["true", "false"], help="poll repo CI and auto-fix red builds")
     p.add_argument("--paused", choices=["true", "false"])
     p.add_argument("--daily-budget", type=float, help="daily spend cap in USD (0 = no cap)")
     p.add_argument("--member-repos", help="comma-separated git URLs (replaces the list)")
@@ -186,6 +187,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("preflight", help="check issue-solving preconditions (token, perms, runner push/gh auth)")
     p.add_argument("project_id")
+
+    p = sub.add_parser("check-ci", help="check a repo's CI; file+fix an issue if it's red")
+    p.add_argument("project_id")
+    p.add_argument("workstream_id", help="the github_issues workstream for the repo (see `hive show`)")
 
     p = sub.add_parser("test-refresh", help="queue a testing-workstream refresh (start testing)")
     p.add_argument("project_id")
@@ -565,7 +570,7 @@ def run(args: argparse.Namespace, client) -> dict | list:
             "mode": args.mode, "autonomy": args.autonomy,
             "guess_propensity": args.guess_propensity,
         }.items() if v is not None}
-        for flag in ("prod_deploys", "paused"):
+        for flag in ("prod_deploys", "ci_autofix", "paused"):
             if (v := getattr(args, flag)) is not None:
                 body[flag] = v == "true"
         if args.daily_budget is not None:
@@ -577,6 +582,10 @@ def run(args: argparse.Namespace, client) -> dict | list:
         r = client.patch(f"/api/projects/{args.project_id}", json=body)
     elif c == "scan":
         r = client.post(f"/api/projects/{args.project_id}/scan-issues")
+    elif c == "check-ci":
+        r = client.post(
+            f"/api/projects/{args.project_id}/workstreams/{args.workstream_id}/check-ci"
+        )
     elif c == "preflight":
         data = client.post(f"/api/projects/{args.project_id}/issues-preflight").raise_for_status().json()
         tid = data.get("runner_check_task")

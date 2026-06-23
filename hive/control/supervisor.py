@@ -115,6 +115,7 @@ class Supervisor:
 
     TICK_S = 15.0
     HEARTBEAT_MIN_INTERVAL_S = 600.0  # rate-limit decision wakes not driven by events
+    CI_CHECK_INTERVAL_S = 300.0  # how often a ci_autofix project's CI is polled per repo
 
     def __init__(
         self,
@@ -122,16 +123,22 @@ class Supervisor:
         orchestrate: Callable[[str, list[str]], None],
         workspace_id: str = DEFAULT_WORKSPACE_ID,
         machine_name: str = "",
+        ci_check: Callable[[str], None] | None = None,
     ) -> None:
         self.store = store
         self.orchestrate = orchestrate
         self.workspace_id = workspace_id
+        # CI auto-fix poller (network: filed by production_app, None in tests). Takes
+        # a project id, checks each repo's CI, files+queues a fix when red.
+        self.ci_check = ci_check
         machine = machine_name or socket.gethostname()
         self.holder = f"{machine}:{os.getpid()}"
         self._events: dict[str, list[str]] = defaultdict(list)
         self._wakeup = asyncio.Event()
         self._busy: set[str] = set()  # projects with an orchestrator invocation in flight
         self._last_heartbeat: dict[str, float] = {}
+        self._last_ci_check: dict[str, float] = {}
+        self._ci_busy: set[str] = set()  # projects with a CI check in flight
         self._dispatch_lock = threading.RLock()
 
     def wake(self, project_id: str, event: str) -> None:
@@ -417,12 +424,35 @@ class Supervisor:
                 pass
             self._wakeup.clear()
 
+    def _ci_check_due(self, project: Project) -> bool:
+        """A `ci_autofix` project whose per-poll interval has elapsed and which has
+        no CI check already running. Pure gate so it is testable without a loop."""
+        return (
+            self.ci_check is not None
+            and project.ci_autofix
+            and project.id not in self._ci_busy
+            and time.time() - self._last_ci_check.get(project.id, 0) > self.CI_CHECK_INTERVAL_S
+        )
+
+    async def _run_ci_check(self, project_id: str) -> None:
+        try:
+            await asyncio.to_thread(self.ci_check, project_id)
+        except Exception:
+            log.exception("CI auto-check failed for %s", project_id)
+        finally:
+            self._ci_busy.discard(project_id)
+            self._wakeup.set()
+
     async def _step(self) -> None:
         self.fail_orphaned_tasks()
         avail = self.available_backends()
         for project in self.store.list(Project, workspace_id=self.workspace_id):
             if project.archived or project.paused or not project.spec_repo.strip():
                 continue
+            if self._ci_check_due(project):
+                self._last_ci_check[project.id] = time.time()
+                self._ci_busy.add(project.id)
+                asyncio.get_running_loop().create_task(self._run_ci_check(project.id))
             self.dispatch(project)
             state = self.refresh_state(project)
             if state == ProjectState.intake:
