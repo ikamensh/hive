@@ -7,7 +7,9 @@ settings. It surfaces the jobs available on a project and shows live state
 
 This supersedes the toggle/settings-first project view and folds the
 `work | issues | tests` tabs into launchable job types whose deep tables become
-drill-downs.
+drill-downs. Policy controls such as budget, guess propensity, deploy posture,
+and workstream toggles live under the project settings subpage so the launchpad
+stays focused on starting work.
 
 ## Page structure (configured project)
 
@@ -29,8 +31,7 @@ Needs you         questions · human todos · blockers (unchanged surface)
 
 Activity          unified feed with workstream/job chips
 
-Settings          disclosure: policies · repos · workstream toggles
-(disclosure)
+Settings          subpage: policies · repos · workstream toggles
 ```
 
 Unconfigured / `intake` projects keep the existing intake flow as their "first

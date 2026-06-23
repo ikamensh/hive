@@ -5,6 +5,7 @@ import App from "./App";
 import Home from "./pages/Home";
 import NeedsYou from "./pages/NeedsYou";
 import ProjectPage from "./pages/Project";
+import ProjectSettingsPage from "./pages/ProjectSettings";
 import Resources from "./pages/Resources";
 import Settings from "./pages/Settings";
 import "./styles.css";
@@ -17,6 +18,7 @@ const router = createBrowserRouter([
       { index: true, element: <Home /> },
       { path: "needs-you", element: <NeedsYou /> },
       { path: "p/:id", element: <ProjectPage /> },
+      { path: "p/:id/settings", element: <ProjectSettingsPage /> },
       { path: "machines", element: <Resources /> },
       { path: "settings", element: <Settings /> },
     ],

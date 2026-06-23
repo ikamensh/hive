@@ -1,18 +1,9 @@
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { RepoListEditor, RepoUrlInput } from "../../components/RepoPicker";
-import {
-  AUTONOMY_OPTIONS,
-  GuessSlider,
-  Markdown,
-  MODE_OPTIONS,
-  SegPicker,
-} from "../../components/shared";
+import { Markdown } from "../../components/shared";
 import type {
   AgentConversation,
-  Autonomy,
-  GuessPropensity,
-  Mode,
   Project,
   ProjectPatch,
 } from "../../types";
@@ -20,19 +11,10 @@ import type {
 export function buildSetupPatch(fields: {
   specRepo: string;
   memberRepos: string[];
-  mode: Mode;
-  autonomy: Autonomy;
-  guess: GuessPropensity;
-  dailyBudget: string;
 }): ProjectPatch {
-  const budget = parseFloat(fields.dailyBudget);
   return {
     spec_repo: fields.specRepo.trim(),
     member_repos: fields.memberRepos.map((s) => s.trim()).filter(Boolean),
-    mode: fields.mode,
-    autonomy: fields.autonomy,
-    guess_propensity: fields.guess,
-    daily_budget_usd: Number.isFinite(budget) && budget >= 0 ? budget : 0,
   };
 }
 
@@ -84,16 +66,10 @@ export function ProjectSetup({
   const [memberRepos, setMemberRepos] = useState(project.member_repos);
   const [repoName, setRepoName] = useState(project.name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-|-$/g, ""));
   const [intakeMessage, setIntakeMessage] = useState("");
-  const [mode, setMode] = useState<Mode>(project.mode);
-  const [autonomy, setAutonomy] = useState<Autonomy>(project.autonomy);
-  const [guess, setGuess] = useState<GuessPropensity>(project.guess_propensity);
-  const [dailyBudget, setDailyBudget] = useState(
-    project.daily_budget_usd > 0 ? String(project.daily_budget_usd) : "",
-  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const fields = { specRepo, memberRepos, mode, autonomy, guess, dailyBudget };
+  const fields = { specRepo, memberRepos };
   const draft = !project.spec_repo.trim();
   const intakeRunning = conversation?.status === "running" || conversation?.status === "finalizing";
   const intakeDone = conversation?.status === "done";
@@ -197,31 +173,6 @@ export function ProjectSetup({
             </button>
           </div>
         )}
-        <div className="dial-grid">
-          <label>
-            mode
-            <SegPicker value={mode} options={MODE_OPTIONS} onChange={setMode} />
-          </label>
-          <label>
-            autonomy
-            <SegPicker value={autonomy} options={AUTONOMY_OPTIONS} onChange={setAutonomy} />
-          </label>
-        </div>
-        <label>
-          guess propensity
-          <GuessSlider value={guess} onChange={setGuess} />
-        </label>
-        <label>
-          daily budget (USD, 0 = no cap)
-          <input
-            type="number"
-            min={0}
-            step={1}
-            value={dailyBudget}
-            onChange={(e) => setDailyBudget(e.target.value)}
-            placeholder="0"
-          />
-        </label>
         {!conversation && (
           availableScoutBackends.length > 0 ? (
             <p className="scout-status scout-ready">

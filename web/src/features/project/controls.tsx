@@ -330,10 +330,19 @@ export function ProjectSettings({
     project.daily_budget_usd > 0 ? String(project.daily_budget_usd) : "",
   );
   const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState("");
+
+  useEffect(() => {
+    setMemberRepos(project.member_repos);
+    setDailyBudget(project.daily_budget_usd > 0 ? String(project.daily_budget_usd) : "");
+    // Keep local edits stable across project polling; a different project gets fresh form values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
 
   const save = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
+    setSaved("");
     const budget = parseFloat(dailyBudget);
     const patch: ProjectPatch = {
       member_repos: memberRepos.map((s) => s.trim()).filter(Boolean),
@@ -341,108 +350,120 @@ export function ProjectSettings({
     };
     try {
       await onPatch(patch);
+      setSaved("saved");
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <details className="project-settings">
-      <summary>settings</summary>
-      <form onSubmit={save} className="settings-form">
-        <label>
-          spec repo
-          <input value={project.spec_repo} readOnly />
-        </label>
-        <label>
-          member repos
-          <RepoListEditor repos={memberRepos} onChange={setMemberRepos} />
-        </label>
-        <label>
-          daily budget (USD)
-          <input
-            type="number"
-            min={0}
-            step={1}
-            value={dailyBudget}
-            onChange={(e) => setDailyBudget(e.target.value)}
-            placeholder="0"
-          />
-        </label>
-        <button type="submit" disabled={busy}>
-          {busy ? "saving..." : "save settings"}
-        </button>
-      </form>
-      <div className="workstream-settings">
-        <h3>workstreams</h3>
-        {workstreams.map((workstream) => (
-          <div className="workstream-setting" key={workstream.id}>
-            <div>
-              <strong>{workstream.title}</strong>
-              <span className="muted">
-                {workstream.kind.replace(/_/g, " ")}
-                {workstream.repo ? ` - ${repoShort(workstream.repo)}` : ""}
-              </span>
-            </div>
+    <section className="project-settings-panel">
+      <div className="settings-section">
+        <h2 className="col-title">repos</h2>
+        <form onSubmit={save} className="settings-form">
+          <label>
+            spec repo
+            <input value={project.spec_repo} readOnly />
+          </label>
+          <label>
+            member repos
+            <RepoListEditor repos={memberRepos} onChange={setMemberRepos} />
+          </label>
+          <label>
+            daily budget (USD)
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={dailyBudget}
+              onChange={(e) => setDailyBudget(e.target.value)}
+              placeholder="0"
+            />
+          </label>
+          <div className="settings-actions">
+            {saved && <span className="muted">{saved}</span>}
+            <button type="submit" disabled={busy}>
+              {busy ? "saving..." : "save repos"}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div className="settings-section">
+        <h2 className="col-title">policy</h2>
+        <div className="project-policy-grid">
+          <div className="toggle-cell">
+            <span className="toggle-label">mode</span>
+            <SegPicker value={project.mode} options={MODE_OPTIONS} onChange={(mode) => onPatch({ mode })} />
+          </div>
+          <div className="toggle-cell">
+            <span className="toggle-label">autonomy</span>
+            <SegPicker
+              value={project.autonomy}
+              options={AUTONOMY_OPTIONS}
+              onChange={(autonomy) => onPatch({ autonomy })}
+            />
+          </div>
+          <div className="toggle-cell grow">
+            <span className="toggle-label">guess propensity</span>
+            <GuessSlider
+              value={project.guess_propensity}
+              onChange={(guess_propensity) => onPatch({ guess_propensity })}
+            />
+          </div>
+          <div className="toggle-cell">
+            <span className="toggle-label">prod deploys</span>
             <button
-              type="button"
-              className={`switch ${workstream.enabled ? "on" : ""}`}
-              onClick={() => onPatchWorkstream(workstream.id, { enabled: !workstream.enabled })}
-              disabled={workstream.kind === "iteration"}
-              title={workstream.kind === "iteration" ? "iteration work is controlled by project pause" : undefined}
-              aria-pressed={workstream.enabled}
+              className={`switch ${project.prod_deploys ? "on" : ""}`}
+              onClick={() => onPatch({ prod_deploys: !project.prod_deploys })}
+              aria-pressed={project.prod_deploys}
             >
               <i />
             </button>
           </div>
-        ))}
+          <div className="toggle-cell">
+            <span className="toggle-label">paused</span>
+            <button
+              className={`switch warn ${project.paused ? "on" : ""}`}
+              onClick={() => onPatch({ paused: !project.paused })}
+              aria-pressed={project.paused}
+            >
+              <i />
+            </button>
+          </div>
+        </div>
       </div>
-      <div className="settings-danger">
+
+      <div className="settings-section">
+        <h2 className="col-title">workstreams</h2>
+        <div className="workstream-settings">
+          {workstreams.map((workstream) => (
+            <div className="workstream-setting" key={workstream.id}>
+              <div>
+                <strong>{workstream.title}</strong>
+                <span className="muted">
+                  {workstream.kind.replace(/_/g, " ")}
+                  {workstream.repo ? ` - ${repoShort(workstream.repo)}` : ""}
+                </span>
+              </div>
+              <button
+                type="button"
+                className={`switch ${workstream.enabled ? "on" : ""}`}
+                onClick={() => onPatchWorkstream(workstream.id, { enabled: !workstream.enabled })}
+                disabled={workstream.kind === "iteration"}
+                title={workstream.kind === "iteration" ? "iteration work is controlled by project pause" : undefined}
+                aria-pressed={workstream.enabled}
+              >
+                <i />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="settings-section settings-danger">
         <ProjectArchiveButton project={project} onPatch={onPatch} />
         <span className="muted">hides it from the list; data is kept</span>
-      </div>
-    </details>
-  );
-}
-
-export function TogglesBar({ project, onPatch }: { project: Project; onPatch: (p: ProjectPatch) => void }) {
-  return (
-    <section className="toggles">
-      <div className="toggle-cell">
-        <span className="toggle-label">mode</span>
-        <SegPicker value={project.mode} options={MODE_OPTIONS} onChange={(mode) => onPatch({ mode })} />
-      </div>
-      <div className="toggle-cell">
-        <span className="toggle-label">autonomy</span>
-        <SegPicker
-          value={project.autonomy}
-          options={AUTONOMY_OPTIONS}
-          onChange={(autonomy) => onPatch({ autonomy })}
-        />
-      </div>
-      <div className="toggle-cell grow">
-        <span className="toggle-label">guess propensity</span>
-        <GuessSlider value={project.guess_propensity} onChange={(guess_propensity) => onPatch({ guess_propensity })} />
-      </div>
-      <div className="toggle-cell">
-        <span className="toggle-label">prod deploys</span>
-        <button
-          className={`switch ${project.prod_deploys ? "on" : ""}`}
-          onClick={() => onPatch({ prod_deploys: !project.prod_deploys })}
-          aria-pressed={project.prod_deploys}
-        >
-          <i />
-        </button>
-      </div>
-      <div className="toggle-cell">
-        <span className="toggle-label">paused</span>
-        <button
-          className={`switch warn ${project.paused ? "on" : ""}`}
-          onClick={() => onPatch({ paused: !project.paused })}
-          aria-pressed={project.paused}
-        >
-          <i />
-        </button>
       </div>
     </section>
   );

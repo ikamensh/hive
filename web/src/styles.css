@@ -1367,19 +1367,8 @@ textarea:focus {
   color: var(--ink-dim);
 }
 
-/* ---- toggles bar --------------------------------------------------------------- */
+/* ---- policy controls --------------------------------------------------------------- */
 
-.toggles {
-  display: flex;
-  align-items: flex-end;
-  gap: 34px;
-  padding: 16px 22px;
-  margin-bottom: 24px;
-  background: var(--panel);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--r-md);
-  flex-wrap: wrap;
-}
 .toggle-cell {
   display: flex;
   flex-direction: column;

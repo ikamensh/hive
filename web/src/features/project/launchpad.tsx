@@ -61,6 +61,7 @@ interface JobTile {
   label: string;
   hint: string;
   disabled?: boolean;
+  busy?: boolean;
 }
 
 /** One-click launchers beside the directive box. Opening issues/tests reveals
@@ -82,6 +83,7 @@ export function JobTiles({
           onClick={() => onLaunch(tile.kind)}
           disabled={tile.disabled}
           title={tile.disabled ? "not available on this project yet" : undefined}
+          aria-busy={tile.busy}
         >
           <i className={`ti ${tile.icon}`} aria-hidden />
           <span className="job-tile-label">{tile.label}</span>

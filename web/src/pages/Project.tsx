@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useOverview } from "../App";
 import { api, repoKey, repoShort, usePoll } from "../api";
 import { Markdown, StateBadge } from "../components/shared";
@@ -12,8 +12,6 @@ import {
 import {
   GoalBanner,
   ProjectActions,
-  ProjectSettings,
-  TogglesBar,
   WorkstreamCard,
 } from "../features/project/controls";
 import { IssueCard, IssuesToolbar, IssuesView } from "../features/project/issues";
@@ -39,6 +37,9 @@ export default function ProjectPage() {
   const [selectedIssueNumbers, setSelectedIssueNumbers] = useState<number[]>([]);
   const [selectedTestingStreamId, setSelectedTestingStreamId] = useState("");
   const [selectedStoryKeys, setSelectedStoryKeys] = useState<string[]>([]);
+  const [launchingBuild, setLaunchingBuild] = useState(false);
+  const [launchMessage, setLaunchMessage] = useState("");
+  const [launchError, setLaunchError] = useState("");
   const { data, failed, refresh } = usePoll(() => api.project(id), [id]);
   const { data: resources } = usePoll(() => api.resources(), [], 8000);
   const overview = useOverview();
@@ -49,7 +50,6 @@ export default function ProjectPage() {
 
   const {
     project,
-    workstreams,
     tasks,
     intakeConversation,
     openQs,
@@ -92,11 +92,6 @@ export default function ProjectPage() {
     overview.refresh();
   };
 
-  const patchWorkstream = async (workstreamId: string, p: { enabled?: boolean }) => {
-    await api.updateWorkstream(id, workstreamId, p);
-    refresh();
-  };
-
   const saveSetup = async (p: ProjectPatch) => {
     await api.patchProject(id, p);
     refresh();
@@ -124,7 +119,25 @@ export default function ProjectPage() {
 
   const submitDirective = async (text: string) => {
     await api.createDirective(id, text);
+    setLaunchError("");
+    setLaunchMessage("task request saved");
     refresh();
+  };
+
+  const startBuild = async () => {
+    if (launchingBuild) return;
+    setLaunchingBuild(true);
+    setLaunchError("");
+    setLaunchMessage("");
+    try {
+      await api.startProject(id, { mission: "", iteration_goal: "" });
+      setLaunchMessage("build planning requested");
+      refreshProjectAndOverview();
+    } catch (e) {
+      setLaunchError((e as Error).message || "could not start build");
+    } finally {
+      setLaunchingBuild(false);
+    }
   };
 
   const needsStart = false;
@@ -183,7 +196,9 @@ export default function ProjectPage() {
       kind: "build",
       icon: "ti-hammer",
       label: "Advance build",
-      hint: project.paused ? "paused" : `${manualWorkItems.length} work items`,
+      hint: launchingBuild ? "starting" : project.paused ? "paused" : `${manualWorkItems.length} work items`,
+      disabled: project.paused || launchingBuild,
+      busy: launchingBuild,
     },
     {
       kind: "sync",
@@ -199,14 +214,29 @@ export default function ProjectPage() {
       document.getElementById("machines-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
+    if (kind === "build") {
+      startBuild();
+      return;
+    }
     setDrill(kind);
   };
 
   const launchpadHome = (
     <section className="col col-launchpad">
-      <div className="launch-row">
-        <DirectiveComposer onSubmit={submitDirective} />
-        <JobTiles tiles={jobTiles} onLaunch={onLaunch} />
+      <div className="launch-console">
+        <div className="launch-console-head">
+          <h2>Start work</h2>
+          <span className="muted">{project.paused ? "paused" : "ready"}</span>
+        </div>
+        <div className="launch-row">
+          <DirectiveComposer onSubmit={submitDirective} />
+          <JobTiles tiles={jobTiles} onLaunch={onLaunch} />
+        </div>
+        {(launchMessage || launchError) && (
+          <p className={launchError ? "form-error launch-status" : "launch-status muted"}>
+            {launchError || launchMessage}
+          </p>
+        )}
       </div>
       {directives.length > 0 && (
         <div className="launch-block">
@@ -222,19 +252,12 @@ export default function ProjectPage() {
         </h2>
         <MachinesPanel groups={checkoutGroups} />
       </div>
-      <TogglesBar project={project} onPatch={patch} />
-      <ProjectSettings
-        project={project}
-        workstreams={workstreams}
-        onPatch={patch}
-        onPatchWorkstream={patchWorkstream}
-      />
     </section>
   );
 
   const drillBackBar = (
     <button type="button" className="ghost drill-back" onClick={() => setDrill("none")}>
-      <i className="ti ti-arrow-left" aria-hidden /> launchpad
+      <i className="ti ti-arrow-left" aria-hidden /> start work
     </button>
   );
 
@@ -294,6 +317,9 @@ export default function ProjectPage() {
           {configured && <span className="head-repo">{repoShort(project.spec_repo)}</span>}
         </h1>
         <StateBadge state={project.state} attentionCount={inboxCount} />
+        <Link className="project-settings-link ghost" to={`/p/${id}/settings`}>
+          <i className="ti ti-settings" aria-hidden /> Settings
+        </Link>
         <ProjectActions project={project} onPatch={patch} />
       </div>
 
