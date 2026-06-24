@@ -26,7 +26,6 @@ import httpx
 
 from hive.runner._backends import (
     BACKEND_NAMES,
-    EXHAUSTION_PATTERNS,
     PROBE_MARKER,
     classify_failure,
     detected_backend_names,
@@ -55,7 +54,6 @@ CANCEL_POLL_S = 5.0  # how often a running task checks for an operator cancel re
 
 log = logging.getLogger("hive.runner._daemon")
 
-EXHAUSTED_PATTERNS = EXHAUSTION_PATTERNS  # re-export so callers/tests keep one import site
 SKIP_ARTIFACT_PARTS = {
     ".cache",
     ".git",

@@ -13,8 +13,6 @@ queued → resolving → (blocked_clarity | reviewing) → (rejected | done).
 Sequencing is **strict per GitHub-issues workstream**: `advance_issues` keeps at
 most one issue in the resolve→review pipeline at a time, so each issue branches
 from a default branch that already includes prior landed fixes.
-`activate_next`/`IN_FLIGHT` are a separate dormant variant used by the
-spec-mode orchestrator, kept for reuse.
 """
 
 from __future__ import annotations
@@ -44,10 +42,6 @@ from hive.models import (
 from hive.llm.prompts import load as load_prompt
 
 log = logging.getLogger("hive._workstreams.issues")
-
-# Dormant ordered variant: an issue-workstream is "in flight" (no other may be
-# activated) while in these statuses. Unused by the active per-issue pipeline.
-IN_FLIGHT = (WorkstreamStatus.active, WorkstreamStatus.parked)
 
 ISSUE_DIR = ".hive/issue-{n}"
 RESOLVE_BACKEND = "codex"
@@ -683,19 +677,3 @@ def create_landing_integration_task(
     )
 
 
-def activate_next(store, project: Project) -> Workstream | None:
-    """Dormant ordered variant: promote the lowest-`order` queued issue when
-    none is in flight. Unused by the active pipeline; kept for future reuse."""
-    existing = _issue_workstreams(store, project)
-    if any(w.status in IN_FLIGHT for w in existing):
-        return None
-    queued = sorted(
-        (w for w in existing if w.status == WorkstreamStatus.queued),
-        key=lambda w: (w.order, w.issue_number),
-    )
-    if not queued:
-        return None
-    nxt = queued[0]
-    nxt.status = WorkstreamStatus.active
-    store.put(nxt)
-    return nxt

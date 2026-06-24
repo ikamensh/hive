@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 from hive.persistence.blobstore import LocalBlobStore
 from hive.config.settings import Config
 from hive._workstreams.issues import (
-    activate_next,
     advance_issues,
     delete_branch,
     ensure_issue_workstream,
@@ -265,20 +264,6 @@ def test_compute_state_issue_items_are_project_attention():
     # drained issue work does not change the project kind
     assert compute_state(p, [_ws(p, WorkstreamStatus.done)], 0, [], set()) == ProjectState.idle
     assert compute_state(p, [_ws(p, WorkstreamStatus.cancelled)], 0, [], set()) == ProjectState.idle
-
-
-# -- dormant ordered variant -------------------------------------------------
-
-
-def test_activate_next_promotes_lowest_queued_when_idle():
-    store = MemoryStore()
-    project = issues_project(store)
-    assert activate_next(store, project) is None  # nothing queued yet
-    for n in (2, 1):
-        store.put(Workstream(project_id=project.id, title=f"#{n}", status=WorkstreamStatus.queued,
-                             source=WorkstreamSource.issue, issue_number=n, order=n))
-    activated = activate_next(store, project)
-    assert activated.issue_number == 1 and activated.status == WorkstreamStatus.active
 
 
 def test_create_task_rejected_for_non_active_issue():

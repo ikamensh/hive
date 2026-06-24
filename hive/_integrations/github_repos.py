@@ -211,10 +211,6 @@ def all_repos(
     return repos
 
 
-def clear_cache() -> None:
-    _cache.clear()
-
-
 def _view_via_gh_cli(full_name: str) -> dict:
     proc = subprocess.run(
         [

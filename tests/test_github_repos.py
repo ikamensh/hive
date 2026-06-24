@@ -2,7 +2,8 @@ import json
 
 import pytest
 
-from hive._integrations.github_repos import all_repos, clear_cache, parse_repo_ref, validate_repo
+from hive._integrations import github_repos
+from hive._integrations.github_repos import all_repos, parse_repo_ref, validate_repo
 
 
 class FakeResponse:
@@ -24,7 +25,7 @@ def test_parse_repo_ref_accepts_common_shapes():
 
 
 def test_all_repos_prefers_user_oauth_token(monkeypatch):
-    clear_cache()
+    github_repos._cache.clear()
     calls = {"gh": 0, "api": 0}
 
     def fake_run(args, **kwargs):
@@ -60,7 +61,7 @@ def test_all_repos_prefers_user_oauth_token(monkeypatch):
 
 
 def test_all_repos_skips_gh_when_account_mismatch(monkeypatch):
-    clear_cache()
+    github_repos._cache.clear()
 
     def fake_run(args, **kwargs):
         if args[:4] == ["gh", "api", "user", "-q"]:
@@ -98,9 +99,7 @@ def test_all_repos_skips_gh_when_account_mismatch(monkeypatch):
 
 
 def test_all_repos_uses_gh_cli_and_caches(monkeypatch):
-    from hive._integrations.github_repos import clear_cache
-
-    clear_cache()
+    github_repos._cache.clear()
     sample = [
         {
             "nameWithOwner": "acme/atlas-api",

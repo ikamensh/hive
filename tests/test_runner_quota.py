@@ -1,7 +1,6 @@
 """Runner-side quota / rate-limit detection."""
 
-from hive.runner._backends import classify_failure
-from hive.runner._daemon import EXHAUSTED_PATTERNS
+from hive.runner._backends import EXHAUSTION_PATTERNS, classify_failure
 
 # Captured from a real `codex exec` failure when the 5h window is spent.
 CODEX_QUOTA_ERROR = (
@@ -34,7 +33,7 @@ CODEX_BILLING_BLOCK = "codex: Subscription/billing issue — check your account 
 
 def _resource_exhausted(text: str, *, is_error: bool = True) -> bool:
     """Mirror the flag the runner sets on task results."""
-    return bool(is_error and EXHAUSTED_PATTERNS.search(text))
+    return bool(is_error and EXHAUSTION_PATTERNS.search(text))
 
 
 def test_codex_usage_limit_detected():

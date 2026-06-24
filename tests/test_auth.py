@@ -198,9 +198,9 @@ def test_github_callback_stores_access_token(monkeypatch):
 
 
 def test_github_repos_uses_server_token_when_gh_unavailable(monkeypatch):
-    from hive._integrations.github_repos import clear_cache
+    from hive._integrations import github_repos
 
-    clear_cache()
+    github_repos._cache.clear()
     store = MemoryStore()
     client, _config = make_client(store, gh_token="ghp_server")
 
@@ -234,9 +234,9 @@ def test_github_repos_uses_server_token_when_gh_unavailable(monkeypatch):
 
 
 def test_github_validate_repo(monkeypatch):
-    from hive._integrations.github_repos import clear_cache
+    from hive._integrations import github_repos
 
-    clear_cache()
+    github_repos._cache.clear()
     store = MemoryStore()
     client, _config = make_client(store, gh_token="ghp_server")
 
@@ -271,9 +271,9 @@ def test_github_validate_repo(monkeypatch):
 
 
 def test_github_repos_without_gh_or_token(monkeypatch):
-    from hive._integrations.github_repos import clear_cache
+    from hive._integrations import github_repos
 
-    clear_cache()
+    github_repos._cache.clear()
     store = MemoryStore()
     client, _config = make_client(store, gh_token="")
 
