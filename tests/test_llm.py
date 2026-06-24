@@ -5,7 +5,7 @@ import pytest
 
 from hive.config.settings import Config
 from hive.llm import Completion, ToolCall, ToolLoop, ToolSet, Usage, build_adapter
-from hive.llm.gemini import GeminiAdapter
+from hive.llm._gemini import GeminiAdapter
 
 
 # -- ToolSet: schema generation + dispatch -----------------------------------
@@ -117,7 +117,7 @@ def _config(**kw):
 
 
 def test_build_adapter_resolves_provider_and_guards_credentials():
-    from hive.llm.openai import OpenAIAdapter
+    from hive.llm._openai import OpenAIAdapter
 
     assert isinstance(build_adapter(_config(orch_provider="openai", openai_api_key="k")), OpenAIAdapter)
     assert isinstance(build_adapter(_config(orch_provider="gemini", orch_model="gemini-3", gemini_api_key="k")), GeminiAdapter)
@@ -138,7 +138,7 @@ def test_select_model_skips_responses_only_pro_tier():
     """Auto-select must ignore the "-pro" reasoning tier: it sorts newest but is
     Responses-API-only, so it 404s on /chat/completions ("not a chat model").
     Regression for the orchestrator picking gpt-5.5-pro and failing to plan."""
-    from hive.llm.openai import OpenAIAdapter
+    from hive.llm._openai import OpenAIAdapter
 
     class _Scripted(OpenAIAdapter):
         def _get(self, path):
@@ -160,7 +160,7 @@ def test_openai_classifies_quota_as_provider_unavailable_but_not_bad_request(mon
     import httpx
 
     from hive.llm import ProviderUnavailable
-    from hive.llm.openai import OpenAIAdapter
+    from hive.llm._openai import OpenAIAdapter
 
     class _Resp:
         def __init__(self, code):
@@ -193,8 +193,8 @@ def test_candidate_providers_lists_all_keyed_for_auto_fallback():
 
 def test_build_adapters_gives_gemini_fallback_a_concrete_model():
     from hive.llm import build_adapters
-    from hive.llm.openai import OpenAIAdapter
-    from hive.llm.provider import DEFAULT_GEMINI_MODEL
+    from hive.llm._openai import OpenAIAdapter
+    from hive.llm._provider import DEFAULT_GEMINI_MODEL
 
     adapters = build_adapters(_config(openai_api_key="k", gemini_api_key="g"))
     assert [type(a) for a in adapters] == [OpenAIAdapter, GeminiAdapter]

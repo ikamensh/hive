@@ -9,7 +9,7 @@ function-call content each round so per-call ids / thought signatures survive.
 
 from __future__ import annotations
 
-from hive.llm.core import Completion, ProviderUnavailable, ToolCall, ToolResult, ToolSet, Usage
+from hive.llm._core import Completion, ProviderUnavailable, ToolCall, ToolResult, ToolSet, Usage
 
 
 def _reraise_if_unavailable(exc: Exception) -> None:

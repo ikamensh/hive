@@ -5,7 +5,7 @@ import json
 import pytest
 
 from hive.workstreams.critique import LENSES, CritiqueReport, critique, report_markdown
-from hive.llm.parsing import extract_json
+from hive.llm._parsing import extract_json
 
 CRITIC_REPLY = """Here is my analysis.
 ```json
@@ -96,7 +96,7 @@ def test_malformed_critic_output_raises():
 
 
 def test_smartest():
-    from hive.llm.model_intel import smartest
+    from hive.llm._model_intel import smartest
 
     assert smartest(["composer-2.5", "gpt-5.5"]) == "gpt-5.5"
     assert smartest(["composer-2.5"]) == "composer-2.5"

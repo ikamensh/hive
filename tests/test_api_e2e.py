@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from hive.runner.backends import PROBE_MARKER
 from hive.persistence.blobstore import LocalBlobStore
 from hive.config.settings import Config
-from hive.llm.openai import OpenAIAdapter
+from hive.llm._openai import OpenAIAdapter
 from hive.models import (
     AgentConversation,
     ConversationStatus,

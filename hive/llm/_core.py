@@ -43,7 +43,7 @@ class ToolResult:
 @dataclass
 class Usage:
     """Token counts for one or more model calls. Cost is derived later from a
-    pricing table (see hive/pricing.py) — providers report tokens, not dollars."""
+    pricing table (see hive.llm._pricing) — providers report tokens, not dollars."""
 
     input_tokens: int = 0
     output_tokens: int = 0

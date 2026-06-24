@@ -35,7 +35,7 @@ from hive.models import (
     WorkstreamSource,
     WorkstreamStatus,
 )
-from hive.llm.pricing import estimate_cost
+from hive.llm._pricing import estimate_cost
 from hive.llm.prompts import load as load_prompt
 from hive.integrations.specrepo import SpecRepo
 

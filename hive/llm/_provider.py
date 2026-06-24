@@ -10,12 +10,12 @@ requirements, so a misconfiguration fails loudly here, not mid-conversation.
 
 from __future__ import annotations
 
-from hive.llm.core import LLMAdapter
-from hive.llm.gemini import GeminiAdapter
-from hive.llm.openai import OpenAIAdapter
+from hive.llm._core import LLMAdapter
+from hive.llm._gemini import GeminiAdapter
+from hive.llm._openai import OpenAIAdapter
 
 # Gemini has no list-and-pick auto-select like OpenAI's, so auto-fallback needs a
-# concrete model. The strongest tool-caller the key serves (see llm/model_intel).
+# concrete model. The strongest tool-caller the key serves (see hive.llm._model_intel).
 DEFAULT_GEMINI_MODEL = "gemini-3.1-pro-preview"
 
 

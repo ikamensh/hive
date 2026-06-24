@@ -4,7 +4,7 @@ auto-selects the newest tool-capable model when none is configured."""
 
 from __future__ import annotations
 
-from hive.llm.core import Completion, ProviderUnavailable, ToolCall, ToolResult, ToolSet, Usage
+from hive.llm._core import Completion, ProviderUnavailable, ToolCall, ToolResult, ToolSet, Usage
 
 # Substrings marking non-chat models we must not auto-select for tool calling.
 # "-pro" is the reasoning tier (gpt-5.x-pro, o*-pro): Responses-API-only, so it

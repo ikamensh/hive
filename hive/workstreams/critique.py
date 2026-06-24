@@ -15,7 +15,7 @@ from typing import Callable
 
 from pydantic import BaseModel
 
-from hive.llm.parsing import extract_json
+from hive.llm._parsing import extract_json
 from hive.llm.prompts import load as load_prompt
 
 LENSES = {

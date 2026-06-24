@@ -20,7 +20,7 @@ from typing import Iterable
 import httpx
 
 from hive.integrations.github_repos import _GH_HEADERS, parse_repo_ref
-from hive.llm.parsing import extract_json
+from hive.llm._parsing import extract_json
 from hive.models import (
     Finding,
     FindingKind,
