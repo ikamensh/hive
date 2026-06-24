@@ -24,7 +24,7 @@ from hive.runner.agent_results import (
 from hive.runner.backends import REGISTRY
 from hive.config.settings import Config
 from hive.control.escalation import escalate
-from hive.workstreams.issues import (
+from hive.workstreams._issues import (
     LANDING_FAILED_PREFIX,
     MergeConflictError,
     advance_issues,
@@ -74,8 +74,8 @@ from hive.models import (
     parse_test_ux,
     parse_verdict,
 )
-from hive.integrations.specrepo import SpecRepo
-from hive.workstreams.testing import (
+from hive.integrations._specrepo import SpecRepo
+from hive.workstreams._testing import (
     close_story_issue as default_close_story_issue,
     file_or_update_finding_issue as default_file_or_update_finding_issue,
     finding_quality_problem,

@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from hive.integrations.specrepo import SpecRepo, authed_url, spec_status_dir
+from hive.integrations._specrepo import SpecRepo, authed_url, spec_status_dir
 
 
 @pytest.fixture
@@ -53,7 +53,7 @@ def test_sync_picks_up_remote_changes(bare_repo, tmp_path):
 
 
 def test_oversized_digest_raises(tmp_path):
-    from hive.integrations.specrepo import MAX_DIGEST_CHARS, digest_dir
+    from hive.integrations._specrepo import MAX_DIGEST_CHARS, digest_dir
 
     (tmp_path / "mission.md").write_text("x" * (MAX_DIGEST_CHARS + 1))
     with pytest.raises(RuntimeError, match="distill the wiki"):

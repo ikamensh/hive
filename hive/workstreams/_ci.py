@@ -24,9 +24,9 @@ from enum import StrEnum
 import httpx
 from pydantic import BaseModel
 
-from hive.integrations.github_repos import _GH_HEADERS, parse_repo_ref
+from hive.integrations._github_repos import _GH_HEADERS, parse_repo_ref
 from hive.models import Project, ProjectWorkstream
-from hive.workstreams.issues import (
+from hive.workstreams._issues import (
     DEFAULT_ISSUE_MODEL,
     RESOLVE_BACKEND,
     advance_issues,
@@ -35,7 +35,7 @@ from hive.workstreams.issues import (
     reconcile,
 )
 
-log = logging.getLogger("hive.workstreams.ci")
+log = logging.getLogger("hive.workstreams._ci")
 
 CI_LABEL = "hive-ci"
 # GitHub check-run conclusions that mean the build is broken (vs. success /

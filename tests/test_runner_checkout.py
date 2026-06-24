@@ -279,7 +279,7 @@ def test_runner_github_token_uses_allowed_user_for_gh_detection(monkeypatch):
         seen.append(user)
         return "ghp_allowed\n"
 
-    monkeypatch.setattr("hive.integrations.github_repos.gh_token_for", fake_token)
+    monkeypatch.setattr("hive.integrations._github_repos.gh_token_for", fake_token)
 
     assert runner._runner_github_token() == "ghp_allowed"
     assert seen == ["ikamensh"]

@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 
 from hive.runner.backends import BACKEND_NAMES
-from hive.workstreams.issues import ensure_iteration_workstream
+from hive.workstreams._issues import ensure_iteration_workstream
 from hive.llm import LoopResult, ProviderUnavailable, ToolLoop, ToolSet, build_adapters
 from hive.models import (
     Autonomy,
@@ -37,7 +37,7 @@ from hive.models import (
 )
 from hive.llm._pricing import estimate_cost
 from hive.llm.prompts import load as load_prompt
-from hive.integrations.specrepo import SpecRepo
+from hive.integrations._specrepo import SpecRepo
 
 log = logging.getLogger("hive.control.orchestrator")
 

@@ -22,7 +22,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 
-from hive.integrations.auth import (
+from hive.integrations._auth import (
     SESSION_COOKIE,
     SESSION_TTL_S,
     AuthContext,
@@ -32,10 +32,10 @@ from hive.integrations.auth import (
 from hive.runner.backends import probe_instructions
 from hive.config.settings import Config
 from hive.control.escalation import escalate
-from hive.integrations.github_repos import all_repos as list_github_repos
-from hive.integrations.github_repos import create_repo as create_github_repo
-from hive.integrations.specrepo import REQUIRED_INTAKE_FILES, SpecRepo, SpecStatus, spec_status_dir
-from hive.workstreams.issues import (
+from hive.integrations._github_repos import all_repos as list_github_repos
+from hive.integrations._github_repos import create_repo as create_github_repo
+from hive.integrations._specrepo import REQUIRED_INTAKE_FILES, SpecRepo, SpecStatus, spec_status_dir
+from hive.workstreams._issues import (
     advance_issues,
     attachment_key,
     delete_branch,
@@ -50,14 +50,14 @@ from hive.workstreams.issues import (
     RESOLVE_BACKEND,
     resolve_issue_on_github,
 )
-from hive.workstreams.ci import check_and_autofix
-from hive.workstreams.preflight import (
+from hive.workstreams._ci import check_and_autofix
+from hive.workstreams._preflight import (
     checks_payload,
     codex_runner_usable,
     create_preflight_task,
     preflight_checks,
 )
-from hive.workstreams.testing import (
+from hive.workstreams._testing import (
     artifact_key,
     close_story_issue,
     ensure_testing_workstream,
@@ -992,7 +992,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @app.get("/api/github/repos/validate")
     def github_validate_repo(ref: str, ctx: AuthContext = Depends(current)):
-        from hive.integrations.github_repos import parse_repo_ref, validate_repo
+        from hive.integrations._github_repos import parse_repo_ref, validate_repo
 
         login, _token = auth.github_credentials(ctx.user)
         try:
@@ -2258,8 +2258,8 @@ def production_app() -> FastAPI:
         project = store.get(Project, project_id)
         if not project or not project.ci_autofix or not config.gh_token.strip():
             return
-        from hive.workstreams.ci import check_and_autofix
-        from hive.workstreams.issues import ensure_issue_workstream
+        from hive.workstreams._ci import check_and_autofix
+        from hive.workstreams._issues import ensure_issue_workstream
 
         repos = dict.fromkeys(
             r.strip() for r in [project.spec_repo, *project.member_repos] if r.strip()

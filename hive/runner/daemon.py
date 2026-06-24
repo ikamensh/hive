@@ -149,7 +149,7 @@ def _runner_github_token() -> str:
     if not preferred:
         return ""
     try:
-        from hive.integrations.github_repos import gh_token_for
+        from hive.integrations._github_repos import gh_token_for
     except Exception:
         return ""
     try:

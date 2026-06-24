@@ -21,7 +21,7 @@ from hive.models import (
 )
 from hive.persistence.store import MemoryStore
 from hive.control.supervisor import Supervisor
-from hive.workstreams.testing import ensure_testing_workstream, file_or_update_finding_issue, reconcile_story_backlog
+from hive.workstreams._testing import ensure_testing_workstream, file_or_update_finding_issue, reconcile_story_backlog
 from tests.test_api_e2e import RUNNER_HEADERS, _pump, _register_usable_runner
 
 
@@ -462,7 +462,7 @@ def test_file_testing_issue_creates_custom_labels(monkeypatch):
             return Response(201, {"number": 12, "html_url": "https://github.com/acme/hive/issues/12"})
         raise AssertionError(url)
 
-    monkeypatch.setattr("hive.workstreams.testing.httpx.post", fake_post)
+    monkeypatch.setattr("hive.workstreams._testing.httpx.post", fake_post)
     story = Story(
         project_id="p",
         workstream_id="w",
