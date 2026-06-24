@@ -1017,38 +1017,53 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             "changes": notes,
         }
 
+    def cancel_one_task(task: Task, *, pending_msg: str, predelivery_msg: str) -> bool:
+        """Apply the operator-cancel transition to one task. A pending or
+        not-yet-delivered task is stopped outright; a delivered task is only
+        flagged (`cancel_requested`) for the runner to honor cooperatively. A
+        hard-cancelled resolve/review task releases its issue workstream
+        (`cancel_issue_work` is a no-op for other kinds). Returns True if the
+        task was still active (now cancelled or flagged), False if already
+        terminal."""
+        if task.status == TaskStatus.pending:
+            task.status = TaskStatus.cancelled
+            task.result_text = pending_msg
+            task.finished_at = time.time()
+            store.put(task)
+            cancel_issue_work(store, task)
+            return True
+        if task.status == TaskStatus.running:
+            if task.delivered:
+                task.cancel_requested = True
+                store.put(task)
+                return True
+            task.status = TaskStatus.cancelled
+            task.result_text = predelivery_msg
+            task.finished_at = time.time()
+            store.put(task)
+            cancel_issue_work(store, task)
+            return True
+        return False
+
     @app.post("/api/issue-runs/{run_id}/cancel")
     def cancel_issue_run(run_id: str, ctx: AuthContext = Depends(current)):
         run = store.get(IssueRun, run_id)
         if not run or run.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
         project = require_project(run.project_id, ctx)
-        cancelled_tasks = 0
-        for task in store.list(
-            Task,
-            workspace_id=ctx.workspace_id,
-            project_id=run.project_id,
-            run_id=run.id,
-        ):
-            if task.status == TaskStatus.pending:
-                task.status = TaskStatus.cancelled
-                task.result_text = "Cancelled by operator when the issue run was cancelled."
-                task.finished_at = time.time()
-                store.put(task)
-                if task.kind in (TaskKind.resolve, TaskKind.review):
-                    cancel_issue_work(store, task)
-                cancelled_tasks += 1
-            elif task.status == TaskStatus.running:
-                if task.delivered:
-                    task.cancel_requested = True
-                else:
-                    task.status = TaskStatus.cancelled
-                    task.result_text = "Cancelled by operator before delivery to a runner."
-                    task.finished_at = time.time()
-                    if task.kind in (TaskKind.resolve, TaskKind.review):
-                        cancel_issue_work(store, task)
-                store.put(task)
-                cancelled_tasks += 1
+        cancelled_tasks = sum(
+            cancel_one_task(
+                task,
+                pending_msg="Cancelled by operator when the issue run was cancelled.",
+                predelivery_msg="Cancelled by operator before delivery to a runner.",
+            )
+            for task in store.list(
+                Task,
+                workspace_id=ctx.workspace_id,
+                project_id=run.project_id,
+                run_id=run.id,
+            )
+        )
 
         run = refresh_issue_run(store, project, run)
 
@@ -1199,28 +1214,19 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         episode = store.get(TestEpisode, episode_id)
         if not episode or episode.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
-        cancelled_tasks = 0
-        for task in store.list(
-            Task,
-            workspace_id=ctx.workspace_id,
-            project_id=episode.project_id,
-            run_id=episode.id,
-        ):
-            if task.status == TaskStatus.pending:
-                task.status = TaskStatus.cancelled
-                task.result_text = "Cancelled by operator when the testing episode was cancelled."
-                task.finished_at = time.time()
-                store.put(task)
-                cancelled_tasks += 1
-            elif task.status == TaskStatus.running:
-                if task.delivered:
-                    task.cancel_requested = True
-                else:
-                    task.status = TaskStatus.cancelled
-                    task.result_text = "Cancelled by operator before delivery to a runner."
-                    task.finished_at = time.time()
-                store.put(task)
-                cancelled_tasks += 1
+        cancelled_tasks = sum(
+            cancel_one_task(
+                task,
+                pending_msg="Cancelled by operator when the testing episode was cancelled.",
+                predelivery_msg="Cancelled by operator before delivery to a runner.",
+            )
+            for task in store.list(
+                Task,
+                workspace_id=ctx.workspace_id,
+                project_id=episode.project_id,
+                run_id=episode.id,
+            )
+        )
 
         def mark(saved: TestEpisode) -> None:
             saved.status = TestEpisodeStatus.cancelled
@@ -1450,23 +1456,14 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         task = store.get(Task, task_id)
         if not task or task.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
-        if task.status == TaskStatus.pending:
-            # Never dispatched: drop it outright.
-            task.status = TaskStatus.cancelled
-            task.result_text = "Cancelled by operator before dispatch."
-            task.finished_at = time.time()
-            store.put(task)
-            cancel_issue_work(store, task)
+        was_pending = task.status == TaskStatus.pending
+        cancel_one_task(
+            task,
+            pending_msg="Cancelled by operator before dispatch.",
+            predelivery_msg="Cancelled by operator before delivery to a runner.",
+        )
+        if was_pending:
             supervisor.wake(task.project_id, f"Task {task.id} was cancelled before it ran.")
-        elif task.status == TaskStatus.running:
-            if task.delivered:
-                # Cooperative: the runner polls this flag and stops the agent.
-                task.cancel_requested = True
-            else:
-                task.status = TaskStatus.cancelled
-                task.result_text = "Cancelled by operator before delivery to a runner."
-                task.finished_at = time.time()
-            store.put(task)
         return task.model_dump()
 
     @app.post("/api/tasks/{task_id}/trace")
