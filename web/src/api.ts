@@ -207,9 +207,6 @@ const realApi = {
   humanTodos: () => http<HumanTodo[]>("/api/human-todos"),
   completeHumanTodo: (id: string) =>
     http<HumanTodo>(`/api/human-todos/${id}/done`, { method: "POST" }),
-  humanTasks: () => http<HumanTodo[]>("/api/human-tasks"),
-  completeHumanTask: (id: string) =>
-    http<HumanTodo>(`/api/human-tasks/${id}/done`, { method: "POST" }),
   orgContext: async () => (await http<{ text: string }>("/api/org-context")).text,
   setOrgContext: async (text: string) => {
     await http("/api/org-context", { method: "PUT", body: JSON.stringify({ text }) });

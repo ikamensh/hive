@@ -268,104 +268,86 @@ class Verdict(StrEnum):
     reject = "reject"
 
 
-def parse_verdict(text: str) -> Verdict:
-    """Extract a verify agent's verdict from its result text. The verifier
-    prompt requires a `VERDICT: ACCEPT|REJECT` line; we read the last one so a
-    quoted instruction earlier in the report can't spoof the outcome."""
-    found = Verdict.none
+def _last_marker[T](text: str, prefix: str, options: dict[str, T], default: T) -> T:
+    """Read the agent's outcome off a `PREFIX: VALUE` line. The last matching
+    line wins, so a quoted instruction earlier in the report can't spoof the
+    outcome; within one line, `options` order is precedence (first keyword found
+    decides). A `PREFIX:` line whose value matches nothing leaves the prior
+    result unchanged. All matching is case-insensitive."""
+    head = prefix.upper() + ":"
+    found = default
     for line in text.splitlines():
         token = line.strip().upper()
-        if token.startswith("VERDICT:") and "ACCEPT" in token:
-            found = Verdict.accept
-        elif token.startswith("VERDICT:") and "REJECT" in token:
-            found = Verdict.reject
+        if not token.startswith(head):
+            continue
+        for keyword, value in options.items():
+            if keyword in token:
+                found = value
+                break
     return found
+
+
+def parse_verdict(text: str) -> Verdict:
+    """A verify agent's `VERDICT: ACCEPT|REJECT`."""
+    return _last_marker(text, "VERDICT", {"ACCEPT": Verdict.accept, "REJECT": Verdict.reject}, Verdict.none)
 
 
 def parse_resolve(text: str) -> Verdict:
-    """Extract a resolve task's outcome (accept = FIXED → go to review, reject =
-    BLOCKED → the agent made no change and commented, because the issue was
-    underspecified or the bug could not be reproduced on the working branch).
-    Requires an `OUTCOME: FIXED|BLOCKED` line; the last one wins so quoted text
-    can't spoof."""
-    found = Verdict.none
-    for line in text.splitlines():
-        token = line.strip().upper()
-        if token.startswith("OUTCOME:") and "FIX" in token:
-            found = Verdict.accept
-        elif token.startswith("OUTCOME:") and "BLOCK" in token:
-            found = Verdict.reject
-    return found
+    """A resolve task's `OUTCOME: FIXED|BLOCKED` — FIXED → review, BLOCKED → the
+    agent made no change and commented (issue underspecified or unreproducible)."""
+    return _last_marker(text, "OUTCOME", {"FIX": Verdict.accept, "BLOCK": Verdict.reject}, Verdict.none)
 
 
 def parse_review(text: str) -> Verdict:
-    """Extract a review task's verdict (accept = ACCEPT → merge+close, reject =
-    REJECT → the agent commented with the failure). Requires a `REVIEW:
-    ACCEPT|REJECT` line; the last one wins."""
-    found = Verdict.none
-    for line in text.splitlines():
-        token = line.strip().upper()
-        if token.startswith("REVIEW:") and "ACCEPT" in token:
-            found = Verdict.accept
-        elif token.startswith("REVIEW:") and "REJECT" in token:
-            found = Verdict.reject
-    return found
+    """A review task's `REVIEW: ACCEPT|REJECT` — ACCEPT → merge+close."""
+    return _last_marker(text, "REVIEW", {"ACCEPT": Verdict.accept, "REJECT": Verdict.reject}, Verdict.none)
 
 
 def parse_test_refresh(text: str) -> bool:
-    """Return True when a test-refresh task reports `REFRESH: DONE`."""
-    done = False
-    for line in text.splitlines():
-        token = line.strip().upper()
-        if token.startswith("REFRESH:") and "DONE" in token:
-            done = True
-    return done
+    """True when a test-refresh task reports `REFRESH: DONE`."""
+    return _last_marker(text, "REFRESH", {"DONE": True}, False)
 
 
 def parse_test_sweep(text: str) -> TestSweepOutcome:
-    """Extract a sweep marker. The last `SWEEP:` line wins."""
-    found = TestSweepOutcome.none
-    for line in text.splitlines():
-        token = line.strip().upper()
-        if not token.startswith("SWEEP:"):
-            continue
-        if "FINDINGS" in token:
-            found = TestSweepOutcome.findings
-        elif "BLOCK" in token:
-            found = TestSweepOutcome.blocked
-        elif "PASS" in token:
-            found = TestSweepOutcome.passed
-    return found
+    """A sweep's `SWEEP: PASS|FINDINGS|BLOCKED`."""
+    return _last_marker(
+        text,
+        "SWEEP",
+        {
+            "FINDINGS": TestSweepOutcome.findings,
+            "BLOCK": TestSweepOutcome.blocked,
+            "PASS": TestSweepOutcome.passed,
+        },
+        TestSweepOutcome.none,
+    )
 
 
 def parse_test_repro(text: str) -> TestReproOutcome:
-    """Extract a bug-reproduction marker. The last `REPRO:` line wins."""
-    found = TestReproOutcome.none
-    for line in text.splitlines():
-        token = line.strip().upper()
-        if not token.startswith("REPRO:"):
-            continue
-        if "NOT_REPRODUCED" in token or "NOT REPRODUCED" in token:
-            found = TestReproOutcome.not_reproduced
-        elif "CONFIRMED" in token:
-            found = TestReproOutcome.confirmed
-    return found
+    """A bug-reproduction `REPRO: CONFIRMED|NOT_REPRODUCED`."""
+    return _last_marker(
+        text,
+        "REPRO",
+        {
+            "NOT_REPRODUCED": TestReproOutcome.not_reproduced,
+            "NOT REPRODUCED": TestReproOutcome.not_reproduced,
+            "CONFIRMED": TestReproOutcome.confirmed,
+        },
+        TestReproOutcome.none,
+    )
 
 
 def parse_test_ux(text: str) -> TestUxOutcome:
-    """Extract a UX adjudication marker. The last `UX:` line wins."""
-    found = TestUxOutcome.none
-    for line in text.splitlines():
-        token = line.strip().upper()
-        if not token.startswith("UX:"):
-            continue
-        if "IMPROVABLE" in token:
-            found = TestUxOutcome.improvable
-        elif "CONSTRAINED" in token:
-            found = TestUxOutcome.constrained
-        elif "DISAGREE" in token:
-            found = TestUxOutcome.disagree
-    return found
+    """A UX adjudication `UX: IMPROVABLE|CONSTRAINED|DISAGREE`."""
+    return _last_marker(
+        text,
+        "UX",
+        {
+            "IMPROVABLE": TestUxOutcome.improvable,
+            "CONSTRAINED": TestUxOutcome.constrained,
+            "DISAGREE": TestUxOutcome.disagree,
+        },
+        TestUxOutcome.none,
+    )
 
 
 class Task(BaseModel):

@@ -578,6 +578,16 @@ class TaskResultProcessor:
                     refresh_issue_run(self.store, project, run)
                 log.info("queued review task %s for issue #%s on %s", review.id, ws.issue_number, review.branch)
 
+    def _refresh_run(self, task: Task) -> None:
+        """Recompute the parent issue run's aggregate status after a per-issue
+        transition. No-op for tasks not tied to a run."""
+        if not task.run_id:
+            return
+        project = self.store.get(Project, task.project_id)
+        run = self.store.get(IssueRun, task.run_id)
+        if project and run:
+            refresh_issue_run(self.store, project, run)
+
     def _land_review(self, task: Task, body: TaskResult) -> None:
         ws = self.store.get(Workstream, task.workstream_id)
         if ws is None or ws.status != WorkstreamStatus.reviewing:
@@ -596,10 +606,7 @@ class TaskResultProcessor:
                 else "review errored — re-scan to retry"
             )
             _set_ws_status(self.store, ws.id, WorkstreamStatus.rejected, reason)
-            project = self.store.get(Project, task.project_id)
-            run = self.store.get(IssueRun, task.run_id) if task.run_id else None
-            if project and run:
-                refresh_issue_run(self.store, project, run)
+            self._refresh_run(task)
             return
         if task.verdict == Verdict.none:
             log.warning(
@@ -613,10 +620,7 @@ class TaskResultProcessor:
             log.info("review task %s (issue #%s) verdict=%s → rejected", task.id, task.issue_number, task.verdict)
             if landing_integration:
                 self._escalate_landing_needs_human(task, ws, body.text)
-                project = self.store.get(Project, task.project_id)
-                run = self.store.get(IssueRun, task.run_id) if task.run_id else None
-                if project and run:
-                    refresh_issue_run(self.store, project, run)
+                self._refresh_run(task)
                 return
             _set_ws_status(
                 self.store,
@@ -624,10 +628,7 @@ class TaskResultProcessor:
                 WorkstreamStatus.rejected,
                 "rejected at review — see the GitHub issue comment",
             )
-            project = self.store.get(Project, task.project_id)
-            run = self.store.get(IssueRun, task.run_id) if task.run_id else None
-            if project and run:
-                refresh_issue_run(self.store, project, run)
+            self._refresh_run(task)
             return
         branch = issue_branch(ws.issue_number)
         log.info(
@@ -680,10 +681,7 @@ class TaskResultProcessor:
                 workspace_id=task.workspace_id,
             )
             _set_ws_status(self.store, ws.id, WorkstreamStatus.rejected, f"{LANDING_FAILED_PREFIX}: {exc}")
-            project = self.store.get(Project, task.project_id)
-            run = self.store.get(IssueRun, task.run_id) if task.run_id else None
-            if project and run:
-                refresh_issue_run(self.store, project, run)
+            self._refresh_run(task)
             return
         log.info("issue #%s landed: merged + closed; workstream done", ws.issue_number)
         try:
@@ -691,10 +689,7 @@ class TaskResultProcessor:
         except Exception as exc:  # never fail a completed landing over branch cleanup
             log.info("issue #%s landed; leftover branch %s not deleted: %s", ws.issue_number, branch, exc)
         _set_ws_status(self.store, ws.id, WorkstreamStatus.done, "")
-        project = self.store.get(Project, task.project_id)
-        run = self.store.get(IssueRun, task.run_id) if task.run_id else None
-        if project and run:
-            refresh_issue_run(self.store, project, run)
+        self._refresh_run(task)
 
     @staticmethod
     def _is_landing_integration_task(task: Task) -> bool:

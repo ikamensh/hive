@@ -318,7 +318,7 @@ def _report(client, task_id, text, is_error=False, structured_result=None):
 def _pass_preflight(monkeypatch):
     """Scan runs the chief preflight, which hits GitHub for repo perms.
     Stub it green so the scan flow tests stay offline (preflight has its own tests)."""
-    monkeypatch.setattr("hive.api.preflight_checks", lambda store, config, project: [])
+    monkeypatch.setattr("hive.api.preflight_checks", lambda store, config, project, repo=None: [])
 
 
 def test_resolve_auth_block_stops_dispatch_and_files_todo(app, monkeypatch):
@@ -601,7 +601,7 @@ def test_mark_landing_failure_todo_done_marks_closed_issue_done(app, monkeypatch
         )
     )
 
-    resp = client.post(f"/api/human-tasks/{human.id}/done")
+    resp = client.post(f"/api/human-todos/{human.id}/done")
 
     assert resp.status_code == 200
     assert store.get(HumanTask, human.id).status == HumanTaskStatus.done

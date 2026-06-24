@@ -12,7 +12,7 @@ export function projectViewModel(
   },
 ) {
   const { project, workstreams, work_items, tasks, questions, conversations, stories, findings, test_episodes } = data;
-  const humanTodos = data.human_todos ?? data.human_tasks ?? [];
+  const humanTodos = data.human_todos ?? [];
   const intakeConversation =
     conversations.find((c) => c.id === project.intake_conversation_id) ??
     [...conversations].sort((a, b) => b.created_at - a.created_at)[0] ??

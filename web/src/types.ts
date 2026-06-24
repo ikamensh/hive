@@ -178,7 +178,6 @@ export interface ProjectDetail {
   tasks: Task[];
   questions: Question[];
   human_todos: HumanTodo[];
-  human_tasks?: HumanTodo[];
   conversations: AgentConversation[];
   issue_runs: IssueRun[];
   stories: Story[];

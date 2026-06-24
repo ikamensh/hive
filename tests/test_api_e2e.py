@@ -544,7 +544,6 @@ def test_human_todo_tool_and_api(harness):
 
     assert "Log in codex on vm-1" in tools.snapshot()
     assert client.get("/api/human-todos").json()[0]["status"] == "open"
-    assert client.get("/api/human-tasks").json()[0]["status"] == "open"
 
     # Another project's scoped todo is invisible here; org-wide ones are shared.
     other = store.put(Project(name="other", spec_repo="https://example.com/o.git"))
@@ -556,7 +555,6 @@ def test_human_todo_tool_and_api(harness):
     assert "Log in codex" not in tools.snapshot()  # only open todos are shown
     detail = client.get(f"/api/projects/{other.id}").json()
     assert detail["human_todos"][0]["title"] == "Grant repo access"
-    assert detail["human_tasks"][0]["title"] == "Grant repo access"
 
 
 def test_rate_limited_result_sets_cooldown(harness):
@@ -1408,7 +1406,6 @@ def test_project_payload_regression_work_verify_accept(harness):
         "tasks",
         "questions",
         "human_todos",
-        "human_tasks",
         "conversations",
         "issue_runs",
         "stories",

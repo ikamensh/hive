@@ -1277,7 +1277,6 @@ export const api = {
       tasks: tasks.filter((t) => t.project_id === id),
       questions: questions.filter((q) => q.project_id === id),
       human_todos: humanTodos.filter((t) => t.project_id === id),
-      human_tasks: humanTodos.filter((t) => t.project_id === id),
       conversations: conversations.filter((c) => c.project_id === id),
       issue_runs: issueRuns.filter((r) => r.project_id === id),
       stories: stories.filter((s) => s.project_id === id),
@@ -1702,10 +1701,6 @@ export const api = {
     t.done_at = Date.now() / 1000;
     return structuredClone(t);
   },
-
-  humanTasks: async (): Promise<HumanTodo[]> => structuredClone(humanTodos),
-
-  completeHumanTask: async (id: string): Promise<HumanTodo> => api.completeHumanTodo(id),
 
   orgContext: async (): Promise<string> => orgContext,
 

@@ -346,10 +346,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             raise HTTPException(409, "workstream is disabled")
 
     def issue_preflight_checks(project: Project, repo: str):
-        try:
-            return preflight_checks(store, config, project, repo=repo)
-        except TypeError:
-            return preflight_checks(store, config, project)
+        return preflight_checks(store, config, project, repo=repo)
 
     def sync_issue_workstream(project: Project, workstream: ProjectWorkstream) -> tuple[list[str], int, int, int]:
         if workstream.kind != ProjectWorkstreamKind.github_issues:
@@ -1553,7 +1550,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 for q in store.list(Question, workspace_id=ctx.workspace_id, project_id=project_id)
             ],
             "human_todos": human_todos,
-            "human_tasks": human_todos,
             "conversations": [
                 c.model_dump()
                 for c in store.list(AgentConversation, workspace_id=ctx.workspace_id, project_id=project_id)
@@ -1972,12 +1968,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return {"ok": True}
 
     @app.get("/api/human-todos")
-    @app.get("/api/human-tasks")
     def list_human_todos(ctx: AuthContext = Depends(current)):
         return [t.model_dump() for t in store.list(HumanTask, workspace_id=ctx.workspace_id)]
 
     @app.post("/api/human-todos")
-    @app.post("/api/human-tasks")
     def create_human_todo(body: dict, ctx: AuthContext = Depends(current)):
         project_id = body.get("project_id", "")
         if project_id:
@@ -1992,7 +1986,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         ).model_dump()
 
     @app.post("/api/human-todos/{todo_id}/done")
-    @app.post("/api/human-tasks/{todo_id}/done")
     def complete_human_todo(todo_id: str, ctx: AuthContext = Depends(current)):
         task = store.get(HumanTask, todo_id)
         if not task or task.workspace_id != ctx.workspace_id:
