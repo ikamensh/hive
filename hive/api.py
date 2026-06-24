@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import datetime
 import hmac
 import logging
 import os
@@ -29,8 +28,7 @@ from hive._integrations.auth import (
     AuthManager,
 )
 from hive.config.settings import Config
-from hive._control import intake
-from hive._control.escalation import escalate
+from hive._control import clarifications, intake
 from hive._integrations.github_repos import all_repos as list_github_repos
 from hive._integrations.github_repos import create_repo as create_github_repo
 from hive._integrations.specrepo import SpecRepo
@@ -90,7 +88,6 @@ from hive.models import (
     ProjectWorkstreamStatus,
     ProjectState,
     Question,
-    QuestionStatus,
     Resource,
     Runner,
     Story,
@@ -128,10 +125,6 @@ log = logging.getLogger("hive.api")
 
 RUNNER_POLL_WAIT_S = 5.0
 RUNNER_POLL_SLEEP_S = 1.0
-
-
-def _iso_utc(epoch: float) -> str:
-    return datetime.datetime.fromtimestamp(epoch, datetime.UTC).isoformat()
 
 
 def canonical_repo(url: str) -> str:
@@ -420,65 +413,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         except Exception as exc:
             log.exception("testing backlog sync failed for project %s", project.id)
             raise HTTPException(400, f"could not read acceptance stories from spec repo: {exc}") from exc
-
-    def can_write_spec_repo(project: Project) -> bool:
-        """Avoid slow surprise network attempts in throwaway/local runs.
-
-        Production has HIVE_GH_TOKEN; tests and local smoke runs often use a
-        filesystem path. Other remotes can still be handled by the orchestrator
-        via commit_to_spec, but the chief only auto-writes when it has
-        an obvious write path.
-        """
-        url = project.spec_repo
-        return bool(config.gh_token.strip()) or url.startswith("file://") or Path(url).exists()
-
-    def record_answer_input_log(
-        project: Project, question: Question, answer: str, answered_at: float
-    ) -> str:
-        stamp = datetime.datetime.fromtimestamp(answered_at, datetime.UTC)
-        path = f"input-log/{stamp:%Y-%m-%d-%H%M%S}-{question.id}.md"
-        body = "\n".join(
-            [
-                f"# Clarification answer {question.id}",
-                "",
-                f"- Answered: {_iso_utc(answered_at)}",
-                f"- Project: {project.name} ({project.id})",
-                f"- Workstream: {question.workstream_id or 'project-level'}",
-                "",
-                "## Question",
-                "",
-                question.text.strip(),
-                "",
-                "## Answer",
-                "",
-                answer.strip(),
-                "",
-            ]
-        )
-        spec = SpecRepo(
-            project.spec_repo,
-            Path(config.data_dir or "/tmp/hive-data") / "specs",
-            config.gh_token,
-        )
-        sha = spec.commit_files({path: body}, f"Record clarification answer {question.id}")
-        return f"{path} @ {sha[:8]}"
-
-    def file_spec_log_failure(project: Project, question: Question, exc: Exception) -> None:
-        escalate(
-            store,
-            f"Repair spec logging for {project.name}",
-            instructions=(
-                "Hive saved a clarification answer in the chief DB, but could not "
-                "append the raw answer to the spec repo input log.\n\n"
-                f"Question: `{question.id}`\n\n"
-                f"Spec repo: `{project.spec_repo}`\n\n"
-                f"Error:\n\n```\n{type(exc).__name__}: {str(exc)[:1500]}\n```\n\n"
-                "Fix spec-repo write access, then ask Hive to distill or replay the answer "
-                "from the project question history."
-            ),
-            project_id=project.id,
-            workspace_id=project.workspace_id,
-        )
 
     @contextlib.asynccontextmanager
     async def lifespan(_app):
@@ -1296,46 +1230,17 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if not question or question.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
         project = require_project(question.project_id, ctx)
-        answered_at = time.time()
-        input_log_note = ""
-        if can_write_spec_repo(project):
-            try:
-                input_log_note = (
-                    "Chief already appended the raw answer to "
-                    f"{record_answer_input_log(project, question, body.answer, answered_at)}.\n"
-                )
-            except Exception as exc:
-                log.warning("failed to append question %s to spec input-log: %s", question.id, exc)
-                file_spec_log_failure(project, question, exc)
-                input_log_note = (
-                    "Chief could not append the raw answer to input-log automatically; "
-                    "a human todo was filed with the write error.\n"
-                )
-        question.status = QuestionStatus.answered
-        question.answer = body.answer
-        question.answered_at = answered_at
-        store.put(question)
-        supervisor.wake(
-            question.project_id,
-            f"User answered question {question.id}.\nQ: {question.text}\nA: {body.answer}\n"
-            f"{input_log_note}"
-            "Distill this into the wiki/spec and continue.",
+        answered = clarifications.apply_answer(
+            store, supervisor, config, project, question, body.answer
         )
-        return question.model_dump()
+        return answered.model_dump()
 
     @app.post("/api/questions/{question_id}/dismiss")
     def dismiss_question(question_id: str, ctx: AuthContext = Depends(current)):
         question = store.get(Question, question_id)
         if not question or question.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
-        question.status = QuestionStatus.dismissed
-        store.put(question)
-        supervisor.wake(
-            question.project_id,
-            f"User dismissed question {question.id} without answering. If a workstream "
-            "parked on it, decide whether to reactivate it or leave it parked.",
-        )
-        return question.model_dump()
+        return clarifications.dismiss(store, supervisor, question).model_dump()
 
     @app.post("/api/feedback")
     def add_feedback(body: FeedbackBody, ctx: AuthContext = Depends(current)):
