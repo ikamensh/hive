@@ -37,8 +37,16 @@ For what each module does and how the pipelines wire together, see `wiki/code-ma
 uv run pytest tests/                  # unit + mocked e2e
 uvicorn --factory hive.api:production_app   # chief (env: HIVE_GCP_PROJECT etc.)
 python -m hive.runner                 # runner (env: HIVE_URL, HIVE_RUNNER_TOKEN)
-bash scripts/laptop_runner.sh         # laptop runner via SSH tunnel
+bash deploy/install_mac_runner.sh     # install a Mac as a launchd runner (once); serves Claude Max/Cursor
 ```
+
+Runners are install-once services that self-register and long-poll the chief: the
+VM runs `hive-runner` via systemd; a Mac/laptop runs `deploy/install_mac_runner.sh`
+(launchd LaunchAgent — user session so the agent CLIs reach the login Keychain,
+clean env, auto-start on login, KeepAlive restart, reconnect after sleep). Stable
+runner name → deterministic machine id, so restarts reuse the same machine row.
+Dispatch is backend-aware, so subscription-bound backends (Claude Max on the
+laptop) are only ever assigned to the machine where they probed usable.
 
 ## Remote VM (chief + runner on GCE)
 
