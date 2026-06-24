@@ -21,7 +21,7 @@ from hive.models import (
 )
 from hive.persistence.store import MemoryStore
 from hive.control.supervisor import Supervisor
-from hive.workstreams.testing import ensure_testing_workstream, file_or_update_finding_issue, reconcile_stories
+from hive.workstreams.testing import ensure_testing_workstream, file_or_update_finding_issue, reconcile_story_backlog
 from tests.test_api_e2e import RUNNER_HEADERS, _pump, _register_usable_runner
 
 
@@ -123,7 +123,8 @@ def test_reconcile_stories_from_acceptance(tmp_path):
     project = store.put(Project(name="p", spec_repo=str(repo)))
     stream = ensure_testing_workstream(store, project)
 
-    notes, baseline = reconcile_stories(store, project, stream, repo)
+    report = reconcile_story_backlog(store, project, stream, repo)
+    notes, baseline = report.notes, report.baseline
 
     stories = store.list(Story, project_id=project.id)
     assert notes == ["added story webhook-retry"]

@@ -10,7 +10,6 @@ import base64
 import hashlib
 import hmac
 import json
-import re
 import time
 from dataclasses import dataclass
 
@@ -20,7 +19,6 @@ from fastapi.responses import RedirectResponse
 
 from hive.config.settings import Config
 from hive.models import (
-    DEFAULT_WORKSPACE_ID,
     Machine,
     User,
     Workspace,
@@ -48,11 +46,6 @@ def _b64(data: bytes) -> str:
 
 def _unb64(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
-
-
-def _slug(text: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9_.-]+", "-", text.strip().lower()).strip("-")
-    return slug or DEFAULT_WORKSPACE_ID
 
 
 def _machine_id(workspace_id: str, name: str) -> str:
@@ -313,9 +306,6 @@ class AuthManager:
             samesite="lax",
         )
         return response
-
-    def logout(self) -> dict:
-        return {"ok": True}
 
     def github_credentials(self, user: User) -> tuple[str, str]:
         """(github_login, token) for GitHub API — session OAuth token or server fallback."""

@@ -275,9 +275,6 @@ def call_agent(
     return total
 
 
-call_agent_with_result = call_agent
-
-
 def _prepare_result_path(project_dir: Path, spec: ResultSpec) -> None:
     path = project_dir / spec.path
     path.parent.mkdir(parents=True, exist_ok=True)

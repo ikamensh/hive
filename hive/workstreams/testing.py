@@ -407,17 +407,6 @@ def reconcile_story_backlog(
     )
 
 
-def reconcile_stories(
-    store,
-    project: Project,
-    workstream: ProjectWorkstream,
-    spec_path: Path,
-) -> tuple[list[str], str]:
-    """Compatibility wrapper for callers that only need notes + baseline."""
-    report = reconcile_story_backlog(store, project, workstream, spec_path)
-    return report.notes, report.baseline
-
-
 def _priority_score(story: Story, now_epoch: float) -> tuple[int, float, int]:
     score = 0
     if story.spec_baseline and story.last_tested_baseline != story.spec_baseline:
@@ -805,26 +794,6 @@ def finalize_refresh(
     return RefreshFinalization(summary=summary, episode=episode, report=report, tasks=tasks, questions=questions)
 
 
-def finish_refresh(
-    store,
-    project: Project,
-    workstream: ProjectWorkstream,
-    episode: TestEpisode,
-    spec_path: Path,
-    refresh_result: dict | None = None,
-) -> tuple[TestEpisode, list[str], list[Task]]:
-    """Compatibility wrapper for the episode refresh finalization path."""
-    finalization = finalize_refresh(
-        store,
-        project,
-        workstream,
-        spec_path,
-        episode=episode,
-        refresh_result=refresh_result,
-    )
-    return finalization.episode or episode, finalization.report.notes, finalization.tasks
-
-
 def result_payload(text: str) -> dict:
     try:
         raw = extract_json(text)
@@ -833,15 +802,6 @@ def result_payload(text: str) -> dict:
     if isinstance(raw, list):
         return {"findings": raw}
     return raw if isinstance(raw, dict) else {}
-
-
-def _fidelity(payload: dict) -> StoryFidelity:
-    value = str(payload.get("fidelity") or "").lower()
-    if value == "docker":
-        return StoryFidelity.docker
-    if value == "local":
-        return StoryFidelity.local
-    return StoryFidelity.local
 
 
 def _finding_signature(story_key: str, kind: str, summary: str, oracle: str) -> str:

@@ -80,10 +80,6 @@ class CheckoutError(RuntimeError):
     """A user-facing checkout failure with stderr and without secret material."""
 
 
-def detect_backends() -> list[str]:
-    return discovery_payload()[0]
-
-
 def discovery_payload() -> tuple[list[str], list[dict]]:
     discoveries = discover_backends()
     filtered = _filter_backend_discoveries(discoveries)

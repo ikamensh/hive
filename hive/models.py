@@ -789,7 +789,8 @@ class Checkout(BaseModel):
 
     The runner reports the git facts in its heartbeat; the chief upserts
     this record. The remote is authoritative — a checkout is observed, not a
-    source of truth. `drift()` is the signal that real work may live only here."""
+    source of truth. Unpushed commits (`ahead > 0`) or a `dirty` tree are the
+    signal that real work may live only here."""
 
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
@@ -803,8 +804,3 @@ class Checkout(BaseModel):
     dirty: bool = False  # uncommitted working-tree changes
     env_status: str = "unknown"  # reserved: dependency-setup readiness
     last_reported_at: float = Field(default_factory=now)
-
-    def drift(self) -> bool:
-        """Local state the remote does not have: unpushed commits or a dirty
-        tree. The signal that work may live only on this machine."""
-        return self.exists and (self.ahead > 0 or self.dirty)

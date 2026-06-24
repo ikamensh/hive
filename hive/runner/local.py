@@ -12,20 +12,6 @@ from hive.config.settings import Config
 from hive.config.file import set_stored_config_value
 
 
-TRUE_VALUES = {"1", "true", "yes", "on"}
-
-
-def truthy(value: str | bool | None) -> bool:
-    if isinstance(value, bool):
-        return value
-    return str(value or "").strip().lower() in TRUE_VALUES
-
-
-def autostart_enabled(env: dict[str, str] | None = None) -> bool:
-    env = env or os.environ
-    return truthy(env.get("HIVE_AUTOSTART_RUNNER"))
-
-
 def local_chief_url(host: str, port: int) -> str:
     connect_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
     return f"http://{connect_host}:{port}"
