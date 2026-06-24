@@ -17,7 +17,7 @@ from hive.control.capacity import (
     subscription_candidates,
 )
 from hive.models import Machine, Resource, ResourceUsability, Runner, Subscription
-from hive.runner.backends import backend_licensing
+from hive.runner._backends import backend_licensing
 
 
 def _usable(runner_id: str, backend: str = "claude", **kw) -> Resource:

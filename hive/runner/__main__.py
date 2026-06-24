@@ -1,3 +1,3 @@
-from hive.runner.daemon import main
+from hive.runner._daemon import main
 
 main()

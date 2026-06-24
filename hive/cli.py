@@ -444,7 +444,7 @@ def _prepare_web_bundle(skip_build: bool) -> None:
 def _run_chief(args: argparse.Namespace) -> None:
     import uvicorn
 
-    from hive.runner.local import local_chief_url
+    from hive.runner._local import local_chief_url
 
     os.environ.setdefault("HIVE_PUBLIC_URL", local_chief_url(args.host, args.port))
     for line in prepare_run_env(os.environ, load_stored_config()):
@@ -620,8 +620,8 @@ def run(args: argparse.Namespace, client) -> dict | list:
     elif c == "cancel":
         r = client.post(f"/api/tasks/{args.task_id}/cancel")
     elif c == "agents":
-        from hive.runner.backends import BACKEND_NAMES
-        from hive.runner.daemon import discovery_payload
+        from hive.runner._backends import BACKEND_NAMES
+        from hive.runner._daemon import discovery_payload
 
         detected, discoveries = discovery_payload()
         return {

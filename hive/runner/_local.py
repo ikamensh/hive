@@ -83,7 +83,7 @@ class LocalRunnerManager:
         self._log = self.log_path().open("ab")
         try:
             self._proc = subprocess.Popen(
-                [sys.executable, "-m", "hive.runner.daemon"],
+                [sys.executable, "-m", "hive.runner"],
                 env=env,
                 stdout=self._log,
                 stderr=subprocess.STDOUT,

@@ -2,9 +2,9 @@ import subprocess
 
 import pytest
 
-from hive.runner import backends
-from hive.runner.backends import BackendDiscovery, REGISTRY, discover_backend
-from hive.runner import daemon as runner
+from hive.runner import _backends as backends
+from hive.runner._backends import BackendDiscovery, REGISTRY, discover_backend
+from hive.runner import _daemon as runner
 
 
 def _completed(args, stdout="", stderr="", returncode=0):

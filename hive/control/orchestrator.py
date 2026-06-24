@@ -13,7 +13,7 @@ import json
 import logging
 from pathlib import Path
 
-from hive.runner.backends import BACKEND_NAMES
+from hive.runner._backends import BACKEND_NAMES
 from hive.workstreams._issues import ensure_iteration_workstream
 from hive.llm import LoopResult, ProviderUnavailable, ToolLoop, ToolSet, build_adapters
 from hive.models import (

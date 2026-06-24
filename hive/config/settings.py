@@ -7,7 +7,7 @@ import socket
 from dataclasses import dataclass
 from pathlib import Path
 
-from hive.runner.machine import machine_metadata
+from hive.runner._machine import machine_metadata
 from hive.models import DEFAULT_WORKSPACE_ID
 
 

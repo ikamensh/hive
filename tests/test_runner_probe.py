@@ -1,7 +1,7 @@
 import subprocess
 
-from hive.runner.backends import PROBE_MARKER
-from hive.runner.daemon import ensure_probe_repo, validate_probe_result
+from hive.runner._backends import PROBE_MARKER
+from hive.runner._daemon import ensure_probe_repo, validate_probe_result
 
 
 def _porcelain(path):
@@ -14,7 +14,7 @@ def test_ensure_probe_repo_builds_clean_repo_and_self_cleans(tmp_path, monkeypat
     """The runner builds its own probe repo (no chief path, so remote
     runners can probe), idempotently, and resets it clean each time so a prior
     probe's mess never fails the next."""
-    import hive.runner.daemon as daemon
+    import hive.runner._daemon as daemon
 
     monkeypatch.setattr(daemon, "WORKDIR", tmp_path)
 

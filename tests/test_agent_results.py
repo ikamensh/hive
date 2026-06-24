@@ -1,6 +1,6 @@
 import json
 
-from hive.runner.agent_results import ResultSpec, VerifyResult, call_agent
+from hive.runner._agent_results import ResultSpec, VerifyResult, call_agent
 
 
 class FakeResult:

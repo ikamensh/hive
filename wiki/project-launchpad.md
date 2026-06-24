@@ -114,7 +114,7 @@ class Checkout(BaseModel):
 
 - **Read path (this pass):** the runner reports per-repo git facts for the repos
   it has checked out, piggybacked on its existing 30s heartbeat
-  ([daemon.py register](../hive/runner/daemon.py)). The chief upserts a
+  ([runner daemon register](../hive/runner/_daemon.py)). The chief upserts a
   `Checkout` per `(machine, repo)`. The launchpad shows drift per machine.
 - **Drift** = `ahead > 0` or `dirty`. It means real work may live only on one
   machine.
@@ -125,7 +125,7 @@ class Checkout(BaseModel):
 - **Drift safety (fast follow):** before any destructive `reset --hard`/`clean`,
   the runner pushes drift to a throwaway `hive/backup/<ts>` branch on origin —
   reusing the existing `fresh_branch` backup pattern
-  ([daemon.py:367](../hive/runner/daemon.py)) — so a task racing in can never
+  ([runner daemon heartbeat](../hive/runner/_daemon.py)) — so a task racing in can never
   silently destroy machine-local work. The agent sync job does the thoughtful
   consolidation.
 

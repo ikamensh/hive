@@ -29,7 +29,7 @@ from hive.integrations._auth import (
     AuthManager,
     ensure_machine,
 )
-from hive.runner.backends import probe_instructions
+from hive.runner._backends import probe_instructions
 from hive.config.settings import Config
 from hive.control.escalation import escalate
 from hive.integrations._github_repos import all_repos as list_github_repos
@@ -117,7 +117,7 @@ from hive.control.capacity import (
 from hive.control.overview import build_overview
 from hive.control.supervisor import Supervisor
 from hive.version import get_version, version_payload
-from hive.runner.task_results import (
+from hive.runner._task_results import (
     TaskResult,
     TaskResultProcessor,
     cancel_issue_work,
@@ -2289,7 +2289,7 @@ def production_app() -> FastAPI:
         machine_name=config.machine_name,
         ci_check=ci_check,
     )
-    from hive.runner.local import LocalRunnerManager
+    from hive.runner._local import LocalRunnerManager
 
     app = create_app(
         store,

@@ -13,7 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from hive.runner.backends import PROBE_MARKER
+from hive.runner._backends import PROBE_MARKER
 from hive.persistence.blobstore import LocalBlobStore
 from hive.config.settings import Config
 from hive.llm._openai import OpenAIAdapter
@@ -971,7 +971,7 @@ def test_local_runner_autostart_endpoint_starts_runner(tmp_path):
 
 def test_local_runner_autostart_writes_machine_config(tmp_path, monkeypatch):
     from hive.config.file import load_stored_config
-    from hive.runner.local import LocalRunnerManager
+    from hive.runner._local import LocalRunnerManager
 
     config_file = tmp_path / "config.env"
     monkeypatch.setenv("HIVE_CONFIG_FILE", str(config_file))

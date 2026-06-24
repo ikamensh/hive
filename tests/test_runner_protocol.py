@@ -6,7 +6,7 @@ import time
 
 from fastapi.testclient import TestClient
 
-from hive.runner.backends import PROBE_MARKER
+from hive.runner._backends import PROBE_MARKER
 from hive.config.settings import Config
 from hive.models import (
     Machine,
@@ -21,7 +21,7 @@ from hive.models import (
 )
 from hive.persistence.store import MemoryStore
 from hive.control.supervisor import Supervisor
-from hive.runner.daemon import checkout, validate_probe_result
+from hive.runner._daemon import checkout, validate_probe_result
 
 H = {"X-Hive-Token": "t"}
 CLAUDE_CODE_DISCOVERY = {
@@ -293,8 +293,8 @@ def test_fresh_issue_checkout_resets_existing_branch_and_preserves_backup(tmp_pa
     _git(["push", "origin", "main"], seed)
     new_main = _git(["rev-parse", "HEAD"], seed).stdout.strip()
 
-    monkeypatch.setattr("hive.runner.daemon.WORKDIR", tmp_path / "work")
-    monkeypatch.setattr("hive.runner.daemon.time.time", lambda: 123456)
+    monkeypatch.setattr("hive.runner._daemon.WORKDIR", tmp_path / "work")
+    monkeypatch.setattr("hive.runner._daemon.time.time", lambda: 123456)
 
     dirty_path = checkout(str(remote), "hive/issue-9")
     (dirty_path / "file.txt").write_text("dirty cancelled review\n")
@@ -331,7 +331,7 @@ def test_default_branch_checkout_lands_head_on_main_not_a_stale_branch(tmp_path,
     _git(["checkout", "-b", "hive/issue-9"], seed)
     _git(["push", "-u", "origin", "hive/issue-9"], seed)
 
-    monkeypatch.setattr("hive.runner.daemon.WORKDIR", tmp_path / "work")
+    monkeypatch.setattr("hive.runner._daemon.WORKDIR", tmp_path / "work")
 
     # A prior issue task left the persistent checkout sitting on the issue branch.
     issue_path = checkout(str(remote), "hive/issue-9")

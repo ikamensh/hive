@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from hive.models import Machine, Resource, ResourceUsability, Runner, Subscription, now
-from hive.runner.backends import backend_licensing
+from hive.runner._backends import backend_licensing
 
 
 @dataclass

@@ -15,13 +15,13 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from hive.runner.agent_results import (
+from hive.runner._agent_results import (
     test_repro_outcome as structured_test_repro_outcome,
     test_sweep_outcome as structured_test_sweep_outcome,
     test_ux_outcome as structured_test_ux_outcome,
     verdict_from_structured,
 )
-from hive.runner.backends import REGISTRY
+from hive.runner._backends import REGISTRY
 from hive.config.settings import Config
 from hive.control.escalation import escalate
 from hive.workstreams._issues import (
@@ -86,7 +86,7 @@ from hive.workstreams._testing import (
     result_payload as test_payload,
 )
 
-log = logging.getLogger("hive.runner.task_results")
+log = logging.getLogger("hive.runner._task_results")
 
 RATE_LIMIT_COOLDOWN_S = 3600.0
 HUMAN_FIX_PATTERNS = re.compile(

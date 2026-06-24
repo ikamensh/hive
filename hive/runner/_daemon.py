@@ -1,7 +1,7 @@
 """Runner daemon: registers with the chief, long-polls for tasks,
 executes them with a kodo agent in a local checkout, reports results.
 
-Run directly: `python -m hive.runner.daemon`. Configuration via environment:
+Run directly: `python -m hive.runner`. Configuration via environment:
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from pathlib import Path
 
 import httpx
 
-from hive.runner.backends import (
+from hive.runner._backends import (
     BACKEND_NAMES,
     EXHAUSTION_PATTERNS,
     PROBE_MARKER,
@@ -33,8 +33,8 @@ from hive.runner.backends import (
     discover_backends,
     make_session,
 )
-from hive.runner.agent_results import call_agent, result_spec_for_task
-from hive.runner.machine import machine_metadata
+from hive.runner._agent_results import call_agent, result_spec_for_task
+from hive.runner._machine import machine_metadata
 from hive.models import DEFAULT_WORKSPACE_ID
 
 MACHINE_METADATA = machine_metadata()
@@ -53,7 +53,7 @@ WORKDIR = Path(os.environ.get("HIVE_RUNNER_WORKDIR", "~/hive-work")).expanduser(
 TASK_TIMEOUT_S = float(os.environ.get("HIVE_TASK_TIMEOUT_S", "3600"))
 CANCEL_POLL_S = 5.0  # how often a running task checks for an operator cancel request
 
-log = logging.getLogger("hive.runner.daemon")
+log = logging.getLogger("hive.runner._daemon")
 
 EXHAUSTED_PATTERNS = EXHAUSTION_PATTERNS  # re-export so callers/tests keep one import site
 SKIP_ARTIFACT_PARTS = {
