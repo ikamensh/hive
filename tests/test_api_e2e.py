@@ -35,9 +35,9 @@ from hive.models import (
     Verdict,
     Workstream,
 )
-from hive.control.orchestrator import Orchestrator, Tools
+from hive.control._orchestrator import Orchestrator, Tools
 from hive.persistence.store import MemoryStore
-from hive.control.supervisor import Supervisor
+from hive.control._supervisor import Supervisor
 
 RUNNER_HEADERS = {"X-Hive-Token": "test-token"}
 

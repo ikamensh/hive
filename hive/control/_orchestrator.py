@@ -39,7 +39,7 @@ from hive.llm._pricing import estimate_cost
 from hive.llm.prompts import load as load_prompt
 from hive.integrations._specrepo import SpecRepo
 
-log = logging.getLogger("hive.control.orchestrator")
+log = logging.getLogger("hive.control._orchestrator")
 
 HISTORY_LIMIT = 80
 RESULT_SNIPPET = 4000

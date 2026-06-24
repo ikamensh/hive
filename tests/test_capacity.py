@@ -8,7 +8,7 @@ ready. These tests pin the grouping invariants and that agreement.
 
 import time
 
-from hive.control.capacity import (
+from hive.control._capacity import (
     agent_status,
     capacity_summary,
     group_machines,

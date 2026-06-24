@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from hive.config.settings import Config
 from hive.models import Machine, Project
 from hive.persistence.store import FileStore, MemoryStore
-from hive.control.supervisor import Supervisor
+from hive.control._supervisor import Supervisor
 
 
 class FakeResponse:

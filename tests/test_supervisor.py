@@ -27,7 +27,7 @@ from hive.models import (
     WorkstreamStatus,
 )
 from hive.persistence.store import MemoryStore
-from hive.control.supervisor import Supervisor, compute_state
+from hive.control._supervisor import Supervisor, compute_state
 
 
 def make_supervisor(store) -> Supervisor:

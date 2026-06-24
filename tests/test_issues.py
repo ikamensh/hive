@@ -41,9 +41,9 @@ from hive.models import (
     parse_resolve,
     parse_review,
 )
-from hive.control.orchestrator import Tools
+from hive.control._orchestrator import Tools
 from hive.persistence.store import MemoryStore
-from hive.control.supervisor import Supervisor, compute_state
+from hive.control._supervisor import Supervisor, compute_state
 from tests.test_api_e2e import RUNNER_HEADERS, _pump, _register_usable_runner
 
 

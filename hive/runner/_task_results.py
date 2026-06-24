@@ -23,7 +23,7 @@ from hive.runner._agent_results import (
 )
 from hive.runner._backends import REGISTRY
 from hive.config.settings import Config
-from hive.control.escalation import escalate
+from hive.control._escalation import escalate
 from hive.workstreams._issues import (
     LANDING_FAILED_PREFIX,
     MergeConflictError,

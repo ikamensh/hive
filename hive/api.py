@@ -31,7 +31,7 @@ from hive.integrations._auth import (
 )
 from hive.runner._backends import probe_instructions
 from hive.config.settings import Config
-from hive.control.escalation import escalate
+from hive.control._escalation import escalate
 from hive.integrations._github_repos import all_repos as list_github_repos
 from hive.integrations._github_repos import create_repo as create_github_repo
 from hive.integrations._specrepo import REQUIRED_INTAKE_FILES, SpecRepo, SpecStatus, spec_status_dir
@@ -108,14 +108,14 @@ from hive.models import (
     WorkstreamStatus,
 )
 from hive.persistence.storage import storage_info
-from hive.control.capacity import (
+from hive.control._capacity import (
     group_machines,
     machine_cards,
     resource_available,
     subscription_candidates,
 )
-from hive.control.overview import build_overview
-from hive.control.supervisor import Supervisor
+from hive.control._overview import build_overview
+from hive.control._supervisor import Supervisor
 from hive.version import get_version, version_payload
 from hive.runner._task_results import (
     TaskResult,
@@ -1852,7 +1852,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         runners = {r.id: r for r in runner_list}
 
         # Flat lists serve the CLI and per-project availability checks; `cards`
-        # is the same grouping the home dashboard uses (see hive.control.capacity).
+        # is the same grouping the home dashboard uses (see hive.control._capacity).
         return {
             "machines": [m.model_dump() for m in machines],
             "runners": [{**r.model_dump(), "online": r.online()} for r in runner_list],
@@ -2248,7 +2248,7 @@ def production_app() -> FastAPI:
 
     store = make_store(config)
     blobs = make_blob_store(config)
-    from hive.control.orchestrator import Orchestrator
+    from hive.control._orchestrator import Orchestrator
 
     orchestrator = Orchestrator(store, blobs, config)
 

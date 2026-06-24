@@ -9,7 +9,7 @@ hand-counted constants.
 
 import time
 
-from hive.control.overview import build_overview
+from hive.control._overview import build_overview
 from hive.models import (
     HumanTask,
     Machine,

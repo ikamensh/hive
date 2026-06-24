@@ -12,7 +12,7 @@ import asyncio
 import pytest
 
 from hive.config.settings import Config
-from hive.control.supervisor import Supervisor
+from hive.control._supervisor import Supervisor
 from hive.models import (
     Project,
     Task,

@@ -20,7 +20,7 @@ from hive.models import (
     TestEpisode as EpisodeModel,
 )
 from hive.persistence.store import MemoryStore
-from hive.control.supervisor import Supervisor
+from hive.control._supervisor import Supervisor
 from hive.workstreams._testing import ensure_testing_workstream, file_or_update_finding_issue, reconcile_story_backlog
 from tests.test_api_e2e import RUNNER_HEADERS, _pump, _register_usable_runner
 
