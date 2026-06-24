@@ -15,7 +15,7 @@ from pathlib import Path
 from hive.persistence.blobstore import LocalBlobStore
 from hive.config.settings import Config
 from hive.models import Project, Question, Task, TaskStatus, Workstream
-from hive.control._orchestrator import Orchestrator
+from hive._control.orchestrator import Orchestrator
 from hive.persistence.store import MemoryStore
 
 MODEL = os.environ.get("HIVE_ORCH_MODEL", "")

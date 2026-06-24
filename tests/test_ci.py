@@ -12,7 +12,7 @@ import asyncio
 import pytest
 
 from hive.config.settings import Config
-from hive.control._supervisor import Supervisor
+from hive._control.supervisor import Supervisor
 from hive.models import (
     Project,
     Task,
@@ -22,7 +22,7 @@ from hive.models import (
     WorkstreamStatus,
 )
 from hive.persistence.store import MemoryStore
-from hive.workstreams._ci import (
+from hive._workstreams.ci import (
     CiCheckResult,
     CiConclusion,
     CiStatus,
@@ -30,7 +30,7 @@ from hive.workstreams._ci import (
     ci_issue_body,
     fetch_ci_status,
 )
-from hive.workstreams._issues import ensure_issue_workstream
+from hive._workstreams.issues import ensure_issue_workstream
 
 
 class Resp:
@@ -76,8 +76,8 @@ def ci_project(store) -> Project:
     ],
 )
 def test_fetch_ci_status_conclusions(monkeypatch, check_runs, statuses, expected):
-    monkeypatch.setattr("hive.workstreams._ci.default_branch", lambda repo, token: "main")
-    monkeypatch.setattr("hive.workstreams._ci.httpx.get", fake_get(check_runs, statuses))
+    monkeypatch.setattr("hive._workstreams.ci.default_branch", lambda repo, token: "main")
+    monkeypatch.setattr("hive._workstreams.ci.httpx.get", fake_get(check_runs, statuses))
     status = fetch_ci_status("o/r", "tok")
     assert status.conclusion == expected
     if expected == CiConclusion.failing:
@@ -92,8 +92,8 @@ def _stub_failing(monkeypatch, *, open_issues, sha="deadbeef"):
     status = CiStatus(repo="https://github.com/o/r.git", branch="main", sha=sha,
                       conclusion=CiConclusion.failing,
                       failing_checks=[{"name": "build", "url": "u"}])
-    monkeypatch.setattr("hive.workstreams._ci.fetch_ci_status", lambda repo, token: status)
-    monkeypatch.setattr("hive.workstreams._ci.fetch_open_issues_full", lambda repo, token: list(open_issues))
+    monkeypatch.setattr("hive._workstreams.ci.fetch_ci_status", lambda repo, token: status)
+    monkeypatch.setattr("hive._workstreams.ci.fetch_open_issues_full", lambda repo, token: list(open_issues))
     return status
 
 
@@ -102,7 +102,7 @@ def test_red_ci_files_issue_and_queues_a_resolve(monkeypatch):
     project = ci_project(store)
     ws = ensure_issue_workstream(store, project)
     _stub_failing(monkeypatch, open_issues=[])
-    monkeypatch.setattr("hive.workstreams._ci.file_ci_issue", lambda repo, status, token, details="": (99, "https://gh/99"))
+    monkeypatch.setattr("hive._workstreams.ci.file_ci_issue", lambda repo, status, token, details="": (99, "https://gh/99"))
 
     result = check_and_autofix(store, project, ws, "tok", issue_backend="codex")
 
@@ -125,12 +125,12 @@ def test_red_ci_does_not_refile_same_commit(monkeypatch):
     status = _stub_failing(monkeypatch, open_issues=[], sha="cafef00d")
     prior = {"number": 42, "title": "[hive-ci] CI failing", "url": "https://gh/42",
              "doc": ci_issue_body(status), "attachments": []}
-    monkeypatch.setattr("hive.workstreams._ci.fetch_open_issues_full", lambda repo, token: [prior])
+    monkeypatch.setattr("hive._workstreams.ci.fetch_open_issues_full", lambda repo, token: [prior])
 
     def boom(*a, **k):
         raise AssertionError("should not file a duplicate CI issue for the same sha")
 
-    monkeypatch.setattr("hive.workstreams._ci.file_ci_issue", boom)
+    monkeypatch.setattr("hive._workstreams.ci.file_ci_issue", boom)
 
     result = check_and_autofix(store, project, ws, "tok", issue_backend="codex")
 
@@ -153,12 +153,12 @@ def test_green_ci_files_nothing(monkeypatch):
     project = ci_project(store)
     ws = ensure_issue_workstream(store, project)
     green = CiStatus(repo=project.spec_repo, branch="main", sha="1", conclusion=CiConclusion.passing)
-    monkeypatch.setattr("hive.workstreams._ci.fetch_ci_status", lambda repo, token: green)
+    monkeypatch.setattr("hive._workstreams.ci.fetch_ci_status", lambda repo, token: green)
 
     def boom(*a, **k):
         raise AssertionError("must not touch GitHub issues when CI is green")
 
-    monkeypatch.setattr("hive.workstreams._ci.fetch_open_issues_full", boom)
+    monkeypatch.setattr("hive._workstreams.ci.fetch_open_issues_full", boom)
 
     result = check_and_autofix(store, project, ws, "tok")
 

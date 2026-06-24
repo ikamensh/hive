@@ -20,7 +20,7 @@ from hive.models import (
     Workstream,
 )
 from hive.persistence.store import MemoryStore
-from hive.control._supervisor import Supervisor
+from hive._control.supervisor import Supervisor
 from hive.runner._daemon import checkout, validate_probe_result
 
 H = {"X-Hive-Token": "t"}

@@ -14,7 +14,7 @@ from hive.models import (
     WorkstreamStatus,
     parse_verdict,
 )
-from hive.control._orchestrator import MAX_FIX_ROUNDS, Tools
+from hive._control.orchestrator import MAX_FIX_ROUNDS, Tools
 from hive.persistence.store import MemoryStore
 
 

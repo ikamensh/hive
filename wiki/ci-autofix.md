@@ -43,7 +43,7 @@ control.
 All three are idempotent through the same per-sha dedup, so overlapping triggers
 never double-file.
 
-## The check (`hive/workstreams/_ci.py`)
+## The check (`hive/_workstreams/ci.py`)
 
 `fetch_ci_status(repo, token)` reads the default branch's head commit and combines
 the GitHub **check-runs** API (Actions and other check apps) with the legacy

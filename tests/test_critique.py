@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from hive.workstreams._critique import LENSES, CritiqueReport, critique, report_markdown
+from hive._workstreams.critique import LENSES, CritiqueReport, critique, report_markdown
 from hive.llm._parsing import extract_json
 
 CRITIC_REPLY = """Here is my analysis.

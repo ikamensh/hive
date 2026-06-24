@@ -7,7 +7,7 @@ these tests pin the real read/write paths that exist now."""
 from fastapi.testclient import TestClient
 
 from hive.config.settings import Config
-from hive.control._supervisor import Supervisor
+from hive._control.supervisor import Supervisor
 from hive.models import Machine, Resource, ResourceUsability
 from hive.persistence.store import MemoryStore
 

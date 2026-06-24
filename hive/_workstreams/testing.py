@@ -19,7 +19,7 @@ from typing import Iterable
 
 import httpx
 
-from hive.integrations._github_repos import _GH_HEADERS, parse_repo_ref
+from hive._integrations.github_repos import _GH_HEADERS, parse_repo_ref
 from hive.llm._parsing import extract_json
 from hive.models import (
     Finding,
@@ -43,9 +43,9 @@ from hive.models import (
     TestEpisodeStatus,
 )
 from hive.llm.prompts import load as load_prompt
-from hive.integrations._specrepo import digest_dir
+from hive._integrations.specrepo import digest_dir
 
-log = logging.getLogger("hive.workstreams._testing")
+log = logging.getLogger("hive._workstreams.testing")
 
 DEFAULT_TEST_BACKEND = "codex"
 DEFAULT_EPISODE_SIZE = 5

@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Callable
 
-from hive.control._capacity import capacity_summary, group_machines
+from hive._control.capacity import capacity_summary, group_machines
 from hive.models import (
     HumanTask,
     HumanTaskStatus,

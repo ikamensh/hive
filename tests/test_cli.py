@@ -22,7 +22,7 @@ from hive.cli import (
 )
 from hive.config.settings import Config
 from hive.persistence.store import MemoryStore
-from hive.control._supervisor import Supervisor
+from hive._control.supervisor import Supervisor
 
 RUNNER_HEADERS = {"X-Hive-Token": "test-token"}
 

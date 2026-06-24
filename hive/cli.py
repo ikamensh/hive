@@ -88,7 +88,7 @@ def _mask(key: str, value: str) -> str:
 
 
 def _gh_token(preferred_user: str = "") -> str:
-    from hive.integrations._github_repos import gh_token_for
+    from hive._integrations.github_repos import gh_token_for
 
     return gh_token_for(preferred_user)
 

@@ -18,7 +18,7 @@ import time
 from collections import defaultdict
 from typing import Callable
 
-from hive.control._escalation import escalate
+from hive._control.escalation import escalate
 from hive.models import (
     AgentConversation,
     ConversationStatus,
@@ -36,7 +36,7 @@ from hive.models import (
     WorkstreamStatus,
 )
 
-log = logging.getLogger("hive.control._supervisor")
+log = logging.getLogger("hive._control.supervisor")
 
 RUNNER_OFFLINE_TASK_FAIL_S = 300.0
 LEASE_TTL_S = 60.0  # renewed every tick (15s); a dead leader is superseded within a minute
