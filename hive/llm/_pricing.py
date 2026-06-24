@@ -2,7 +2,8 @@
 dollars so its spend counts against a project's daily budget.
 
 USD per 1M tokens, (input, output), sampled 2026-06-10 from provider pricing
-pages. Refresh occasionally. Matched by longest model-name prefix, so
+pages (Claude rates refreshed 2026-06-24). Refresh occasionally. Matched by
+longest model-name prefix, so
 `gpt-5.5-codex` resolves to the `gpt-5.5` entry. Unknown models cost 0 — the
 tokens are still recorded, so a missing entry under-counts rather than crashes;
 add an entry when a new orchestrator model appears.
@@ -14,10 +15,9 @@ PRICING: dict[str, tuple[float, float]] = {
     "gpt-5.5": (1.25, 10.0),
     "gpt-5.4": (1.25, 10.0),
     "gpt-5": (1.25, 10.0),
-    "claude-opus-4": (15.0, 75.0),
-    "claude-sonnet-4": (3.0, 15.0),
+    "claude-opus-4": (5.0, 25.0),  # Opus 4.6 / 4.8
+    "claude-sonnet-4": (3.0, 15.0),  # Sonnet 4.6
     "gemini-3": (2.0, 12.0),
-    "gemini-2": (1.25, 10.0),
     # cursor backend bills the subscription, not per-token.
     "composer-2.5": (0.0, 0.0),
 }

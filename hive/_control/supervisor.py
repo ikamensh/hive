@@ -402,6 +402,14 @@ class Supervisor:
 
             self.store.update(Task, task.id, fail)
             if failed:
+                silent = "unknown" if runner is None else f"{offline_s:.0f}s"
+                name = runner.name if runner else task.runner_id
+                log.warning(
+                    "runner %s (%s) silent for %s past %.0fs limit — failing orphaned "
+                    "%s task %s on %s",
+                    name, task.runner_id, silent, RUNNER_OFFLINE_TASK_FAIL_S,
+                    task.kind, task.id, task.repo,
+                )
                 self.wake(task.project_id, f"Task {task.id} failed: runner went offline.")
 
     # -- loop -----------------------------------------------------------------

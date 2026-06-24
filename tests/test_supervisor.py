@@ -7,6 +7,7 @@ and orphaned tasks fail instead of hanging forever.
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import logging
 import threading
 import time
 
@@ -311,7 +312,7 @@ def test_available_backends_tracks_online_and_cooldown():
     assert sup.available_backends() == {"cursor"}  # offline + cooled-down + unprobed excluded
 
 
-def test_orphaned_task_fails_when_runner_vanishes():
+def test_orphaned_task_fails_when_runner_vanishes(caplog):
     store = MemoryStore()
     project = seed(store)
     runner = store.list(Runner)[0]
@@ -321,9 +322,13 @@ def test_orphaned_task_fails_when_runner_vanishes():
     task = store.put(Task(project_id=project.id, workstream_id=ws.id, repo="r",
                           instructions="i", status=TaskStatus.running, runner_id=runner.id))
     sup = make_supervisor(store)
-    sup.fail_orphaned_tasks()
+    with caplog.at_level(logging.WARNING, logger="hive._control.supervisor"):
+        sup.fail_orphaned_tasks()
     assert store.get(Task, task.id).status == TaskStatus.failed
     assert sup._events[project.id]  # orchestrator gets woken about it
+    # The offline declaration is greppable in the chief log, not just a silent
+    # Firestore mutation — this is the trail you follow to the runner's own logs.
+    assert runner.id in caplog.text and "silent" in caplog.text
 
 
 def test_orchestrator_failure_files_project_todo():
