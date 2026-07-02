@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { ago, api, repoShort } from "../../api";
 import { Markdown } from "../../components/shared";
-import type { Finding, Project, Story, TestEpisode, Workstream } from "../../types";
+import type { Finding, Project, Story, TestEpisode, TestingHealth, Workstream } from "../../types";
 
 const STORY_GROUPS: { label: string; statuses: Story["status"][] }[] = [
   { label: "priority", statuses: ["untested", "stale", "failing", "blocked"] },
@@ -16,6 +16,7 @@ export function TestingToolbar({
   onSelectedStream,
   selectedStoryKeys,
   activityVersion,
+  health,
   onChanged,
 }: {
   project: Project;
@@ -24,6 +25,7 @@ export function TestingToolbar({
   onSelectedStream: (id: string) => void;
   selectedStoryKeys: string[];
   activityVersion: string;
+  health?: TestingHealth;
   onChanged: () => void;
 }) {
   const [busyAction, setBusyAction] = useState<"refresh" | "run" | "">("");
@@ -128,6 +130,23 @@ export function TestingToolbar({
         {error && <span className="form-error">{error}</span>}
         {message && !error && <span className="scan-summary">{message}</span>}
       </div>
+      {health && health.state !== "healthy" && (
+        <div className={`test-health test-health-${health.state}`}>
+          <span className={`chip chip-health-${health.state}`}>{health.state}</span>
+          <span>{health.summary}</span>
+          {health.offer && <span className="muted">{health.offer}</span>}
+          {health.action === "refresh" && (
+            <button className="ghost" onClick={refresh} disabled={busy || noRepo || streamDisabled}>
+              {health.state === "weak" ? "let Hive rewrite them" : "let Hive draft stories"}
+            </button>
+          )}
+          {health.action === "episode" && (
+            <button className="ghost" onClick={() => setDrawerOpen(true)} disabled={busy || noRepo || streamDisabled}>
+              run episode
+            </button>
+          )}
+        </div>
+      )}
     </section>
   );
 }

@@ -2227,6 +2227,31 @@ textarea:focus {
 .chip-find-duplicate {
   color: var(--ink-faint);
 }
+.test-health {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: var(--panel-soft);
+  font-size: 13px;
+}
+.chip-health-missing,
+.chip-health-weak,
+.chip-health-untested {
+  color: var(--amber);
+  border-color: #f0b35033;
+}
+.chip-health-failing {
+  color: var(--red);
+  border-color: #f0786133;
+}
+.chip-health-refreshing {
+  color: var(--ink-dim);
+}
 .story-table td small {
   display: block;
   margin-top: 2px;

@@ -28,6 +28,7 @@ import type {
   Story,
   Subscription,
   SubscriptionCandidate,
+  TestingHealth,
   Task,
   TestEpisode,
   TestEpisodeResult,
@@ -1270,8 +1271,21 @@ export const api = {
   project: async (id: string): Promise<ProjectDetail> => {
     const project = projects.find((p) => p.id === id);
     if (!project) throw new Error("not found");
+    const testingHealth: Record<string, TestingHealth> =
+      id === "p-beacon"
+        ? {
+            "stream-beacon-testing": {
+              state: "failing",
+              summary: "1 of 3 stories are failing; fixes flow through the issues workstream.",
+              offer: "Run a testing episode after fixes land to confirm the stories go green.",
+              action: "episode",
+              counts: { active: 3, weak: 0, drafts: 1, untested: 1, stale: 0, failing: 1, blocked: 0, passing: 1 },
+            },
+          }
+        : {};
     return structuredClone({
       project,
+      testing_health: testingHealth,
       workstreams: projectWorkstreams.filter((w) => w.project_id === id),
       work_items: workItems.filter((w) => w.project_id === id),
       tasks: tasks.filter((t) => t.project_id === id),

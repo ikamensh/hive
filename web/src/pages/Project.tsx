@@ -397,6 +397,7 @@ export default function ProjectPage() {
                   }}
                   selectedStoryKeys={selectedStoryKeys}
                   activityVersion={testingActivityVersion}
+                  health={activeTestingStream ? data.testing_health?.[activeTestingStream.id] : undefined}
                   onChanged={refresh}
                 />
                 <h2 className="col-title issues-title">

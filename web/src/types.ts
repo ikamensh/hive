@@ -171,8 +171,19 @@ export interface Question {
   answered_at: number;
 }
 
+/** Deterministic backlog verdict per testing workstream, with Hive's standing
+ *  offer to draft/repair stories or run an episode (server: story_health). */
+export interface TestingHealth {
+  state: "refreshing" | "missing" | "weak" | "failing" | "untested" | "healthy";
+  summary: string;
+  offer: string;
+  action: "refresh" | "episode" | "";
+  counts: Record<string, number>;
+}
+
 export interface ProjectDetail {
   project: Project;
+  testing_health?: Record<string, TestingHealth>;
   workstreams: Workstream[];
   work_items: WorkItem[];
   tasks: Task[];
