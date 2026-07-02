@@ -15,18 +15,22 @@ from collections import defaultdict
 from typing import Callable
 
 from hive._control.capacity import capacity_summary, group_machines
+from hive._workstreams.testing import story_health
 from hive.models import (
     HumanTask,
     HumanTaskStatus,
     Machine,
     Project,
     ProjectWorkstream,
+    ProjectWorkstreamKind,
     Question,
     QuestionStatus,
     Resource,
     Runner,
+    Story,
     Subscription,
     Task,
+    TaskKind,
     TaskStatus,
     Workstream,
     WorkstreamSource,
@@ -47,6 +51,48 @@ def _bucket(items, key) -> dict[str, list]:
     for item in items:
         out[key(item)].append(item)
     return out
+
+
+def testing_offers(
+    projects: list[Project],
+    streams_by_project: dict[str, list[ProjectWorkstream]],
+    stories_by_workstream: dict[str, list[Story]],
+    refreshing_workstreams: set[str],
+) -> list[dict]:
+    """Standing testing offers hive cannot act on by itself.
+
+    A project inside the autonomy envelope (testing_auto + a daily budget) is
+    already handled by the supervisor's testing tick, and a paused project said
+    stop — neither belongs on the dashboard. What remains is the honest ask:
+    'Hive can do X here, let it' — surfaced with the health verdict so one
+    click/command accepts it.
+    """
+    offers = []
+    for project in projects:
+        if project.paused or (project.testing_auto and project.daily_budget_usd > 0):
+            continue
+        for workstream in streams_by_project.get(project.id, []):
+            if workstream.kind != ProjectWorkstreamKind.testing or not workstream.enabled:
+                continue
+            health = story_health(
+                stories_by_workstream.get(workstream.id, []),
+                refresh_active=workstream.id in refreshing_workstreams,
+            )
+            if not health.action:
+                continue
+            offers.append(
+                {
+                    "project_id": project.id,
+                    "project_name": project.name,
+                    "workstream_id": workstream.id,
+                    "repo": workstream.repo,
+                    "state": health.state,
+                    "summary": health.summary,
+                    "offer": health.offer,
+                    "action": health.action,
+                }
+            )
+    return offers
 
 
 def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]) -> dict:
@@ -127,6 +173,18 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
         for t in running[:LIVE_TASK_CAP]
     ]
 
+    offers = testing_offers(
+        projects,
+        streams_by_project,
+        _bucket(store.list(Story, workspace_id=workspace_id), lambda s: s.workstream_id),
+        {
+            t.workstream_id
+            for t in all_tasks
+            if t.kind == TaskKind.test_refresh
+            and t.status in (TaskStatus.pending, TaskStatus.running)
+        },
+    )
+
     open_questions = [q for q in questions if q.status == QuestionStatus.open]
     open_questions.sort(key=lambda q: q.created_at, reverse=True)
     open_todos = [
@@ -136,7 +194,10 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
     ]
     open_todos.sort(key=lambda t: t.created_at, reverse=True)
     attention = {
+        # Offers are hive asking for permission, not the human being blocked on
+        # — they ride the attention payload but stay out of the needs-you count.
         "count": len(open_questions) + len(open_todos),
+        "offers": offers[:ATTENTION_CAP],
         "questions": [
             {
                 "id": q.id,

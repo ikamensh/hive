@@ -1079,6 +1079,18 @@ export const api = {
       ],
       attention: {
         count: 4,
+        offers: [
+          {
+            project_id: "p-beacon",
+            project_name: "beacon",
+            workstream_id: "stream-beacon-testing",
+            repo: "https://github.com/acme/beacon.git",
+            state: "missing" as const,
+            summary: "No acceptance stories yet.",
+            offer: "Hive can draft user stories with acceptance criteria autonomously from the spec (mission, iteration, wiki) — run a story refresh.",
+            action: "refresh" as const,
+          },
+        ],
         questions: [
           { id: "q-atlas", project_id: "p-atlas", project_name: "atlas", text: "Should signups default to email verification on, or off for the beta?", created_at: now - 600 },
           { id: "q-beacon", project_id: "p-beacon", project_name: "beacon", text: "Which currency should the ledger export use as its base?", created_at: now - 4000 },

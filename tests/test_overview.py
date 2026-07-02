@@ -147,3 +147,39 @@ def test_capacity_groups_agents_under_machine_and_marks_readiness():
     assert cap["agents_total"] == 2
     assert cap["agents_ready"] == 1
     assert cap["agents_ready"] <= cap["agents_total"]
+
+
+def test_offers_surface_only_outside_the_autonomy_envelope():
+    """A testing workstream hive cannot serve autonomously produces a standing
+    offer; the same backlog inside the envelope (testing_auto + budget) or on a
+    paused project stays quiet — hive either handles it itself or was told to
+    stop. The needs-you count never includes offers."""
+    from hive.models import ProjectWorkstream, ProjectWorkstreamKind
+
+    store = MemoryStore()
+    project = store.put(Project(name="p", spec_repo="https://example.com/spec.git", daily_budget_usd=0.0))
+    stream = store.put(
+        ProjectWorkstream(
+            project_id=project.id,
+            kind=ProjectWorkstreamKind.testing,
+            title="Testing",
+            repo=project.spec_repo,
+        )
+    )
+
+    ov = build_overview(store, WS, _spend_zero)
+    offers = ov["attention"]["offers"]
+    assert [o["workstream_id"] for o in offers] == [stream.id]
+    assert offers[0]["action"] == "refresh"  # empty backlog -> draft stories
+    assert ov["attention"]["count"] == 0  # offers never inflate needs-you
+
+    # Inside the envelope the autonomous tick owns it: no offer.
+    project.daily_budget_usd = 5.0
+    store.put(project)
+    assert build_overview(store, WS, _spend_zero)["attention"]["offers"] == []
+
+    # Paused means stop: no offer either, even outside the envelope.
+    project.daily_budget_usd = 0.0
+    project.paused = True
+    store.put(project)
+    assert build_overview(store, WS, _spend_zero)["attention"]["offers"] == []

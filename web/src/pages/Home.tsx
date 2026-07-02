@@ -330,6 +330,12 @@ export default function Home() {
                 <span className="rail-text">{todo.title}</span>
               </Link>
             ))}
+            {(data.attention.offers ?? []).map((offer) => (
+              <Link key={offer.workstream_id} to={`/p/${offer.project_id}`} className="rail-item">
+                <span className="rail-tag">{offer.project_name} · hive offers</span>
+                <span className="rail-text">{offer.offer}</span>
+              </Link>
+            ))}
           </section>
 
           <section className="panel">

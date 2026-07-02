@@ -2252,6 +2252,29 @@ textarea:focus {
 .chip-health-refreshing {
   color: var(--ink-dim);
 }
+.offer-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line-soft);
+  text-decoration: none;
+  color: var(--ink);
+  font-size: 13.5px;
+}
+.offer-row:first-of-type {
+  border-top: none;
+}
+.offer-row:hover .offer-text {
+  color: var(--accent);
+}
+.offer-project {
+  color: var(--ink-dim);
+  flex: none;
+}
+.offer-text {
+  line-height: 1.45;
+}
 .story-table td small {
   display: block;
   margin-top: 2px;

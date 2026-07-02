@@ -101,6 +101,7 @@ export default function NeedsYou() {
   const { data: projects } = usePoll(() => api.projects(), [], 30000);
 
   const questions = overview.data?.attention.questions ?? [];
+  const offers = overview.data?.attention.offers ?? [];
   const openTodos = (todos ?? []).filter((t) => t.status === "open");
   const doneTodos = (todos ?? []).filter((t) => t.status === "done");
   const shown = questions.length + openTodos.length;
@@ -157,6 +158,27 @@ export default function NeedsYou() {
         <p className="muted needs-more">
           +{hidden} more not shown — clear a few above and the rest will surface.
         </p>
+      )}
+
+      {offers.length > 0 && (
+        <section className="needs-section">
+          <h2 className="col-title">
+            hive offers <span className="col-count">{offers.length}</span>
+          </h2>
+          <p className="muted">
+            Things Hive can do autonomously but is not allowed to yet — accept from the
+            project, or turn on auto testing with a daily budget and it handles them itself.
+          </p>
+          {offers.map((offer) => (
+            <Link key={offer.workstream_id} to={`/p/${offer.project_id}`} className="offer-row">
+              <span className={`chip chip-health-${offer.state}`}>{offer.state}</span>
+              <span className="offer-project">{offer.project_name}</span>
+              <span className="offer-text">
+                {offer.summary} {offer.offer}
+              </span>
+            </Link>
+          ))}
+        </section>
       )}
 
       {doneTodos.length > 0 && (

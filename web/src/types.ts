@@ -588,8 +588,22 @@ export interface OverviewTodo {
   created_at: number;
 }
 
+/** A standing testing offer hive cannot act on by itself (project outside the
+ *  autonomy envelope): accept it from the project's testing view. */
+export interface OverviewOffer {
+  project_id: string;
+  project_name: string;
+  workstream_id: string;
+  repo: string;
+  state: TestingHealth["state"];
+  summary: string;
+  offer: string;
+  action: "refresh" | "episode" | "";
+}
+
 export interface OverviewAttention {
   count: number;
+  offers: OverviewOffer[];
   questions: OverviewQuestion[];
   human_todos: OverviewTodo[];
 }
