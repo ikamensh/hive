@@ -682,6 +682,7 @@ class FindingStatus(StrEnum):
     rejected = "rejected"
     constrained = "constrained"
     duplicate = "duplicate"
+    resolved = "resolved"  # was confirmed; the story later re-tested green and its issue was closed
 
 
 class Finding(BaseModel):

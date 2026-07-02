@@ -299,7 +299,7 @@ export interface Finding {
   detail: string;
   oracle: string;
   evidence_blobs: string[];
-  status: "suspected" | "confirmed" | "blocked" | "rejected" | "constrained" | "duplicate";
+  status: "suspected" | "confirmed" | "blocked" | "rejected" | "constrained" | "duplicate" | "resolved";
   issue_number: number;
   issue_url: string;
   sweep_task_id: string;

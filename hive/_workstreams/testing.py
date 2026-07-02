@@ -1205,20 +1205,18 @@ def file_or_update_finding_issue(repo_ref: str, finding: Finding, story: Story, 
     return int(payload["number"]), str(payload.get("html_url") or "")
 
 
-def close_story_issue(repo_ref: str, story: Story, token: str, comment: str) -> None:
-    if not story.open_issue_number:
-        return
+def close_issue(repo_ref: str, number: int, token: str, comment: str) -> None:
     owner_repo = parse_repo_ref(repo_ref)
     headers = _headers(token)
     if comment.strip():
         httpx.post(
-            f"https://api.github.com/repos/{owner_repo}/issues/{story.open_issue_number}/comments",
+            f"https://api.github.com/repos/{owner_repo}/issues/{number}/comments",
             json={"body": comment},
             headers=headers,
             timeout=30.0,
         ).raise_for_status()
     httpx.patch(
-        f"https://api.github.com/repos/{owner_repo}/issues/{story.open_issue_number}",
+        f"https://api.github.com/repos/{owner_repo}/issues/{number}",
         json={"state": "closed"},
         headers=headers,
         timeout=30.0,

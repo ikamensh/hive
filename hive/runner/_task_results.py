@@ -76,7 +76,7 @@ from hive.models import (
 )
 from hive._integrations.specrepo import SpecRepo
 from hive._workstreams.testing import (
-    close_story_issue as default_close_story_issue,
+    close_issue as default_close_issue,
     file_or_update_finding_issue as default_file_or_update_finding_issue,
     finding_quality_problem,
     finalize_refresh,
@@ -237,7 +237,7 @@ class TaskResultProcessor:
         resolve_issue_func: Callable[..., None] = default_resolve_issue_on_github,
         delete_branch_func: Callable[..., None] = default_delete_branch,
         file_finding_issue_func: Callable[..., tuple[int, str]] = default_file_or_update_finding_issue,
-        close_story_issue_func: Callable[..., None] = default_close_story_issue,
+        close_issue_func: Callable[..., None] = default_close_issue,
     ) -> None:
         self.store = store
         self.supervisor = supervisor
@@ -246,7 +246,7 @@ class TaskResultProcessor:
         self.resolve_issue_on_github = resolve_issue_func
         self.delete_branch = delete_branch_func
         self.file_or_update_finding_issue = file_finding_issue_func
-        self.close_story_issue = close_story_issue_func
+        self.close_issue = close_issue_func
 
     def handle(self, task_id: str, body: TaskResult, workspace_id: str) -> dict:
         existing = self.store.get(Task, task_id)
@@ -970,28 +970,51 @@ class TaskResultProcessor:
         episode: TestEpisode | None,
         payload: dict,
     ) -> None:
-        closed = False
-        if story.open_issue_number:
+        # A green story closes the issue of every confirmed finding filed
+        # against it — a story can carry several — not just the last one.
+        confirmed = [
+            f
+            for f in self.store.list(
+                Finding,
+                workspace_id=project.workspace_id,
+                project_id=project.id,
+                workstream_id=story.workstream_id,
+                story_key=story.key,
+                status=FindingStatus.confirmed,
+            )
+            if f.issue_number
+        ]
+        failed_closes: list[int] = []
+        for finding in confirmed:
             try:
-                self.close_story_issue(
-                    story.repo,
-                    story,
+                self.close_issue(
+                    story.repo or finding.repo,
+                    finding.issue_number,
                     self.config.gh_token,
                     f"Hive re-tested story `{story.key}` in episode `{task.run_id}` and it passed.",
                 )
-                closed = True
             except Exception as exc:
-                log.warning("could not close green story issue #%s: %s", story.open_issue_number, exc)
-                escalate(
-                    self.store,
-                    f"Close testing issue #{story.open_issue_number} failed",
-                    instructions=(
-                        f"Story `{story.key}` passed in task `{task.id}`, but Hive could not "
-                        f"close issue #{story.open_issue_number} automatically.\n\n{exc}"
-                    ),
-                    project_id=project.id,
-                    workspace_id=project.workspace_id,
-                )
+                log.warning("could not close green story issue #%s: %s", finding.issue_number, exc)
+                failed_closes.append(finding.issue_number)
+                continue
+            finding.status = FindingStatus.resolved
+            finding.updated_at = time.time()
+            self.store.put(finding)
+        if failed_closes:
+            numbers = ", ".join(f"#{n}" for n in failed_closes)
+            escalate(
+                self.store,
+                f"Close testing issue(s) {numbers} failed",
+                instructions=(
+                    f"Story `{story.key}` passed in task `{task.id}`, but Hive could not "
+                    f"close {numbers} automatically."
+                ),
+                project_id=project.id,
+                workspace_id=project.workspace_id,
+            )
+        else:
+            story.open_issue_number = 0
+            story.open_issue_url = ""
         story.status = StoryStatus.passing
         story.last_tested_baseline = story.spec_baseline
         story.last_fidelity = (
@@ -1000,9 +1023,6 @@ class TaskResultProcessor:
         story.last_episode_id = task.run_id
         story.last_result_task_id = task.id
         story.last_tested_at = task.finished_at or time.time()
-        if closed:
-            story.open_issue_number = 0
-            story.open_issue_url = ""
         story.updated_at = time.time()
         self.store.put(story)
 
@@ -1038,6 +1058,9 @@ class TaskResultProcessor:
             self._block_story_on_bad_sweep(project, story, task, episode, reason, output)
             return
         story.status = StoryStatus.failing
+        # A failing sweep is still a test against the current baseline — record
+        # it, or the next backlog reconcile downgrades the failure to `stale`.
+        story.last_tested_baseline = story.spec_baseline
         story.last_episode_id = task.run_id
         story.last_result_task_id = task.id
         story.last_tested_at = task.finished_at or time.time()

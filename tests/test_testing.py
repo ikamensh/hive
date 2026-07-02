@@ -920,3 +920,80 @@ def test_testing_check_due_respects_envelope_and_interval():
 
     no_cb = Supervisor(store, lambda p, e: None)  # testing_check not wired
     assert not no_cb._testing_check_due(on)
+
+
+def test_failing_story_survives_reconcile_and_green_closes_every_issue(tmp_path, monkeypatch):
+    """Regression for two live-run bugs: (1) a failing sweep must record the
+    tested baseline, or the next backlog reconcile downgrades a confirmed
+    failure to `stale`; (2) a story that later re-tests green must close every
+    confirmed finding's issue (a story can file several), not just the last."""
+    repo = spec_repo(tmp_path)
+    client, store = app(tmp_path, repo)
+    pid = _project_with_repo(client, repo)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    detail = client.get(f"/api/projects/{pid}").json()
+    stream = next(w for w in detail["workstreams"] if w["kind"] == "testing")
+
+    filed = iter([99, 100])
+    monkeypatch.setattr(
+        "hive.api.file_or_update_finding_issue",
+        lambda repo_ref, finding, story, token: (
+            (n := next(filed)),
+            f"https://github.com/acme/beacon/issues/{n}",
+        ),
+    )
+    closed: list[int] = []
+    monkeypatch.setattr(
+        "hive.api.close_issue",
+        lambda repo_ref, number, token, comment: closed.append(number),
+    )
+
+    client.post(
+        f"/api/projects/{pid}/workstreams/{stream['id']}/test-episodes",
+        json={"scope": "full"},
+    )
+    _pump(client, store)
+    _report(client, _poll(client, rid)["id"], "REFRESH: DONE")
+    _pump(client, store)
+    _report(
+        client,
+        _poll(client, rid)["id"],
+        "SWEEP: FINDINGS\n"
+        "```json\n"
+        '{"fidelity":"local","findings":['
+        '{"kind":"bug","severity":"high","summary":"retry stops after one attempt",'
+        '"detail":"Return 500 twice and observe a single retry.","oracle":"Failed webhooks must retry with backoff"},'
+        '{"kind":"bug","severity":"high","summary":"retry crashes on second failure",'
+        '"detail":"Return 500 three times and observe a crash.","oracle":"Failed webhooks must retry with backoff"}'
+        "]}\n"
+        "```",
+    )
+    for _ in range(2):
+        _pump(client, store)
+        _report(client, _poll(client, rid)["id"], "REPRO: CONFIRMED")
+
+    story = store.list(Story, project_id=pid)[0]
+    assert story.status == StoryStatus.failing
+    assert {f.issue_number for f in store.list(Finding, project_id=pid)} == {99, 100}
+
+    # (1) Reconciling an unchanged spec must not soften a confirmed failure.
+    project = store.get(Project, pid)
+    workstream_obj = store.get(type(ensure_testing_workstream(store, project)), stream["id"])
+    reconcile_story_backlog(store, project, workstream_obj, repo)
+    assert store.get(Story, story.id).status == StoryStatus.failing
+
+    # (2) A green re-test closes both filed issues and resolves both findings.
+    client.post(
+        f"/api/projects/{pid}/workstreams/{stream['id']}/test-episodes",
+        json={"scope": "selected", "story_keys": [story.key]},
+    )
+    _pump(client, store)
+    _report(client, _poll(client, rid)["id"], "REFRESH: DONE")
+    _pump(client, store)
+    _report(client, _poll(client, rid)["id"], 'SWEEP: PASS\n```json\n{"fidelity":"local","findings":[]}\n```')
+
+    story = store.get(Story, story.id)
+    assert story.status == StoryStatus.passing
+    assert story.open_issue_number == 0 and story.open_issue_url == ""
+    assert sorted(closed) == [99, 100]
+    assert {f.status for f in store.list(Finding, project_id=pid)} == {FindingStatus.resolved}

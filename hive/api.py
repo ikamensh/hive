@@ -57,7 +57,7 @@ from hive._workstreams.preflight import (
 )
 from hive._workstreams.testing import (
     artifact_key,
-    close_story_issue,
+    close_issue,
     ensure_testing_workstream,
     file_or_update_finding_issue,
     queue_refresh_task,
@@ -481,8 +481,8 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         file_finding_issue_func=lambda repo_ref, finding, story, token: file_or_update_finding_issue(
             repo_ref, finding, story, token
         ),
-        close_story_issue_func=lambda repo_ref, story, token, comment: close_story_issue(
-            repo_ref, story, token, comment
+        close_issue_func=lambda repo_ref, number, token, comment: close_issue(
+            repo_ref, number, token, comment
         ),
     )
 
