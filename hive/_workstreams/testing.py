@@ -515,6 +515,66 @@ def story_health(stories: Iterable[Story], *, refresh_active: bool = False) -> S
     )
 
 
+# Minimum age of the last same-kind testing activity before the autonomous
+# tick repeats it: a failed/empty refresh is retried at most daily, and a
+# backlog with unproven stories is swept at most one episode per day.
+AUTO_TESTING_INTERVAL_S = 24 * 3600.0
+
+
+def auto_testing_action(store, project: Project, workstream: ProjectWorkstream, *, now_epoch: float = 0.0) -> str:
+    """What Hive should do for this testing workstream on its own, right now:
+    "refresh" (draft/repair the backlog), "episode" (sweep unproven stories),
+    or "" (nothing).
+
+    Acts on the `story_health` verdict, but only inside the autonomy envelope:
+    the project opted in (`testing_auto`) *and* set a positive daily budget
+    (no auto-spend on unbudgeted projects), the workstream is enabled, nothing
+    testing-related is in flight, and the last same-kind activity is older than
+    `AUTO_TESTING_INTERVAL_S`. All gates are store facts, so a chief restart
+    never re-fires work.
+    """
+    now_epoch = now_epoch or now_s()
+    if not project.testing_auto or project.daily_budget_usd <= 0 or not workstream.enabled:
+        return ""
+    episodes = store.list(
+        TestEpisode,
+        workspace_id=project.workspace_id,
+        project_id=project.id,
+        workstream_id=workstream.id,
+    )
+    if any(
+        e.status in (TestEpisodeStatus.refreshing, TestEpisodeStatus.sweeping, TestEpisodeStatus.confirming)
+        for e in episodes
+    ):
+        return ""
+    refresh_tasks = store.list(
+        Task,
+        workspace_id=project.workspace_id,
+        project_id=project.id,
+        workstream_id=workstream.id,
+        kind=TaskKind.test_refresh,
+    )
+    stories = store.list(
+        Story,
+        workspace_id=project.workspace_id,
+        project_id=project.id,
+        workstream_id=workstream.id,
+    )
+    health = story_health(
+        stories,
+        refresh_active=any(t.status in (TaskStatus.pending, TaskStatus.running) for t in refresh_tasks),
+    )
+    if health.action == "refresh":
+        last = max((t.created_at for t in refresh_tasks), default=0.0)
+    elif health.action == "episode":
+        last = max((e.created_at for e in episodes), default=0.0)
+    else:
+        return ""
+    if now_epoch - last < AUTO_TESTING_INTERVAL_S:
+        return ""
+    return health.action
+
+
 def _priority_score(story: Story, now_epoch: float) -> tuple[int, float, int]:
     score = 0
     if story.spec_baseline and story.last_tested_baseline != story.spec_baseline:

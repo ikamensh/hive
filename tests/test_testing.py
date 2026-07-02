@@ -22,8 +22,11 @@ from hive.models import (
 from hive.persistence.store import MemoryStore
 from hive._control.supervisor import Supervisor
 from hive._workstreams.testing import (
+    AUTO_TESTING_INTERVAL_S,
+    auto_testing_action,
     ensure_testing_workstream,
     file_or_update_finding_issue,
+    queue_refresh_task,
     reconcile_story_backlog,
     story_health,
     story_quality_problem,
@@ -835,3 +838,81 @@ def test_project_payload_offers_story_generation(tmp_path):
     assert health["state"] == "refreshing"
     # The reconcile that precedes the refresh mirrored the authored story.
     assert health["counts"]["active"] == 1
+
+
+def test_auto_testing_action_respects_the_autonomy_envelope(tmp_path):
+    """The autonomous tick only acts for an opted-in, budgeted project with an
+    enabled workstream — and then follows the health verdict: refresh for a
+    missing backlog, episode for unproven stories."""
+    from hive.models import TestEpisodeStatus
+
+    store = MemoryStore()
+    repo = spec_repo(tmp_path)
+    project = store.put(Project(name="p", spec_repo=str(repo), daily_budget_usd=5.0))
+    stream = ensure_testing_workstream(store, project)
+
+    # Empty backlog inside the envelope -> draft stories autonomously.
+    assert auto_testing_action(store, project, stream) == "refresh"
+
+    # Any missing envelope condition silences the tick.
+    assert auto_testing_action(store, store.put(project.model_copy(update={"testing_auto": False})), stream) == ""
+    assert auto_testing_action(store, store.put(project.model_copy(update={"daily_budget_usd": 0.0})), stream) == ""
+    project = store.put(project.model_copy(update={"testing_auto": True, "daily_budget_usd": 5.0}))
+    stream.enabled = False
+    assert auto_testing_action(store, project, stream) == ""
+    stream.enabled = True
+
+    # A pending refresh means the offer is already in flight.
+    task = queue_refresh_task(store, project, stream)
+    assert auto_testing_action(store, project, stream) == ""
+
+    # Refresh finished but produced nothing: retry only after the daily cooldown.
+    task.status = TaskStatus.done
+    store.put(task)
+    assert auto_testing_action(store, project, stream) == ""
+    assert auto_testing_action(store, project, stream, now_epoch=task.created_at + AUTO_TESTING_INTERVAL_S + 1) == "refresh"
+
+    # Stories exist but are unproven -> sweep them (episodes have their own cooldown).
+    reconcile_story_backlog(store, project, stream, repo)
+    assert auto_testing_action(store, project, stream) == "episode"
+    episode = store.put(
+        EpisodeModel(
+            project_id=project.id,
+            workstream_id=stream.id,
+            repo=str(repo),
+            status=TestEpisodeStatus.done,
+        )
+    )
+    assert auto_testing_action(store, project, stream) == ""
+    assert auto_testing_action(store, project, stream, now_epoch=episode.created_at + AUTO_TESTING_INTERVAL_S + 1) == "episode"
+
+    # An episode in flight silences the tick regardless of cooldowns.
+    episode.status = TestEpisodeStatus.sweeping
+    store.put(episode)
+    assert auto_testing_action(store, project, stream, now_epoch=episode.created_at + 2 * AUTO_TESTING_INTERVAL_S) == ""
+
+
+def test_testing_check_due_respects_envelope_and_interval():
+    """Supervisor poll gate: fires only for opted-in projects with a budget,
+    with the callback wired, respecting the poll interval and in-flight guard."""
+    import time as time_mod
+
+    store = MemoryStore()
+    sup = Supervisor(store, lambda p, e: None, testing_check=lambda pid: None)
+    on = store.put(Project(name="on", spec_repo="x", daily_budget_usd=5.0))
+    unbudgeted = store.put(Project(name="free", spec_repo="x"))
+    opted_out = store.put(Project(name="off", spec_repo="x", daily_budget_usd=5.0, testing_auto=False))
+
+    assert sup._testing_check_due(on)
+    assert not sup._testing_check_due(unbudgeted)
+    assert not sup._testing_check_due(opted_out)
+
+    sup._last_testing_check[on.id] = time_mod.time()
+    assert not sup._testing_check_due(on)  # just checked; interval not elapsed
+
+    sup._last_testing_check.pop(on.id)
+    sup._testing_busy.add(on.id)
+    assert not sup._testing_check_due(on)  # check already in flight
+
+    no_cb = Supervisor(store, lambda p, e: None)  # testing_check not wired
+    assert not no_cb._testing_check_due(on)

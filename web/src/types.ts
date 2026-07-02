@@ -26,6 +26,7 @@ export interface Project {
   guess_propensity: GuessPropensity;
   prod_deploys: boolean;
   ci_autofix: boolean;
+  testing_auto: boolean;
   paused: boolean;
   archived: boolean;
   daily_budget_usd: number;
@@ -641,6 +642,7 @@ export interface ProjectPatch {
   guess_propensity?: GuessPropensity;
   prod_deploys?: boolean;
   ci_autofix?: boolean;
+  testing_auto?: boolean;
   paused?: boolean;
   daily_budget_usd?: number;
   member_repos?: string[];

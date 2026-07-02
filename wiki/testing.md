@@ -187,8 +187,14 @@ A `TestEpisode` is the campaign object (like `IssueRun`), snapshotting the story
 set in scope so the run is auditable even if the spec changes afterward. Phases:
 `refreshing → sweeping → confirming → done`.
 
-1. **Trigger.** Human clicks "Run testing episode" on the testing workstream.
-   (Scheduled/Maintain episodes are Iteration 2.)
+1. **Trigger.** Human clicks "Run testing episode" on the testing workstream —
+   or the **autonomous tick** does it: for a `testing_auto` project with a
+   positive daily budget, the supervisor polls `auto_testing_action` (
+   `TESTING_CHECK_INTERVAL_S`), which acts on the story-health verdict —
+   missing/weak backlog → queue a story refresh, unproven stories → start a
+   priority episode — with a per-kind daily cooldown (`AUTO_TESTING_INTERVAL_S`)
+   and an in-flight guard, all judged from store facts so restarts never
+   double-fire.
 2. **Refresh (`test_refresh`).** Align the backlog and choose scope — see
    *Refreshing the backlog* above. The content reconcile runs the high-IQ model
    (reuse the `model_intel` "smartest available" selection that critique's

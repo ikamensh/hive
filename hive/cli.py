@@ -177,6 +177,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--guess-propensity")
     p.add_argument("--prod-deploys", choices=["true", "false"])
     p.add_argument("--ci-autofix", choices=["true", "false"], help="poll repo CI and auto-fix red builds")
+    p.add_argument(
+        "--testing-auto",
+        choices=["true", "false"],
+        help="autonomously draft/repair stories and sweep unproven ones (needs a daily budget)",
+    )
     p.add_argument("--paused", choices=["true", "false"])
     p.add_argument("--daily-budget", type=float, help="daily spend cap in USD (0 = no cap)")
     p.add_argument("--member-repos", help="comma-separated git URLs (replaces the list)")
@@ -624,7 +629,7 @@ def run(args: argparse.Namespace, client) -> dict | list:
             "mode": args.mode, "autonomy": args.autonomy,
             "guess_propensity": args.guess_propensity,
         }.items() if v is not None}
-        for flag in ("prod_deploys", "ci_autofix", "paused"):
+        for flag in ("prod_deploys", "ci_autofix", "testing_auto", "paused"):
             if (v := getattr(args, flag)) is not None:
                 body[flag] = v == "true"
         if args.daily_budget is not None:

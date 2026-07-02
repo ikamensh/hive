@@ -434,6 +434,21 @@ export function ProjectSettings({
             </button>
           </div>
           <div className="toggle-cell">
+            <span
+              className="toggle-label"
+              title="Hive drafts/repairs acceptance stories and sweeps unproven ones on its own; only acts when a daily budget is set"
+            >
+              auto testing
+            </span>
+            <button
+              className={`switch ${project.testing_auto ? "on" : ""}`}
+              onClick={() => onPatch({ testing_auto: !project.testing_auto })}
+              aria-pressed={project.testing_auto}
+            >
+              <i />
+            </button>
+          </div>
+          <div className="toggle-cell">
             <span className="toggle-label">paused</span>
             <button
               className={`switch warn ${project.paused ? "on" : ""}`}

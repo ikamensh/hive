@@ -165,6 +165,7 @@ class ProjectPatch(BaseModel):
     guess_propensity: GuessPropensity | None = None
     prod_deploys: bool | None = None
     ci_autofix: bool | None = None
+    testing_auto: bool | None = None
     paused: bool | None = None
     daily_budget_usd: float | None = None
     member_repos: list[str] | None = None
@@ -1659,12 +1660,72 @@ def production_app() -> FastAPI:
                     "CI auto-check failed for project %s repo %s", project_id, repo
                 )
 
+    def testing_check(project_id: str) -> None:
+        """Supervisor callback: act on the story-health verdict for a testing_auto
+        project — queue a story refresh when the backlog is missing/weak, start a
+        priority episode when stories are unproven. `auto_testing_action` owns all
+        the gating (budget envelope, in-flight work, daily cooldown)."""
+        project = store.get(Project, project_id)
+        if not project or not project.testing_auto or not project.spec_repo.strip():
+            return
+        from hive._workstreams.testing import (
+            auto_testing_action,
+            ensure_testing_workstream,
+            reconcile_story_backlog,
+            start_episode,
+        )
+
+        repos = dict.fromkeys(
+            r.strip() for r in (project.member_repos or [project.spec_repo]) if r.strip()
+        )
+        log_ = logging.getLogger("hive.api")
+        for repo in repos:
+            try:
+                workstream = ensure_testing_workstream(store, project, repo=repo)
+                # Mirror acceptance/ into Story rows first, so a freshly registered
+                # project with authored stories is judged on them, not on empty rows.
+                spec = SpecRepo(
+                    project.spec_repo,
+                    Path(config.data_dir or "/tmp/hive-data") / "specs",
+                    config.gh_token,
+                )
+                spec.sync()
+                reconcile_story_backlog(store, project, workstream, spec.path)
+                action = auto_testing_action(store, project, workstream)
+                if action == "refresh":
+                    task = queue_refresh_task(
+                        store,
+                        project,
+                        workstream,
+                        backend=config.test_refresh_backend,
+                        model=config.test_refresh_model,
+                    )
+                    log_.info("auto-testing: queued story refresh %s for %s", task.id, repo)
+                elif action == "episode":
+                    episode, _ = start_episode(
+                        store,
+                        project,
+                        workstream,
+                        refresh_backend=config.test_refresh_backend,
+                        refresh_model=config.test_refresh_model,
+                        sweep_backend=config.test_sweep_backend,
+                        sweep_model=config.test_sweep_model,
+                        confirm_backend=config.test_confirm_backend,
+                        confirm_model=config.test_confirm_model,
+                    )
+                    log_.info("auto-testing: started episode %s for %s", episode.id, repo)
+            except Exception:
+                log_.exception(
+                    "autonomous testing check failed for project %s repo %s", project_id, repo
+                )
+
     supervisor = Supervisor(
         store,
         orchestrator.invoke,
         workspace_id=config.workspace_id,
         machine_name=config.machine_name,
         ci_check=ci_check,
+        testing_check=testing_check,
     )
     from hive.runner._local import LocalRunnerManager
 

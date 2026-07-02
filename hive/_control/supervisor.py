@@ -116,6 +116,7 @@ class Supervisor:
     TICK_S = 15.0
     HEARTBEAT_MIN_INTERVAL_S = 600.0  # rate-limit decision wakes not driven by events
     CI_CHECK_INTERVAL_S = 300.0  # how often a ci_autofix project's CI is polled per repo
+    TESTING_CHECK_INTERVAL_S = 900.0  # how often a testing_auto project's backlog is re-judged
 
     def __init__(
         self,
@@ -124,6 +125,7 @@ class Supervisor:
         workspace_id: str = DEFAULT_WORKSPACE_ID,
         machine_name: str = "",
         ci_check: Callable[[str], None] | None = None,
+        testing_check: Callable[[str], None] | None = None,
     ) -> None:
         self.store = store
         self.orchestrate = orchestrate
@@ -131,6 +133,9 @@ class Supervisor:
         # CI auto-fix poller (network: filed by production_app, None in tests). Takes
         # a project id, checks each repo's CI, files+queues a fix when red.
         self.ci_check = ci_check
+        # Autonomous-testing poller (same shape): keeps a testing_auto project's
+        # backlog aligned and swept inside its budget envelope.
+        self.testing_check = testing_check
         machine = machine_name or socket.gethostname()
         self.holder = f"{machine}:{os.getpid()}"
         self._events: dict[str, list[str]] = defaultdict(list)
@@ -139,6 +144,8 @@ class Supervisor:
         self._last_heartbeat: dict[str, float] = {}
         self._last_ci_check: dict[str, float] = {}
         self._ci_busy: set[str] = set()  # projects with a CI check in flight
+        self._last_testing_check: dict[str, float] = {}
+        self._testing_busy: set[str] = set()  # projects with a testing check in flight
         self._dispatch_lock = threading.RLock()
 
     def wake(self, project_id: str, event: str) -> None:
@@ -451,6 +458,28 @@ class Supervisor:
             self._ci_busy.discard(project_id)
             self._wakeup.set()
 
+    def _testing_check_due(self, project: Project) -> bool:
+        """A `testing_auto` project inside its budget envelope whose poll interval
+        elapsed and which has no testing check already running. Pure gate so it is
+        testable without a loop (the per-action daily cooldown lives in
+        `auto_testing_action` as store facts)."""
+        return (
+            self.testing_check is not None
+            and project.testing_auto
+            and project.daily_budget_usd > 0
+            and project.id not in self._testing_busy
+            and time.time() - self._last_testing_check.get(project.id, 0) > self.TESTING_CHECK_INTERVAL_S
+        )
+
+    async def _run_testing_check(self, project_id: str) -> None:
+        try:
+            await asyncio.to_thread(self.testing_check, project_id)
+        except Exception:
+            log.exception("autonomous testing check failed for %s", project_id)
+        finally:
+            self._testing_busy.discard(project_id)
+            self._wakeup.set()
+
     async def _step(self) -> None:
         self.fail_orphaned_tasks()
         avail = self.available_backends()
@@ -461,6 +490,10 @@ class Supervisor:
                 self._last_ci_check[project.id] = time.time()
                 self._ci_busy.add(project.id)
                 asyncio.get_running_loop().create_task(self._run_ci_check(project.id))
+            if self._testing_check_due(project) and not self.over_budget(project):
+                self._last_testing_check[project.id] = time.time()
+                self._testing_busy.add(project.id)
+                asyncio.get_running_loop().create_task(self._run_testing_check(project.id))
             self.dispatch(project)
             state = self.refresh_state(project)
             if state == ProjectState.intake:

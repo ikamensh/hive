@@ -102,6 +102,10 @@ class Project(BaseModel):
     guess_propensity: GuessPropensity = GuessPropensity.sometimes
     prod_deploys: bool = False
     ci_autofix: bool = False  # poll each repo's default-branch CI; file+fix an issue when red
+    # Autonomous testing: Hive keeps the story backlog aligned (auto refresh when
+    # missing/weak) and sweeps unproven stories (auto episodes) on its own. Only
+    # acts inside an explicit budget envelope (daily_budget_usd > 0).
+    testing_auto: bool = True
     paused: bool = False
     archived: bool = False  # hidden from the default list; data retained
     daily_budget_usd: float = 0.0  # 0 = no cap; else soft cap on today's task spend
