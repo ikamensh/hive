@@ -128,6 +128,12 @@ As a user I can sign in with Google so that I can access my dashboard.
   Then I return to /login and remain signed out
 ```
 
+- **Tags route the test run.** The bracketed tag after the story key states how
+  the user experiences the story and what capability a sweep needs: `ui` (browser
+  — dispatched only to browser-capable runners), `cli` (terminal), `api`
+  (programmatic); `docker` added alongside when the story needs a fresh
+  containerized install. Tag `ui` only for journeys that genuinely happen in a
+  browser (a mis-tagged CLI story parks its sweep as `blocked_resources`).
 - **AI-first authorship, human-correctable.** The refresh step writes and updates
   these files; the human only corrects them. Human edits are preserved like
   `input-log/` — the refresh step reconciles against them and never silently

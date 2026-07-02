@@ -12,7 +12,7 @@ feature in one refresh.
 Update `acceptance/` so it contains one markdown file per user-facing story. Use this format:
 
 ```markdown
-# story: short-key [ui]
+# story: short-key [tag]
 As a role I can accomplish a goal so that value.
 
 ## Rules
@@ -23,6 +23,12 @@ As a role I can accomplish a goal so that value.
   When ...
   Then ...
 ```
+
+The bracketed tag routes the test run and states how the user experiences the
+story: `ui` (needs a browser), `cli` (terminal), `api` (programmatic). A `ui`
+story is dispatched only to browser-capable machines, so tag `ui` only when the
+journey genuinely happens in a browser. Add `docker` alongside when the story
+needs a fresh containerized install, e.g. `[cli, docker]`.
 
 Preserve human-edited stories when they are still compatible with the spec. If a story is ambiguous, add a short `## Questions` section rather than guessing acceptance. Commit and push the acceptance changes when you changed files.
 Keep the commit small: only files under `acceptance/`, unless a question file/log is
