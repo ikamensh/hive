@@ -855,9 +855,13 @@ def test_auto_testing_action_respects_the_autonomy_envelope(tmp_path):
     assert auto_testing_action(store, project, stream) == "refresh"
 
     # Any missing envelope condition silences the tick.
+    from hive.models import ProjectState
+
     assert auto_testing_action(store, store.put(project.model_copy(update={"testing_auto": False})), stream) == ""
     assert auto_testing_action(store, store.put(project.model_copy(update={"daily_budget_usd": 0.0})), stream) == ""
-    project = store.put(project.model_copy(update={"testing_auto": True, "daily_budget_usd": 5.0}))
+    # An unapproved (intake-stage) spec is not a testing oracle yet.
+    assert auto_testing_action(store, store.put(project.model_copy(update={"state": ProjectState.intake})), stream) == ""
+    project = store.put(project.model_copy(update={"testing_auto": True, "daily_budget_usd": 5.0, "state": ProjectState.idle}))
     stream.enabled = False
     assert auto_testing_action(store, project, stream) == ""
     stream.enabled = True

@@ -183,3 +183,11 @@ def test_offers_surface_only_outside_the_autonomy_envelope():
     project.paused = True
     store.put(project)
     assert build_overview(store, WS, _spend_zero)["attention"]["offers"] == []
+
+    # Intake stage: the spec is not approved, so there is nothing to offer yet.
+    from hive.models import ProjectState
+
+    project.paused = False
+    project.state = ProjectState.intake
+    store.put(project)
+    assert build_overview(store, WS, _spend_zero)["attention"]["offers"] == []

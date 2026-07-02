@@ -26,6 +26,7 @@ from hive.models import (
     FindingKind,
     FindingStatus,
     Project,
+    ProjectState,
     ProjectWorkstream,
     ProjectWorkstreamKind,
     ProjectWorkstreamStatus,
@@ -528,13 +529,16 @@ def auto_testing_action(store, project: Project, workstream: ProjectWorkstream, 
 
     Acts on the `story_health` verdict, but only inside the autonomy envelope:
     the project opted in (`testing_auto`) *and* set a positive daily budget
-    (no auto-spend on unbudgeted projects), the workstream is enabled, nothing
-    testing-related is in flight, and the last same-kind activity is older than
-    `AUTO_TESTING_INTERVAL_S`. All gates are store facts, so a chief restart
-    never re-fires work.
+    (no auto-spend on unbudgeted projects), intake is behind it (drafting
+    stories from an unapproved spec would test unvetted intention), the
+    workstream is enabled, nothing testing-related is in flight, and the last
+    same-kind activity is older than `AUTO_TESTING_INTERVAL_S`. All gates are
+    store facts, so a chief restart never re-fires work.
     """
     now_epoch = now_epoch or now_s()
     if not project.testing_auto or project.daily_budget_usd <= 0 or not workstream.enabled:
+        return ""
+    if project.state == ProjectState.intake:
         return ""
     episodes = store.list(
         TestEpisode,
