@@ -192,11 +192,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("project_id")
     p.add_argument("workstream_id", help="the github_issues workstream for the repo (see `hive show`)")
 
-    p = sub.add_parser("test-refresh", help="queue a testing-workstream refresh (start testing)")
+    p = sub.add_parser("test-refresh", help="draft/align acceptance stories from the spec (no sweep)")
     p.add_argument("project_id")
     p.add_argument("workstream_id")
     p.add_argument("--backend", default="", help="agent backend (default: server config)")
     p.add_argument("--model", default="", help="model (default: backend default)")
+
+    p = sub.add_parser("test-run", help="run a testing episode: refresh -> sweep as a user -> confirm -> file bugs")
+    p.add_argument("project_id")
+    p.add_argument("workstream_id")
+    p.add_argument("--scope", choices=["priority", "full", "selected"], default="priority")
+    p.add_argument("--story", action="append", default=[], help="story key to sweep (repeatable; implies --scope selected)")
+    p.add_argument("--max", type=int, default=0, dest="max_stories", help="cap on stories swept (priority scope)")
+
+    p = sub.add_parser("stories", help="testing coverage: stories x status, plus Hive's standing offer")
+    p.add_argument("project_id")
+
+    p = sub.add_parser("test-cancel", help="cancel a testing episode (dequeues pending, stops running tasks)")
+    p.add_argument("episode_id")
 
     p = sub.add_parser("iterate", help="start the next iteration with a note")
     p.add_argument("project_id")
@@ -517,6 +530,47 @@ def _run_migrate_local_state(args: argparse.Namespace) -> None:
     print(json.dumps(result, indent=2))
 
 
+def stories_report(detail: dict) -> dict:
+    """Condense a project payload into the testing coverage view: per testing
+    workstream, the backlog health (with Hive's standing offer) and one row per
+    active story."""
+    health = detail.get("testing_health", {})
+    stories = detail.get("stories", [])
+    episodes = sorted(detail.get("test_episodes", []), key=lambda e: e["created_at"], reverse=True)
+    report = []
+    for stream in detail.get("workstreams", []):
+        if stream["kind"] != "testing":
+            continue
+        report.append(
+            {
+                "workstream_id": stream["id"],
+                "repo": stream["repo"],
+                "health": health.get(stream["id"], {}),
+                "latest_episode": next(
+                    (
+                        {k: e[k] for k in ("id", "status", "scope", "story_keys", "created_at")}
+                        for e in episodes
+                        if e["workstream_id"] == stream["id"]
+                    ),
+                    None,
+                ),
+                "stories": [
+                    {
+                        "key": s["key"],
+                        "status": s["status"],
+                        "oracle": s["oracle_status"],
+                        "fidelity": s["last_fidelity"],
+                        "last_tested_at": s["last_tested_at"],
+                        "issue": s["open_issue_url"] or None,
+                    }
+                    for s in stories
+                    if s["workstream_id"] == stream["id"] and s["status"] != "archived"
+                ],
+            }
+        )
+    return {"testing": report}
+
+
 def run(args: argparse.Namespace, client) -> dict | list:
     """Execute one command against an httpx-compatible client and return the
     response payload. Non-2xx responses raise (clear failure over silence)."""
@@ -602,6 +656,20 @@ def run(args: argparse.Namespace, client) -> dict | list:
             f"/api/projects/{args.project_id}/workstreams/{args.workstream_id}/test-refresh",
             json={"backend": args.backend, "model": args.model},
         )
+    elif c == "test-run":
+        r = client.post(
+            f"/api/projects/{args.project_id}/workstreams/{args.workstream_id}/test-episodes",
+            json={
+                "scope": "selected" if args.story else args.scope,
+                "story_keys": args.story,
+                "max_stories": args.max_stories,
+            },
+        )
+    elif c == "stories":
+        detail = client.get(f"/api/projects/{args.project_id}").raise_for_status().json()
+        return stories_report(detail)
+    elif c == "test-cancel":
+        r = client.post(f"/api/test-episodes/{args.episode_id}/cancel")
     elif c == "iterate":
         r = client.patch(f"/api/projects/{args.project_id}",
                          json={"new_iteration_note": args.note})

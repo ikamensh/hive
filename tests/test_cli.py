@@ -623,3 +623,50 @@ def test_cli_cancel_and_dismiss(harness):
     assert cli(client, "cancel", task.id)["status"] == "cancelled"
     question = store.put(Question(project_id=pid, text="A or B?"))
     assert cli(client, "dismiss", question.id)["status"] == "dismissed"
+
+
+def test_cli_test_run_and_cancel_map_to_endpoints():
+    rec = _Recorder()
+    cli(rec, "test-run", "p1", "ws1", "--scope", "full", "--max", "3")
+    cli(rec, "test-run", "p1", "ws1", "--story", "login", "--story", "signup")
+    cli(rec, "test-cancel", "ep1")
+    assert rec.calls == [
+        ("POST", "/api/projects/p1/workstreams/ws1/test-episodes",
+         {"scope": "full", "story_keys": [], "max_stories": 3}),
+        # naming stories implies the selected scope
+        ("POST", "/api/projects/p1/workstreams/ws1/test-episodes",
+         {"scope": "selected", "story_keys": ["login", "signup"], "max_stories": 0}),
+        ("POST", "/api/test-episodes/ep1/cancel", None),
+    ]
+
+
+def test_cli_stories_coverage_view(harness, tmp_path):
+    """`hive stories` shows the backlog health offer before any testing exists,
+    and the mirrored stories + live episode once a test-run starts."""
+    client, store = harness
+    origin = _spec_origin(tmp_path, {
+        "mission.md": "# Mission\nShip the demo.\n",
+        "iteration.md": "# Iteration\nBuild the first loop.\n",
+        "acceptance/login.md": (
+            "# story: login [api]\n"
+            "As a user I can sign in so that I reach my dashboard.\n\n"
+            "## Examples\n- Given valid credentials\n  When I sign in\n  Then I see the dashboard\n"
+        ),
+    })
+    pid = cli(client, "create", "demo")["id"]
+    cli(client, "set", pid, "--spec-repo", str(origin))
+
+    report = cli(client, "stories", pid)
+    stream = report["testing"][0]
+    assert stream["health"]["state"] == "missing"  # nothing mirrored yet: the offer stands
+    assert "autonomous" in stream["health"]["offer"]
+
+    episode = cli(client, "test-run", pid, stream["workstream_id"], "--scope", "full")["episode"]
+    report = cli(client, "stories", pid)
+    stream = report["testing"][0]
+    assert stream["health"]["state"] == "refreshing"
+    assert [s["key"] for s in stream["stories"]] == ["login"]
+    assert stream["latest_episode"]["id"] == episode["id"]
+
+    cancelled = cli(client, "test-cancel", episode["id"])
+    assert cancelled["status"] == "cancelled"
