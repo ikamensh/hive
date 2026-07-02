@@ -15,6 +15,7 @@ import os
 import re
 import time
 from pathlib import Path
+from typing import Callable
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
@@ -1619,20 +1620,11 @@ def mount_spa(app: FastAPI, web_dir: Path) -> None:
         return FileResponse(web_dir / "index.html", headers=cache_headers)
 
 
-def production_app() -> FastAPI:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    config = Config.from_env()
-    from hive.persistence.storage import make_blob_store, make_store
-
-    store = make_store(config)
-    blobs = make_blob_store(config)
-    from hive._control.orchestrator import Orchestrator
-
-    orchestrator = Orchestrator(store, blobs, config)
+def make_ci_check(store, config: Config) -> Callable[[str], None]:
+    """Supervisor callback: poll each repo's CI for a ci_autofix project and
+    file+queue a fix when red. Needs a GitHub token; a no-op without one."""
 
     def ci_check(project_id: str) -> None:
-        """Supervisor callback: poll each repo's CI for a ci_autofix project and
-        file+queue a fix when red. Needs a GitHub token; a no-op without one."""
         project = store.get(Project, project_id)
         if not project or not project.ci_autofix or not config.gh_token.strip():
             return
@@ -1660,11 +1652,16 @@ def production_app() -> FastAPI:
                     "CI auto-check failed for project %s repo %s", project_id, repo
                 )
 
+    return ci_check
+
+
+def make_testing_check(store, config: Config) -> Callable[[str], None]:
+    """Supervisor callback: act on the story-health verdict for a testing_auto
+    project — queue a story refresh when the backlog is missing/weak, start a
+    priority episode when stories are unproven. `auto_testing_action` owns all
+    the gating (budget envelope, in-flight work, daily cooldown)."""
+
     def testing_check(project_id: str) -> None:
-        """Supervisor callback: act on the story-health verdict for a testing_auto
-        project — queue a story refresh when the backlog is missing/weak, start a
-        priority episode when stories are unproven. `auto_testing_action` owns all
-        the gating (budget envelope, in-flight work, daily cooldown)."""
         project = store.get(Project, project_id)
         if not project or not project.testing_auto or not project.spec_repo.strip():
             return
@@ -1719,13 +1716,27 @@ def production_app() -> FastAPI:
                     "autonomous testing check failed for project %s repo %s", project_id, repo
                 )
 
+    return testing_check
+
+
+def production_app() -> FastAPI:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    config = Config.from_env()
+    from hive.persistence.storage import make_blob_store, make_store
+
+    store = make_store(config)
+    blobs = make_blob_store(config)
+    from hive._control.orchestrator import Orchestrator
+
+    orchestrator = Orchestrator(store, blobs, config)
+
     supervisor = Supervisor(
         store,
         orchestrator.invoke,
         workspace_id=config.workspace_id,
         machine_name=config.machine_name,
-        ci_check=ci_check,
-        testing_check=testing_check,
+        ci_check=make_ci_check(store, config),
+        testing_check=make_testing_check(store, config),
     )
     from hive.runner._local import LocalRunnerManager
 
