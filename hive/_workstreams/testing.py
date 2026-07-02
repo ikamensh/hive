@@ -407,6 +407,115 @@ def reconcile_story_backlog(
     )
 
 
+def story_quality_problem(story: Story) -> str:
+    """Why a story is too weak to be a trustworthy test oracle ("" = fine).
+
+    Deterministic proxies for "low quality": a sweep agent needs a stated user
+    intent and concrete acceptance examples to judge against; without either the
+    story can only produce noise.
+    """
+    if not story.intent.strip():
+        return "no user intent recorded"
+    acceptance = story.acceptance.strip()
+    if len(acceptance) < 40:
+        return "acceptance too thin to judge against"
+    if not re.search(r"^##\s*Examples\b|\bGiven\b.+\bWhen\b|\bWhen\b.+\bThen\b", acceptance, re.I | re.S | re.M):
+        return "no concrete acceptance examples (Given/When/Then)"
+    return ""
+
+
+@dataclass(frozen=True)
+class StoryHealth:
+    """Deterministic verdict on a testing backlog, with Hive's standing offer.
+
+    One definition shared by the web UI, the CLI, and any future proactive
+    trigger — `state` drives styling/routing, `action` is the machine hint
+    (refresh | episode | review | ""), `summary`/`offer` are the human words.
+    """
+
+    state: str
+    summary: str
+    offer: str
+    action: str
+    counts: dict
+
+    def as_dict(self) -> dict:
+        return {
+            "state": self.state,
+            "summary": self.summary,
+            "offer": self.offer,
+            "action": self.action,
+            "counts": self.counts,
+        }
+
+
+def story_health(stories: Iterable[Story], *, refresh_active: bool = False) -> StoryHealth:
+    active = [s for s in stories if s.status != StoryStatus.archived]
+    weak = [s for s in active if story_quality_problem(s)]
+    counts = {
+        "active": len(active),
+        "weak": len(weak),
+        "drafts": sum(1 for s in active if s.oracle_status == StoryOracleStatus.draft),
+        "untested": sum(1 for s in active if s.status == StoryStatus.untested),
+        "stale": sum(1 for s in active if s.status == StoryStatus.stale),
+        "failing": sum(1 for s in active if s.status == StoryStatus.failing),
+        "blocked": sum(1 for s in active if s.status == StoryStatus.blocked),
+        "passing": sum(1 for s in active if s.status == StoryStatus.passing),
+    }
+    if refresh_active:
+        return StoryHealth(
+            "refreshing",
+            "Hive is aligning the acceptance stories with the spec right now.",
+            "",
+            "",
+            counts,
+        )
+    if not active:
+        return StoryHealth(
+            "missing",
+            "No acceptance stories yet.",
+            "Hive can draft user stories with acceptance criteria autonomously "
+            "from the spec (mission, iteration, wiki) — run a story refresh.",
+            "refresh",
+            counts,
+        )
+    if weak:
+        problems = "; ".join(
+            f"{s.key}: {story_quality_problem(s)}" for s in weak[:3]
+        )
+        return StoryHealth(
+            "weak",
+            f"{len(weak)} of {len(active)} stories are too weak to test against ({problems}).",
+            "Hive can rewrite the weak stories from the spec autonomously — run a story refresh.",
+            "refresh",
+            counts,
+        )
+    if counts["failing"]:
+        return StoryHealth(
+            "failing",
+            f"{counts['failing']} of {len(active)} stories are failing; fixes flow through the issues workstream.",
+            "Run a testing episode after fixes land to confirm the stories go green.",
+            "episode",
+            counts,
+        )
+    if counts["untested"] or counts["stale"]:
+        pending = counts["untested"] + counts["stale"]
+        return StoryHealth(
+            "untested",
+            f"{pending} of {len(active)} stories have not been proven against the current spec.",
+            "Run a testing episode — Hive sweeps them as a user and files confirmed bugs autonomously.",
+            "episode",
+            counts,
+        )
+    return StoryHealth(
+        "healthy",
+        f"All {len(active)} stories passing against the current spec.",
+        "",
+        "",
+        counts,
+    )
+
+
 def _priority_score(story: Story, now_epoch: float) -> tuple[int, float, int]:
     score = 0
     if story.spec_baseline and story.last_tested_baseline != story.spec_baseline:

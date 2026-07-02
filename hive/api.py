@@ -63,6 +63,7 @@ from hive._workstreams.testing import (
     reconcile_story_backlog,
     safe_artifact_name,
     start_episode,
+    story_health,
 )
 from hive.models import (
     AgentConversation,
@@ -93,6 +94,7 @@ from hive.models import (
     Story,
     Subscription,
     Task,
+    TaskKind,
     TaskStatus,
     TestEpisode,
     TestEpisodeScope,
@@ -1076,12 +1078,36 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             t.model_dump()
             for t in store.list(HumanTask, workspace_id=ctx.workspace_id, project_id=project_id)
         ]
+        streams = project_workstreams(store, project)
+        stories = store.list(Story, workspace_id=ctx.workspace_id, project_id=project_id)
+
+        def testing_health(workstream: ProjectWorkstream) -> dict:
+            refresh_active = any(
+                t.status in (TaskStatus.pending, TaskStatus.running)
+                for t in store.list(
+                    Task,
+                    workspace_id=ctx.workspace_id,
+                    project_id=project_id,
+                    workstream_id=workstream.id,
+                    kind=TaskKind.test_refresh,
+                )
+            )
+            return story_health(
+                (s for s in stories if s.workstream_id == workstream.id),
+                refresh_active=refresh_active,
+            ).as_dict()
+
         return {
             "project": project.model_dump(),
             "workstreams": [
                 w.model_dump()
-                for w in project_workstreams(store, project)
+                for w in streams
             ],
+            "testing_health": {
+                w.id: testing_health(w)
+                for w in streams
+                if w.kind == ProjectWorkstreamKind.testing
+            },
             "work_items": [
                 w.model_dump()
                 for w in work_items
@@ -1105,10 +1131,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 r.model_dump()
                 for r in store.list(IssueRun, workspace_id=ctx.workspace_id, project_id=project_id)
             ],
-            "stories": [
-                s.model_dump()
-                for s in store.list(Story, workspace_id=ctx.workspace_id, project_id=project_id)
-            ],
+            "stories": [s.model_dump() for s in stories],
             "findings": [
                 f.model_dump()
                 for f in store.list(Finding, workspace_id=ctx.workspace_id, project_id=project_id)

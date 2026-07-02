@@ -21,7 +21,13 @@ from hive.models import (
 )
 from hive.persistence.store import MemoryStore
 from hive._control.supervisor import Supervisor
-from hive._workstreams.testing import ensure_testing_workstream, file_or_update_finding_issue, reconcile_story_backlog
+from hive._workstreams.testing import (
+    ensure_testing_workstream,
+    file_or_update_finding_issue,
+    reconcile_story_backlog,
+    story_health,
+    story_quality_problem,
+)
 from tests.test_api_e2e import RUNNER_HEADERS, _pump, _register_usable_runner
 
 
@@ -744,3 +750,88 @@ def test_cancel_testing_episode_hard_cancels_undelivered_running_tasks(tmp_path)
     assert task.cancel_requested is False
     assert "before delivery" in task.result_text
     assert cancelled["counts"]["cancelled_tasks"] == 1
+
+
+GOOD_ACCEPTANCE = (
+    "## Rules\n- Valid users reach the dashboard.\n\n"
+    "## Examples\n- Given valid credentials\n  When I sign in\n  Then I see the dashboard\n"
+)
+
+
+def _story(**overrides) -> Story:
+    """A story that passes the quality gate; overrides break it on purpose."""
+    fields = {
+        "project_id": "p",
+        "workstream_id": "w",
+        "key": "login",
+        "intent": "As a user I can sign in so that I can access my dashboard.",
+        "acceptance": GOOD_ACCEPTANCE,
+        **overrides,
+    }
+    return Story(**fields)
+
+
+def test_story_quality_gate_properties():
+    """A story is a usable oracle iff it states user intent and concrete examples.
+
+    Weakness must be monotone: removing intent or examples from a good story
+    always yields a problem, and the good story itself never does.
+    """
+    assert story_quality_problem(_story()) == ""
+    assert story_quality_problem(_story(intent="")) != ""
+    assert story_quality_problem(_story(acceptance="works fine")) != ""
+    assert story_quality_problem(_story(acceptance="## Rules\n- The app is generally good and reliable overall.\n")) != ""
+    # Given/When/Then prose without a literal "## Examples" heading still counts.
+    assert story_quality_problem(_story(acceptance="Given a fresh install, When I sign up, Then I can log in.")) == ""
+
+
+def test_story_health_states_cover_backlog_lifecycle():
+    """Health walks missing -> weak -> untested -> failing -> healthy as the
+    backlog improves, and always carries an actionable offer until healthy."""
+    missing = story_health([])
+    assert (missing.state, missing.action) == ("missing", "refresh")
+    assert "autonomous" in missing.offer
+
+    weak = story_health([_story(intent="")])
+    assert (weak.state, weak.action) == ("weak", "refresh")
+    assert "login" in weak.summary
+
+    untested = story_health([_story()])
+    assert (untested.state, untested.action) == ("untested", "episode")
+
+    failing = story_health([_story(status=StoryStatus.failing, last_tested_at=1.0)])
+    assert (failing.state, failing.action) == ("failing", "episode")
+
+    healthy = story_health([_story(status=StoryStatus.passing, last_tested_at=1.0)])
+    assert (healthy.state, healthy.action, healthy.offer) == ("healthy", "", "")
+
+    # Archived stories are invisible to health.
+    archived_only = story_health([_story(status=StoryStatus.archived)])
+    assert archived_only.state == "missing"
+
+    # A live refresh dominates every other state: the offer is already taken.
+    refreshing = story_health([_story(intent="")], refresh_active=True)
+    assert (refreshing.state, refreshing.action, refreshing.offer) == ("refreshing", "", "")
+
+
+def test_project_payload_offers_story_generation(tmp_path):
+    """The project payload carries testing health per testing workstream:
+    an empty backlog is an explicit offer to draft stories autonomously, and
+    queueing a refresh flips it to `refreshing` (offer in flight)."""
+    repo = spec_repo(tmp_path)
+    client, store = app(tmp_path, repo)
+    pid = _project_with_repo(client, repo)
+
+    detail = client.get(f"/api/projects/{pid}").json()
+    streams = [w for w in detail["workstreams"] if w["kind"] == "testing"]
+    assert len(streams) == 1
+    health = detail["testing_health"][streams[0]["id"]]
+    assert health["state"] == "missing"
+    assert health["action"] == "refresh"
+
+    client.post(f"/api/projects/{pid}/workstreams/{streams[0]['id']}/test-refresh")
+    detail = client.get(f"/api/projects/{pid}").json()
+    health = detail["testing_health"][streams[0]["id"]]
+    assert health["state"] == "refreshing"
+    # The reconcile that precedes the refresh mirrored the authored story.
+    assert health["counts"]["active"] == 1
