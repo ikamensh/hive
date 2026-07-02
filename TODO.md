@@ -8,7 +8,7 @@ runner trace upload / `hive trace`, and the iterate path in `api.py` +
 `wiki/architecture.md`.)
 
 ## Gap 10 — Spec critique in the loop
-`hive/workstreams/critique.py` is currently reachable only via `scripts/spec_critique.py`.
+`hive/_workstreams/critique.py` is currently reachable only via `scripts/spec_critique.py`.
 Wire it into the running system:
 - Orchestrator opens a new project's workstream 0 with a critique run; its
   findings seed the first batch of clarification questions.
@@ -36,7 +36,7 @@ land, an idle project gets no heartbeat).
 ## Subscription recovery flow — consult subscriptions on blocked_resources
 The data model now distinguishes durable `Subscription`s (with `licensing_mode`)
 from live per-machine agents, and `/api/resources` surfaces
-`subscription_candidates` (`hive/control/capacity.py`). Not yet wired into the
+`subscription_candidates` (`hive/_control/capacity.py`). Not yet wired into the
 control loop: when work is `blocked_resources` (no online usable agent for a
 needed backend), the supervisor/orchestrator should consult subscriptions and
 act on the licensing mode — self-serve a `portable` credential onto an online

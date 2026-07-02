@@ -32,7 +32,6 @@ from hive.models import (
     Question,
     Story,
     StoryCentrality,
-    StoryFidelity,
     StoryOracleStatus,
     StoryStatus,
     Task,

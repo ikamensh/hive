@@ -302,7 +302,15 @@ up. Resources generalize from `(runner, backend)` to a bundle.
   `GET /api/tasks/{id}/artifacts/{name}`, linked from issue and UI.
 - **Coverage view.** Project page surface: stories × last status (passing /
   failing / blocked / stale / untested), achieved fidelity, last-tested age, and
-  the linked issue. The "is the product actually working" glance.
+  the linked issue. The "is the product actually working" glance. CLI peer:
+  `hive stories`.
+- **Backlog health & the standing offer.** `story_health` (deterministic,
+  server-side, `testing_health` in the project payload) turns the backlog into
+  one verdict + offer: no stories → Hive offers to draft them autonomously from
+  the spec; weak stories (`story_quality_problem`: no user intent, no concrete
+  Given/When/Then examples) → Hive offers to rewrite them; untested/failing →
+  run an episode. The web toolbar and `hive stories` render it; the offered
+  action is always the existing refresh/episode trigger, one click/command away.
 - **Activity + Needs-you.** Episodes/findings appear in the unified activity feed
   with a `[testing]` chip; ambiguous acceptance → `Question`, missing capability →
   `HumanTodo` — reusing the existing attention queue.
@@ -332,7 +340,7 @@ up. Resources generalize from `(runner, backend)` to a bundle.
 - `Task.artifact_blobs: list[str]` + `GET /api/tasks/{id}/artifacts/{name}`.
 - Prompts: `prompts/test_refresh.md`, `test_sweep.md`, `test_reproduce.md`,
   `test_judge.md`.
-- Deterministic GitHub helpers in `hive/testing.py` (kept apart from store ops,
+- Deterministic GitHub helpers in `hive/_workstreams/testing.py` (kept apart from store ops,
   like `issues.py`): `file_or_update_finding_issue`, `close_story_issue`.
 - Routes (mirroring issues): `POST .../workstreams/{id}/test-refresh`,
   `POST .../workstreams/{id}/test-episodes`, `POST /test-episodes/{id}/cancel`.

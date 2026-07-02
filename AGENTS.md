@@ -18,10 +18,10 @@ hive/
   config/              how this install is configured (settings, machine-local file)
   persistence/         where data lives (store, storage selection, blobstore)
   llm/                 talking to models (adapters, prompts/, pricing, model_intel)
-  control/             the brain: supervisor, orchestrator, escalation
-  workstreams/         the work pipelines: issues, testing, critique, preflight
+  _control/            the brain: supervisor, orchestrator, escalation
+  _workstreams/        the work pipelines: issues, testing, critique, preflight
   runner/              the execution side: daemon, local, backends, *_results, machine
-  integrations/        external services: github_repos, specrepo, auth
+  _integrations/       external services: github_repos, specrepo, auth
 ```
 
 For what each module does and how the pipelines wire together, see `wiki/code-map.md`.
