@@ -23,6 +23,9 @@ from hive.models import (
     AgentConversation,
     ConversationStatus,
     DEFAULT_WORKSPACE_ID,
+    HumanTask,
+    HumanTaskStatus,
+    Machine,
     OrchestratorRun,
     Project,
     ProjectState,
@@ -41,6 +44,16 @@ log = logging.getLogger("hive._control.supervisor")
 RUNNER_OFFLINE_TASK_FAIL_S = 300.0
 LEASE_TTL_S = 60.0  # renewed every tick (15s); a dead leader is superseded within a minute
 PARALLEL_REPO_TASKS = (TaskKind.test_sweep, TaskKind.test_reproduce, TaskKind.test_judge)
+
+# Dark-machine escalation: a machine that heartbeated recently but has now been
+# silent past its availability class's threshold gets an operator todo (a dead
+# laptop runner once went unnoticed for 9 days). Laptops sleep for hours as a
+# matter of course; servers should never be quiet.
+MACHINE_DARK_AFTER_S = {"laptop": 24 * 3600.0, "server": 4 * 3600.0}
+MACHINE_DARK_DEFAULT_S = 24 * 3600.0
+# Silent longer than this = retired, not broken: no todo. Keeps graveyard rows
+# (old selftest machines, replaced hosts) from generating noise forever.
+MACHINE_RETIRED_AFTER_S = 7 * 24 * 3600.0
 
 
 def utc_day_start() -> float:
@@ -322,6 +335,46 @@ class Supervisor:
             workspace_id=self.workspace_id,
         )
 
+    def check_dark_machines(self) -> None:
+        """File an operator todo for a machine that recently went dark, and
+        close it again the moment the machine heartbeats. Runs every step —
+        `escalate` is idempotent by title, so an outage yields one todo per
+        machine per offline episode."""
+        now = time.time()
+        for machine in self.store.list(Machine, workspace_id=self.workspace_id):
+            title = f"Bring machine {machine.name} back online"
+            dark_for = now - machine.last_seen
+            dark_after = MACHINE_DARK_AFTER_S.get(machine.device_kind, MACHINE_DARK_DEFAULT_S)
+            if dark_for < dark_after:
+                for task in self.store.list(
+                    HumanTask, workspace_id=self.workspace_id, title=title, project_id=""
+                ):
+                    if task.status == HumanTaskStatus.open:
+                        task.status = HumanTaskStatus.done
+                        task.done_at = now
+                        self.store.put(task)
+            elif dark_for < MACHINE_RETIRED_AFTER_S:
+                since = datetime.datetime.fromtimestamp(
+                    machine.last_seen, datetime.UTC
+                ).strftime("%Y-%m-%d %H:%M UTC")
+                restart = (
+                    "- macOS: `launchctl kickstart -k gui/$(id -u)/com.hive.runner`, "
+                    "or re-run `bash deploy/install_mac_runner.sh` from the hive repo\n"
+                    "- Linux: `deploy/vm.sh status`, then `sudo systemctl restart hive-runner`"
+                )
+                escalate(
+                    self.store,
+                    title,
+                    instructions=(
+                        f"Machine `{machine.name}` ({machine.device_kind}, "
+                        f"{machine.machine_type or machine.os or 'unknown type'}) last "
+                        f"heartbeated {since}. Its runners are offline, so their backends "
+                        f"and capabilities are out of dispatch.\n\n{restart}\n\n"
+                        "This todo closes itself when the machine reconnects."
+                    ),
+                    workspace_id=self.workspace_id,
+                )
+
     def dispatch(self, project: Project) -> int:
         """Assign pending tasks to runners. Mutating tasks serialize per repo;
         test sweeps/confirmations are isolated by their own environments."""
@@ -482,6 +535,7 @@ class Supervisor:
 
     async def _step(self) -> None:
         self.fail_orphaned_tasks()
+        self.check_dark_machines()
         avail = self.available_backends()
         for project in self.store.list(Project, workspace_id=self.workspace_id):
             if project.archived or project.paused or not project.spec_repo.strip():
