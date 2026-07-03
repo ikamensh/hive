@@ -37,6 +37,9 @@ class Config:
     github_client_id: str = ""
     github_client_secret: str = ""
     public_url: str = "http://localhost:8000"
+    # URLs this chief tells runners it is reachable on (register response);
+    # runners persist them as reconnect candidates. Empty = public_url.
+    advertised_urls: str = ""
     auth_secret: str = ""
     workspace_id: str = DEFAULT_WORKSPACE_ID
     workspace_name: str = "ikamen"
@@ -81,6 +84,7 @@ class Config:
             github_client_id=os.environ.get("HIVE_GITHUB_CLIENT_ID", ""),
             github_client_secret=os.environ.get("HIVE_GITHUB_CLIENT_SECRET", ""),
             public_url=os.environ.get("HIVE_PUBLIC_URL", "http://localhost:8000"),
+            advertised_urls=os.environ.get("HIVE_ADVERTISED_URLS", ""),
             auth_secret=os.environ.get("HIVE_AUTH_SECRET", ""),
             workspace_id=os.environ.get("HIVE_WORKSPACE_ID", DEFAULT_WORKSPACE_ID),
             workspace_name=os.environ.get("HIVE_WORKSPACE_NAME", "ikamen"),

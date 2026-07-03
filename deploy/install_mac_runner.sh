@@ -14,11 +14,12 @@
 set -euo pipefail
 
 LABEL="com.hive.runner"
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+SERVICE_REPO="${HIVE_SERVICE_REPO:-$HOME/.local/share/hive-runner}"
 ENV_FILE="$HOME/.config/hive/runner.env"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG_DIR="$HOME/Library/Logs/hive"
 UV="$(command -v uv || echo "$HOME/.local/bin/uv")"
+GIT_REMOTE="github.com/ikamensh/hive.git"
 
 # Defaults match the working laptop_runner.sh (sslip.io avoids any DNS dependency).
 PROJECT="${HIVE_GCP_PROJECT:-hive-ikamen}"
@@ -26,18 +27,19 @@ ACCOUNT="${HIVE_GCLOUD_ACCOUNT:-ikamenshchikov@gmail.com}"
 HIVE_URL="${HIVE_URL:-https://hive.34-62-218-54.sslip.io}"
 RUNNER_NAME="${HIVE_RUNNER_NAME:-$(hostname -s)}"
 
-echo "-> repo:        $REPO"
-echo "-> runner name: $RUNNER_NAME  (stable name => stable machine id on the chief)"
-echo "-> chief:       $HIVE_URL"
+echo "-> service repo: $SERVICE_REPO  (dedicated clone; self-updates from origin/main)"
+echo "-> runner name:  $RUNNER_NAME  (stable name => stable machine id on the chief)"
+echo "-> chief seed:   $HIVE_URL  (more candidates learned from the chief itself)"
 
 # --- credentials, materialized once (no gcloud dependency at runtime) ---------
 mkdir -p "$(dirname "$ENV_FILE")" "$LOG_DIR"
-if [ -n "${HIVE_RUNNER_TOKEN:-}" ] && [ -n "${HIVE_BASIC_AUTH:-}" ]; then
-  TOKEN="$HIVE_RUNNER_TOKEN"; BASIC_AUTH="$HIVE_BASIC_AUTH"
+if [ -n "${HIVE_RUNNER_TOKEN:-}" ] && [ -n "${HIVE_BASIC_AUTH:-}" ] && [ -n "${HIVE_GH_TOKEN:-}" ]; then
+  TOKEN="$HIVE_RUNNER_TOKEN"; BASIC_AUTH="$HIVE_BASIC_AUTH"; GH_TOKEN="$HIVE_GH_TOKEN"
 else
-  echo "-> fetching runner token + web password from GCP Secret Manager ($PROJECT)"
+  echo "-> fetching runner + gh tokens and web password from GCP Secret Manager ($PROJECT)"
   TOKEN="$(gcloud secrets versions access latest --secret=hive-runner-token --project="$PROJECT" --account="$ACCOUNT")"
   WEB_PASS="$(gcloud secrets versions access latest --secret=hive-web-password --project="$PROJECT" --account="$ACCOUNT")"
+  GH_TOKEN="$(gcloud secrets versions access latest --secret=hive-gh-token --project="$PROJECT" --account="$ACCOUNT")"
   BASIC_AUTH="ilya:$WEB_PASS"
 fi
 
@@ -47,9 +49,28 @@ HIVE_URL=$HIVE_URL
 HIVE_BASIC_AUTH=$BASIC_AUTH
 HIVE_RUNNER_TOKEN=$TOKEN
 HIVE_RUNNER_NAME=$RUNNER_NAME
+HIVE_RUNNER_SELF_UPDATE=1
 EOF
 umask 022
 echo "-> wrote $ENV_FILE (chmod 600)"
+
+# --- dedicated service clone ---------------------------------------------------
+# The service never runs from a dev checkout: a tree you rebase, move, or
+# refactor takes the runner down with it (that outage happened). The clone's
+# remote embeds the GH token so unattended fetch/reset works; the directory is
+# user-private like the env file.
+AUTH_REMOTE="https://x-access-token:${GH_TOKEN}@${GIT_REMOTE}"
+if [ -d "$SERVICE_REPO/.git" ]; then
+  git -C "$SERVICE_REPO" remote set-url origin "$AUTH_REMOTE"
+  git -C "$SERVICE_REPO" fetch --quiet origin main
+  git -C "$SERVICE_REPO" reset --hard --quiet FETCH_HEAD
+else
+  mkdir -p "$(dirname "$SERVICE_REPO")"
+  git clone --quiet "$AUTH_REMOTE" "$SERVICE_REPO"
+fi
+chmod 700 "$SERVICE_REPO"
+"$UV" sync --directory "$SERVICE_REPO" --frozen --no-dev
+echo "-> service clone at $(git -C "$SERVICE_REPO" rev-parse --short HEAD)"
 
 # --- the LaunchAgent ----------------------------------------------------------
 mkdir -p "$(dirname "$PLIST")"
@@ -62,9 +83,9 @@ cat > "$PLIST" <<EOF
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>$REPO/deploy/mac_runner.sh</string>
+    <string>$SERVICE_REPO/deploy/mac_runner.sh</string>
   </array>
-  <key>WorkingDirectory</key><string>$REPO</string>
+  <key>WorkingDirectory</key><string>$SERVICE_REPO</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>$(dirname "$UV"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>

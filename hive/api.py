@@ -115,6 +115,7 @@ from hive._control.overview import build_overview
 from hive._control.supervisor import Supervisor
 from hive.version import get_version, version_payload
 from hive.runner import registration
+from hive.runner._chief_roster import parse_urls
 from hive.runner.registration import RunnerRegister
 from hive.runner._task_results import (
     TaskResult,
@@ -1564,7 +1565,12 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @app.post("/api/runners/register")
     def register_runner(body: RunnerRegister, workspace_id: str = Depends(runner_auth)):
-        return registration.register(store, body, workspace_id)
+        payload = registration.register(store, body, workspace_id)
+        # Advertise this chief's reachable URLs: runners persist them as
+        # reconnect candidates, so relocating the chief only requires the new
+        # instance to advertise itself (see hive/runner/_chief_roster.py).
+        payload["chief_urls"] = parse_urls(config.advertised_urls or config.public_url)
+        return payload
 
     @app.post("/api/runners/{runner_id}/poll")
     async def poll(runner_id: str, workspace_id: str = Depends(runner_auth)):

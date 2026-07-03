@@ -427,3 +427,29 @@ def test_poll_persists_last_seen_only_when_stale():
     assert client.post(f"/api/runners/{rid}/poll", headers=H).json()["task"]
     assert store.runner_puts == 1
     assert time.time() - store.get(Runner, rid).last_seen < 5
+
+
+def test_register_response_advertises_chief_urls():
+    """The register response is how runners learn where the chief lives:
+    HIVE_ADVERTISED_URLS when set, else the chief's public_url. Runners
+    persist these as reconnect candidates (see hive/runner/_chief_roster.py),
+    so a relocated chief only has to advertise itself."""
+    store = MemoryStore()
+    config = Config(gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
+                    orch_model="", runner_token="t", data_dir=None,
+                    advertised_urls="https://hive.example, https://hive-alt.example/")
+    from hive.api import create_app
+
+    client = TestClient(create_app(store, Supervisor(store, lambda p, e: None), config))
+    data = client.post("/api/runners/register",
+                       json={"name": "r", "backends": ["cursor"]}, headers=H).json()
+    assert data["chief_urls"] == ["https://hive.example", "https://hive-alt.example"]
+
+    # Unset: falls back to the configured public URL.
+    config_default = Config(gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
+                            orch_model="", runner_token="t", data_dir=None)
+    client = TestClient(create_app(MemoryStore(), Supervisor(MemoryStore(), lambda p, e: None),
+                                   config_default))
+    data = client.post("/api/runners/register",
+                       json={"name": "r", "backends": ["cursor"]}, headers=H).json()
+    assert data["chief_urls"] == [config_default.public_url]

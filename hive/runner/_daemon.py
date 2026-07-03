@@ -33,6 +33,7 @@ from hive.runner._backends import (
     make_session,
 )
 from hive.runner._agent_results import call_agent, result_spec_for_task
+from hive.runner._chief_roster import ChiefRoster, parse_urls
 from hive.runner._machine import machine_metadata
 from hive.models import DEFAULT_WORKSPACE_ID
 
@@ -51,6 +52,18 @@ RUNNER_NAME = os.environ.get("HIVE_RUNNER_NAME", socket.gethostname())
 WORKDIR = Path(os.environ.get("HIVE_RUNNER_WORKDIR", "~/hive-work")).expanduser()
 TASK_TIMEOUT_S = float(os.environ.get("HIVE_TASK_TIMEOUT_S", "3600"))
 CANCEL_POLL_S = 5.0  # how often a running task checks for an operator cancel request
+# Chief discovery: HIVE_URL may list several candidates (comma-separated); more
+# are learned from the chief's register response and persisted here.
+CHIEF_STATE_PATH = (
+    Path(os.environ.get("HIVE_RUNNER_STATE_DIR", "~/.config/hive")).expanduser() / "chiefs.json"
+)
+RECONNECT_AFTER_FAILURES = 3  # consecutive errors before re-resolving across the roster
+# Self-update (set by install_mac_runner.sh for dedicated service clones, never
+# for dev checkouts or the VM, where push.sh owns the tree): between tasks the
+# daemon exits when origin/main is ahead; the service wrapper pulls + respawns.
+SELF_UPDATE = os.environ.get("HIVE_RUNNER_SELF_UPDATE", "") == "1"
+UPDATE_CHECK_INTERVAL_S = 900.0
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 log = logging.getLogger("hive.runner._daemon")
 
@@ -743,6 +756,24 @@ def validate_probe_result(
     return text, is_error
 
 
+def update_available(repo_root: Path) -> bool:
+    """True when origin/main has commits this checkout lacks. Any git or
+    network trouble reads as 'no update' — never take a working runner down
+    over a fetch hiccup."""
+    try:
+        subprocess.run(
+            ["git", "fetch", "--quiet", "origin", "main"],
+            cwd=repo_root, check=True, capture_output=True, timeout=60,
+        )
+        revs = subprocess.run(
+            ["git", "rev-parse", "HEAD", "FETCH_HEAD"],
+            cwd=repo_root, check=True, capture_output=True, text=True, timeout=10,
+        ).stdout.split()
+        return len(revs) == 2 and revs[0] != revs[1]
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
 def main(argv: list[str] | None = None) -> None:
     if argv is None:
         argv = sys.argv[1:]
@@ -770,12 +801,12 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     headers = {"X-Hive-Token": RUNNER_TOKEN, "X-Hive-Workspace": WORKSPACE_ID}
     auth = tuple(HIVE_BASIC_AUTH.split(":", 1)) if HIVE_BASIC_AUTH else None
-    client = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=40.0, auth=auth)
+    roster = ChiefRoster(parse_urls(HIVE_URL), CHIEF_STATE_PATH)
 
     def register(client: httpx.Client, *, boot: bool = False) -> tuple[str, list[str]]:
         backends, discoveries = discovery_payload()
         capabilities = detect_capabilities()
-        runner_id = client.post(
+        data = client.post(
             "/api/runners/register",
             json={
                 "name": RUNNER_NAME,
@@ -792,34 +823,83 @@ def main(argv: list[str] | None = None) -> None:
                 "auto_probe": True,
                 "checkouts": collect_checkouts(),
             },
-        ).raise_for_status().json()["runner_id"]
-        return runner_id, backends
+        ).raise_for_status().json()
+        roster.merge_advertised(data.get("chief_urls", []))
+        return data["runner_id"], backends
 
-    runner_id, backends = register(client, boot=True)
-    if backends:
-        log.info("registered as %s (%s) with backends %s", RUNNER_NAME, runner_id, backends)
-    else:
-        log.warning("registered as %s (%s) with no supported agents on PATH", RUNNER_NAME, runner_id)
+    def connect(*, boot: bool = False) -> tuple[httpx.Client, str, list[str]]:
+        """Try roster candidates in order until a chief accepts registration.
+        The leader lease guarantees at most one live chief, so the first
+        responder is the right one."""
+        last_error: Exception | None = None
+        for url in roster.candidates():
+            candidate = httpx.Client(base_url=url, headers=headers, timeout=40.0, auth=auth)
+            try:
+                runner_id, backends = register(candidate, boot=boot)
+            except (httpx.HTTPError, OSError) as exc:
+                candidate.close()
+                last_error = exc
+                continue
+            global HIVE_URL
+            HIVE_URL = url  # task-execution and heartbeat clients follow the winner
+            roster.mark_success(url)
+            if backends:
+                log.info(
+                    "registered as %s (%s) at %s with backends %s",
+                    RUNNER_NAME, runner_id, url, backends,
+                )
+            else:
+                log.warning(
+                    "registered as %s (%s) at %s with no supported agents on PATH",
+                    RUNNER_NAME, runner_id, url,
+                )
+            return candidate, runner_id, backends
+        raise ConnectionError(
+            f"no chief reachable among {roster.candidates()}: {last_error}"
+        )
+
+    while True:
+        try:
+            client, runner_id, backends = connect(boot=True)
+            break
+        except OSError as exc:
+            log.warning("%s — retrying in 10s", exc)
+            time.sleep(10)
 
     def heartbeat() -> None:
         # Keeps last_seen fresh while a long task blocks the main loop;
         # otherwise the chief declares us offline and orphans the task.
-        hb = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=15.0, auth=auth)
+        # A fresh client each beat follows HIVE_URL when the chief moves.
         while True:
             time.sleep(30)
             try:
-                register(hb)
-            except httpx.HTTPError:
+                with httpx.Client(
+                    base_url=HIVE_URL, headers=headers, timeout=15.0, auth=auth
+                ) as hb:
+                    register(hb)
+            except (httpx.HTTPError, OSError):
                 pass
 
     threading.Thread(target=heartbeat, daemon=True).start()
 
+    failures = 0
+    last_update_check = time.monotonic()
     while True:
         try:
+            if SELF_UPDATE and time.monotonic() - last_update_check > UPDATE_CHECK_INTERVAL_S:
+                last_update_check = time.monotonic()
+                if update_available(REPO_ROOT):
+                    # Between tasks by construction: nothing is in flight here.
+                    log.info("origin/main moved — exiting so the service wrapper updates us")
+                    return
+            if client is None:
+                client, runner_id, backends = connect()
+                failures = 0
             response = client.post(f"/api/runners/{runner_id}/poll")
             if response.status_code == 404:
                 runner_id, backends = register(client)
                 continue
+            failures = 0
             task = response.raise_for_status().json().get("task")
             if not task:
                 continue
@@ -828,7 +908,11 @@ def main(argv: list[str] | None = None) -> None:
             log.info("task %s done (error=%s)", task["id"], result.get("is_error"))
             client.post(f"/api/tasks/{task['id']}/result", json=result)
         except (httpx.HTTPError, OSError) as exc:
+            failures += 1
             log.warning("transient error: %s — retrying in 10s", exc)
+            if client is not None and failures >= RECONNECT_AFTER_FAILURES:
+                client.close()
+                client = None  # next iteration re-resolves across the roster
             time.sleep(10)
 
 
