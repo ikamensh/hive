@@ -126,7 +126,7 @@ hive set <project_id> --spec-repo https://github.com/me/spec.git --member-repos 
 hive start <project_id> --mission "ship the first useful slice" --iteration-goal "..."
 hive projects                      # list with live states
 hive project <project_id>          # workstreams, tasks, questions
-hive show [machines|agents|autonomy]  # inspect subsystems: fleet, launchable agents, autonomous jobs
+hive show [machines|agents|subscriptions|autonomy]  # fleet, launchable agents, license gaps, autonomous jobs
 hive answer <question_id> "yes, add B"
 hive dismiss <question_id>         # discard a stale question without answering
 hive iterate <project_id> "next goal: ..."

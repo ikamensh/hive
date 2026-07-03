@@ -114,7 +114,7 @@ def test_cli_drives_full_loop(harness, tmp_path):
     # `hive show` is the subsystem introspection view; a part argument selects
     # one section, no argument returns all of them.
     full = cli(client, "show")
-    assert set(full) == {"machines", "agents", "autonomy"}
+    assert set(full) == {"machines", "agents", "subscriptions", "autonomy"}
     assert cli(client, "show", "agents") == full["agents"]
     assert full["agents"]["launchable_now"] >= 1  # the registered fake runners
     assert any(j["job"] == "dark_machine_watch" for j in full["autonomy"])
@@ -163,9 +163,18 @@ def test_format_show_renders_readable_summary():
                 {"backend": "claude", "machine": "hive-vm", "status": "failed", "available": False,
                  "note": "Not logged in · Please run /login"},
             ],
-            "licenses": [{"provider": "claude", "plan": "Claude Max", "licensing_mode": "machine_bound",
-                          "machines": []}],
-            "license_candidates": [{"provider": "codex", "evidence": "usable on hive-vm"}],
+        },
+        "subscriptions": {
+            "subscriptions": [
+                {"provider": "claude", "plan": "Claude Max", "licensing_mode": "machine_bound",
+                 "notes": "", "serving": [],
+                 "login_needed": [{"machine": "hive-vm", "note": "Not logged in"}]},
+                {"provider": "cursor", "plan": "", "licensing_mode": "portable",
+                 "notes": "", "serving": ["raven"],
+                 "login_needed": [{"machine": "hive-vm", "note": "never probed"}]},
+            ],
+            "unregistered": [{"provider": "codex", "evidence": "usable on hive-vm"}],
+            "unowned": ["gemini-cli"],
         },
         "autonomy": [
             {"job": "ci_check", "project_id": "p1", "project_name": "hive", "interval_s": 300.0,
@@ -177,20 +186,24 @@ def test_format_show_renders_readable_summary():
 
     text = format_show(payload, None)
     for fact in (
-        "MACHINES", "AGENTS — 1 of 2 launchable now", "AUTONOMY",
+        "MACHINES", "AGENTS — 1 of 2 launchable now", "SUBSCRIPTIONS", "AUTONOMY",
         "[chief]", "DARK",
         "Not logged in · Please run /login",
-        "no machine can serve it",
+        "serving: NOWHERE",  # claude sub with no machine able to serve it
+        "hive login claude --machine hive-vm",  # machine_bound gap -> the one-command fix
+        "provide the key/login on hive-vm (portable)",  # portable gap -> key hint, not SSH login
         "usable on hive-vm",
+        "unowned — no subscription, usable nowhere: gemini-cli",
         "every 5m via codex on hive-vm: poll CI",
         "idle — no daily budget",
     ):
         assert fact in text
-    assert "{" not in text and '"' not in text  # readable, not JSON
+    assert "{" not in text  # readable, not JSON
 
     # a selected part renders alone
     assert format_show(payload["machines"], "machines").startswith("MACHINES")
     assert "AUTONOMY" not in format_show(payload["agents"], "agents")
+    assert "hive login claude" in format_show(payload["subscriptions"], "subscriptions")
 
 
 def test_login_ssh_argv_recipes():
@@ -206,6 +219,12 @@ def test_login_ssh_argv_recipes():
         assert argv[-1].startswith("sudo -i ")
     codex = login_ssh_argv("codex", "hive-vm", {})
     assert "1455:localhost:1455" in codex  # OAuth callback rides the tunnel
+    # regression: every recipe must run a dedicated login command, never launch
+    # the agent's full interactive CLI (bare `claude` greeted the operator with
+    # a workspace-trust dialog instead of the login flow)
+    for backend in LOGIN_RECIPES:
+        assert LOGIN_RECIPES[backend]["remote"] != f"sudo -i {backend}"
+        assert "login" in LOGIN_RECIPES[backend]["remote"]
     custom = login_ssh_argv("claude", "other-vm", {"HIVE_VM_ZONE": "eu-x", "HIVE_VM_PROJECT": "p1"})
     assert "--zone=eu-x" in custom and "--project=p1" in custom and custom[3] == "other-vm"
 

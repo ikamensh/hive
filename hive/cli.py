@@ -208,7 +208,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "part",
         nargs="?",
-        choices=["machines", "agents", "autonomy"],
+        choices=["machines", "agents", "subscriptions", "autonomy"],
         help="one subsystem (default: all)",
     )
     p.add_argument("--json", action="store_true", help="raw payload instead of the readable summary")
@@ -344,12 +344,12 @@ def _csv(value: str) -> list[str]:
 # forwarded through the tunnel.
 LOGIN_RECIPES: dict[str, dict] = {
     "claude": {
-        "remote": "sudo -i claude",
+        "remote": "sudo -i claude auth login",
         "forwards": (),
         "coach": (
-            "claude opens its UI on the VM. Run /login, pick the subscription "
-            "account, open the printed URL in your LOCAL browser, authorize, "
-            "paste the code back into the terminal, then exit claude."
+            "claude prints a login URL. Open it in your LOCAL browser, pick the "
+            "subscription account, authorize, then paste the code back into the "
+            "terminal."
         ),
     },
     "codex": {
@@ -417,16 +417,30 @@ def _fmt_agents(data: dict) -> list[str]:
     for a in data["agents"]:
         note = f" — {a['note']}" if a["note"] else ""
         out.append(f"  {a['status']:<9} {a['backend']:<11} @ {a['machine']}{note}")
-    if data["licenses"]:
-        out.append("licenses")
-        for lic in data["licenses"]:
-            where = ", ".join(m["machine"] for m in lic["machines"]) or "no machine can serve it"
-            plan = f" {lic['plan']}" if lic["plan"] else ""
-            out.append(f"  {lic['provider']:<11} ({lic['licensing_mode']}){plan} -> {where}")
-    if data["license_candidates"]:
-        out.append("unregistered licenses (hive saw these work; `hive sub-add <provider>` to record)")
-        for c in data["license_candidates"]:
+    return out
+
+
+def _fmt_subscriptions(data: dict) -> list[str]:
+    out = ["SUBSCRIPTIONS — what you own vs where it actually works"]
+    for s in data["subscriptions"]:
+        plan = f" {s['plan']}" if s["plan"] else ""
+        serving = ", ".join(s["serving"]) or "NOWHERE"
+        out.append(f"  {s['provider']:<11} ({s['licensing_mode']}){plan} — serving: {serving}")
+        for gap in s["login_needed"]:
+            fix = (
+                f"hive login {s['provider']} --machine {gap['machine']}"
+                if s["provider"] in LOGIN_RECIPES and s["licensing_mode"] == "machine_bound"
+                else f"provide the key/login on {gap['machine']} (portable)"
+            )
+            out.append(f"      missing on {gap['machine']}: {gap['note']}  ->  {fix}")
+    if not data["subscriptions"]:
+        out.append("  (none recorded)")
+    if data["unregistered"]:
+        out.append("unregistered — worked in a probe but not recorded (`hive sub-add <provider>`)")
+        for c in data["unregistered"]:
             out.append(f"  {c['provider']:<11} {c['evidence']}")
+    if data["unowned"]:
+        out.append(f"unowned — no subscription, usable nowhere: {', '.join(data['unowned'])}")
     return out
 
 
@@ -452,12 +466,16 @@ def format_show(payload, part: str | None) -> str:
         return "\n".join(_fmt_machines(payload))
     if part == "agents":
         return "\n".join(_fmt_agents(payload))
+    if part == "subscriptions":
+        return "\n".join(_fmt_subscriptions(payload))
     if part == "autonomy":
         return "\n".join(_fmt_autonomy(payload))
     return "\n".join(
         _fmt_machines(payload["machines"])
         + [""]
         + _fmt_agents(payload["agents"])
+        + [""]
+        + _fmt_subscriptions(payload["subscriptions"])
         + [""]
         + _fmt_autonomy(payload["autonomy"])
     )

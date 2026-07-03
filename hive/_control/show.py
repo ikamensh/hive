@@ -45,7 +45,7 @@ from hive.models import (
     Runner,
     Subscription,
 )
-from hive.runner._backends import backend_licensing
+from hive.runner._backends import BACKEND_NAMES, backend_licensing
 
 
 _ERRORISH = ("error", "fail", "not logged", "denied", "unauthorized", "authentication", "quota")
@@ -105,12 +105,10 @@ def machines_view(groups: list[MachineGroup], chief_machine_name: str = "") -> l
     return rows
 
 
-def agents_view(groups: list[MachineGroup], subscriptions: list[Subscription]) -> dict:
-    """All agents we can launch and on what machines they are, plus the
-    licenses (subscriptions) behind that capacity."""
+def agents_view(groups: list[MachineGroup]) -> dict:
+    """All agents we can launch and on what machines they are."""
     now = time.time()
     agents = []
-    usable_on: dict[str, list[dict]] = {}  # backend -> machines where proven usable
     for g in groups:
         for res in g.resources:
             runner = g.runner_for(res)
@@ -142,30 +140,64 @@ def agents_view(groups: list[MachineGroup], subscriptions: list[Subscription]) -
                     "resource_id": res.id,
                 }
             )
-            if res.usability_status == ResourceUsability.usable:
-                usable_on.setdefault(res.backend, []).append(
-                    {"machine": g.machine.name, "available": available}
-                )
-
-    all_runners = [r for g in groups for r in g.runners]
-    all_resources = [res for g in groups for res in g.resources]
-    licenses = [
-        {
-            "provider": s.provider,
-            "plan": s.plan,
-            "licensing_mode": s.licensing_mode,
-            "notes": s.notes,
-            "machines": usable_on.get(s.provider, []),
-        }
-        for s in subscriptions
-    ]
     return {
         "agents": sorted(agents, key=lambda a: (not a["available"], a["machine"], a["backend"])),
         "launchable_now": sum(1 for a in agents if a["available"]),
-        "licenses": licenses,
-        "license_candidates": subscription_candidates(
+    }
+
+
+def subscriptions_view(groups: list[MachineGroup], subscriptions: list[Subscription]) -> dict:
+    """Subscriptions as expectations, diffed against reality.
+
+    A subscription says "I own access to this provider"; resources say where
+    that access actually works. The diff is the operator's worklist: machines
+    where the CLI exists but the login is missing (`login_needed`), proven
+    capacity nobody recorded (`unregistered`), and hive-supported backends the
+    org holds no access to at all (`unowned`)."""
+    rows = []
+    for s in subscriptions:
+        mode = s.licensing_mode
+        if mode == "unknown":
+            mode = backend_licensing(s.provider)  # provider-rulebook default
+        serving: dict[str, None] = {}
+        login_needed: dict[str, str] = {}
+        for g in groups:
+            for res in g.resources:
+                if res.backend != s.provider:
+                    continue
+                if res.usability_status == ResourceUsability.usable and res.enabled:
+                    serving[g.machine.name] = None
+                    login_needed.pop(g.machine.name, None)
+                elif res.enabled and g.machine.name not in serving:
+                    note = _first_line(res.last_probe_text) or "never probed"
+                    login_needed[g.machine.name] = note
+        rows.append(
+            {
+                "provider": s.provider,
+                "plan": s.plan,
+                "licensing_mode": mode,
+                "notes": s.notes,
+                "serving": list(serving),
+                "login_needed": [
+                    {"machine": name, "note": note} for name, note in login_needed.items()
+                ],
+            }
+        )
+
+    all_runners = [r for g in groups for r in g.runners]
+    all_resources = [res for g in groups for res in g.resources]
+    have = {s.provider for s in subscriptions}
+    usable_anywhere = {
+        res.backend
+        for res in all_resources
+        if res.usability_status == ResourceUsability.usable
+    }
+    return {
+        "subscriptions": rows,
+        "unregistered": subscription_candidates(
             subscriptions, all_resources, all_runners, [g.machine for g in groups]
         ),
+        "unowned": sorted(set(BACKEND_NAMES) - have - usable_anywhere),
     }
 
 
@@ -301,6 +333,9 @@ def build_show(
     )
     return {
         "machines": machines_view(groups, chief_machine_name=config.machine_name),
-        "agents": agents_view(groups, store.list(Subscription, workspace_id=workspace_id)),
+        "agents": agents_view(groups),
+        "subscriptions": subscriptions_view(
+            groups, store.list(Subscription, workspace_id=workspace_id)
+        ),
         "autonomy": autonomy_view(store, workspace_id, groups, spend_today, config),
     }

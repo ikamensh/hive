@@ -70,7 +70,10 @@ def test_empty_store_has_every_section():
     assert view["machines"] == []
     assert view["agents"]["agents"] == []
     assert view["agents"]["launchable_now"] == 0
-    assert view["agents"]["licenses"] == []
+    assert view["subscriptions"]["subscriptions"] == []
+    assert view["subscriptions"]["unregistered"] == []
+    # an empty org owns access to nothing hive supports
+    assert set(view["subscriptions"]["unowned"]) == {"claude", "codex", "cursor", "gemini-cli"}
     [watch] = view["autonomy"]
     assert watch["job"] == "dark_machine_watch"
     assert watch["action_now"] == "" and watch["reason"]
@@ -174,26 +177,61 @@ def test_machines_view_marks_where_the_chief_lives():
     assert not by_name["raven"]["hosts_chief"]
 
 
-def test_licenses_map_to_machines_where_provider_proved_usable():
+def test_subscriptions_diff_expectation_against_reality():
+    """A subscription is an expectation; the view diffs it against resources:
+    machines where it serves, machines where the CLI exists but the login is
+    missing (with the actionable probe note), and an unknown licensing mode
+    resolved from the provider rulebook."""
     store = MemoryStore()
-    machine, _, _ = _usable_agent(store, backend="codex")
+    machine, runner, _ = _usable_agent(store, backend="codex", machine_name="laptop")
+    vm = store.put(Machine(workspace_id=WS, name="vm", device_kind="server"))
+    vm_runner = store.put(Runner(workspace_id=WS, machine_id=vm.id, name="vm", backends=["codex"]))
+    store.put(Resource(
+        workspace_id=WS, machine_id=vm.id, runner_id=vm_runner.id, backend="codex",
+        usability_status=ResourceUsability.failed,
+        last_probe_text="codex: Authentication failed",
+    ))
     store.put(Subscription(workspace_id=WS, provider="codex", plan="ChatGPT Plus"))
     store.put(Subscription(workspace_id=WS, provider="claude", plan="Claude Max"))
 
-    agents = _show(store)["agents"]
-    licenses = {license_row["provider"]: license_row for license_row in agents["licenses"]}
-    assert [m["machine"] for m in licenses["codex"]["machines"]] == [machine.name]
-    assert licenses["claude"]["machines"] == []  # license present, no machine can serve it
-    assert agents["license_candidates"] == []  # every usable backend already registered
+    view = _show(store)["subscriptions"]
+    subs = {s["provider"]: s for s in view["subscriptions"]}
+
+    codex = subs["codex"]
+    assert codex["serving"] == ["laptop"]
+    assert codex["login_needed"] == [{"machine": "vm", "note": "codex: Authentication failed"}]
+    assert codex["licensing_mode"] == "machine_bound"  # rulebook resolves 'unknown'
+
+    claude = subs["claude"]
+    assert claude["serving"] == [] and claude["login_needed"] == []  # no machine has the CLI
+
+    assert view["unregistered"] == []  # every usable backend already recorded
+    assert "gemini-cli" in view["unowned"]  # no sub, usable nowhere
+    assert "codex" not in view["unowned"]
+
+
+def test_parked_resource_is_not_a_login_gap():
+    """A deliberately disabled resource must not nag as `login_needed` — parked
+    means the operator said no."""
+    store = MemoryStore()
+    machine, runner, resource = _usable_agent(store, backend="claude")
+    resource.usability_status = ResourceUsability.failed
+    resource.enabled = False
+    resource.disabled_reason = "parked"
+    store.put(resource)
+    store.put(Subscription(workspace_id=WS, provider="claude"))
+
+    [sub] = _show(store)["subscriptions"]["subscriptions"]
+    assert sub["serving"] == [] and sub["login_needed"] == []
 
 
 def test_usable_backend_without_subscription_becomes_license_candidate():
     store = MemoryStore()
     _usable_agent(store, backend="cursor")
-    candidates = _show(store)["agents"]["license_candidates"]
-    assert [c["provider"] for c in candidates] == ["cursor"]
+    view = _show(store)["subscriptions"]
+    assert [c["provider"] for c in view["unregistered"]] == ["cursor"]
     # evidence names the machine (user-facing identity), not the runner process
-    assert candidates[0]["evidence"] == "usable on mini"
+    assert view["unregistered"][0]["evidence"] == "usable on mini"
 
 
 def test_autonomy_lists_jobs_with_period_action_and_candidate_machines():

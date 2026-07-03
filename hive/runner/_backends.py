@@ -145,7 +145,7 @@ REGISTRY: dict[str, Backend] = {
             preflight=("claude", "--version"),
             login_hint=(
                 "Run `hive login claude --machine <machine>` from your desk "
-                "(SSH channel, OAuth in your local browser), or `claude login` on the runner."
+                "(SSH channel, OAuth in your local browser), or `claude auth login` on the runner."
             ),
             licensing="machine_bound",  # Claude Max login is bound to the machine that authed
         ),
