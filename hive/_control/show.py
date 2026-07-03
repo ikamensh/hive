@@ -48,8 +48,16 @@ from hive.models import (
 from hive.runner._backends import backend_licensing
 
 
-def machines_view(groups: list[MachineGroup]) -> list[dict]:
-    """Which machines are discoverable and where they live."""
+def _first_line(text: str) -> str:
+    return next((line.strip() for line in text.splitlines() if line.strip()), "")
+
+
+def machines_view(groups: list[MachineGroup], chief_machine_name: str = "") -> list[dict]:
+    """Which machines are discoverable and where they live.
+
+    `chief_machine_name` is the chief process's own machine (from its config);
+    runner registration owns the Machine rows and stamps them `kind=runner`,
+    so without this flag the view could not tell you where the chief lives."""
     now = time.time()
     rows = []
     for g in groups:
@@ -61,6 +69,8 @@ def machines_view(groups: list[MachineGroup]) -> list[dict]:
                 "id": m.id,
                 "name": m.name,
                 "hostname": m.hostname,
+                "hosts_chief": bool(chief_machine_name)
+                and chief_machine_name in (m.name, m.hostname),
                 "machine_type": m.machine_type,
                 "os": m.os,
                 "arch": m.arch,
@@ -88,23 +98,37 @@ def machines_view(groups: list[MachineGroup]) -> list[dict]:
 def agents_view(groups: list[MachineGroup], subscriptions: list[Subscription]) -> dict:
     """All agents we can launch and on what machines they are, plus the
     licenses (subscriptions) behind that capacity."""
+    now = time.time()
     agents = []
     usable_on: dict[str, list[dict]] = {}  # backend -> machines where proven usable
     for g in groups:
         for res in g.resources:
             runner = g.runner_for(res)
             available = resource_available(res, runner)
+            status = agent_status(res, runner)
+            # The one line that tells the operator what to do about a
+            # non-ready agent: the probe failure (usually a login ask) or the
+            # quota message that started an active cooldown.
+            note = ""
+            if status == "failed":
+                note = _first_line(res.last_probe_text)
+            elif status == "cooldown":
+                note = _first_line(res.last_exhaustion_text)
+            elif status == "disabled":
+                note = res.disabled_reason
             agents.append(
                 {
                     "backend": res.backend,
                     "machine": g.machine.name,
                     "machine_id": g.machine.id,
                     "machine_online": g.online,
-                    "status": agent_status(res, runner),
+                    "status": status,
                     "available": available,
+                    "note": note,
                     "licensing": backend_licensing(res.backend),
                     "cli_version": res.cli_version,
-                    "cooldown_until": res.cooldown_until,
+                    # An expired cooldown is history, not state — report 0.
+                    "cooldown_until": res.cooldown_until if res.cooldown_until > now else 0.0,
                     "resource_id": res.id,
                 }
             )
@@ -264,7 +288,7 @@ def build_show(
         store.list(Resource, workspace_id=workspace_id),
     )
     return {
-        "machines": machines_view(groups),
+        "machines": machines_view(groups, chief_machine_name=config.machine_name),
         "agents": agents_view(groups, store.list(Subscription, workspace_id=workspace_id)),
         "autonomy": autonomy_view(store, workspace_id, groups, spend_today, config),
     }

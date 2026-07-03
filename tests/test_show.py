@@ -113,6 +113,64 @@ def test_offline_machine_goes_dark_and_out_of_dispatch():
     assert machine.name in watch["machines"] and machine.name in watch["action_now"]
 
 
+def test_non_ready_agents_explain_themselves():
+    """Regression (live fleet audit): the store knew *why* agents were not
+    dispatchable ('Not logged in · Please run /login', quota exhaustion) but
+    the view hid it. A non-ready agent must carry the one line the operator
+    can act on; an expired cooldown is history and must not surface at all."""
+    store = MemoryStore()
+    machine, runner, _ = _usable_agent(store, backend="codex")
+    runner.backends = ["codex", "claude", "cursor"]
+    store.put(runner)
+    store.put(Resource(
+        workspace_id=WS, machine_id=machine.id, runner_id=runner.id, backend="claude",
+        usability_status=ResourceUsability.failed,
+        last_probe_text="Not logged in · Please run /login\n\nHIVE PROBE FAILED",
+    ))
+    store.put(Resource(
+        workspace_id=WS, machine_id=machine.id, runner_id=runner.id, backend="cursor",
+        usability_status=ResourceUsability.usable,
+        cooldown_until=time.time() + 3600,
+        last_exhaustion_text="quota exhausted until tomorrow",
+    ))
+
+    agents = {a["backend"]: a for a in _show(store)["agents"]["agents"]}
+    assert agents["claude"]["status"] == "failed"
+    assert agents["claude"]["note"] == "Not logged in · Please run /login"
+    assert agents["cursor"]["status"] == "cooldown"
+    assert agents["cursor"]["note"] == "quota exhausted until tomorrow"
+    assert agents["cursor"]["cooldown_until"] > 0  # active cooldown stays visible
+    assert agents["codex"]["note"] == "" and agents["codex"]["cooldown_until"] == 0.0
+
+
+def test_expired_cooldown_is_reported_as_zero():
+    """Regression: a June cooldown long expired surfaced as a raw epoch and
+    read like state. Expired means gone."""
+    store = MemoryStore()
+    _, _, resource = _usable_agent(store)
+    resource.cooldown_until = time.time() - 86400
+    resource.last_exhaustion_text = "old quota message"
+    store.put(resource)
+
+    [agent] = _show(store)["agents"]["agents"]
+    assert agent["status"] == "ready" and agent["available"]
+    assert agent["cooldown_until"] == 0.0 and agent["note"] == ""
+
+
+def test_machines_view_marks_where_the_chief_lives():
+    """Regression: runner registration stamps Machine rows kind=runner, so a
+    machine hosting both chief and runner looked like a plain runner. The
+    chief's own config names its machine; the view must flag it."""
+    store = MemoryStore()
+    _usable_agent(store, machine_name="hive-vm")
+    _usable_agent(store, machine_name="raven")
+
+    view = build_show(store, WS, _spend_zero, _config(machine_name="hive-vm"))
+    by_name = {m["name"]: m for m in view["machines"]}
+    assert by_name["hive-vm"]["hosts_chief"]
+    assert not by_name["raven"]["hosts_chief"]
+
+
 def test_licenses_map_to_machines_where_provider_proved_usable():
     store = MemoryStore()
     machine, _, _ = _usable_agent(store, backend="codex")
