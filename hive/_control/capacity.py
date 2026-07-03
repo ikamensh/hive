@@ -144,6 +144,7 @@ def subscription_candidates(
     subscriptions: list[Subscription],
     resources: list[Resource],
     runners: list[Runner],
+    machines: list[Machine] = (),  # type: ignore[assignment]
 ) -> list[dict]:
     """Providers proven usable on a machine but not yet recorded as a Subscription.
 
@@ -155,6 +156,7 @@ def subscription_candidates(
     starts from the right portable/machine-bound guess.
     """
     have = {s.provider for s in subscriptions}
+    machine_name = {m.id: m.name for m in machines}
     runner_name = {r.id: r.name for r in runners}
     candidates: dict[str, dict] = {}
     for res in resources:
@@ -162,7 +164,9 @@ def subscription_candidates(
             continue
         if res.usability_status != ResourceUsability.usable:
             continue
-        where = runner_name.get(res.runner_id, res.runner_id)
+        # Evidence names the machine (the user-facing identity); a legacy
+        # resource with no machine link falls back to its runner.
+        where = machine_name.get(res.machine_id) or runner_name.get(res.runner_id, res.runner_id)
         candidates[res.backend] = {
             "provider": res.backend,
             "licensing_mode": backend_licensing(res.backend),

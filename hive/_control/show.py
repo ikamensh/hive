@@ -163,7 +163,9 @@ def agents_view(groups: list[MachineGroup], subscriptions: list[Subscription]) -
         "agents": sorted(agents, key=lambda a: (not a["available"], a["machine"], a["backend"])),
         "launchable_now": sum(1 for a in agents if a["available"]),
         "licenses": licenses,
-        "license_candidates": subscription_candidates(subscriptions, all_resources, all_runners),
+        "license_candidates": subscription_candidates(
+            subscriptions, all_resources, all_runners, [g.machine for g in groups]
+        ),
     }
 
 

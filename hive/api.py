@@ -1401,7 +1401,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 for res in resource_list
             ],
             "cards": machine_cards(group_machines(machines, runner_list, resource_list)),
-            "subscription_candidates": subscription_candidates(subs, resource_list, runner_list),
+            "subscription_candidates": subscription_candidates(subs, resource_list, runner_list, machines),
             "local_runner": local_runner_payload(ctx.workspace_id),
         }
 

@@ -120,6 +120,27 @@ def test_cli_drives_full_loop(harness, tmp_path):
     assert any(j["job"] == "dark_machine_watch" for j in full["autonomy"])
 
 
+def test_cli_parks_and_revives_a_resource(harness):
+    """Parking a resource (e.g. a retired CLI tier) takes it out of dispatch
+    but keeps it visible with its reason in `hive show agents`; re-enabling
+    clears the reason."""
+    client, store = harness
+    _register_usable_runner(client, name="fake")
+    resource = cli(client, "resources")["resources"][0]
+
+    parked = cli(client, "resource-disable", resource["id"], "--reason", "tier retired")
+    assert parked["enabled"] is False
+    assert parked["disabled_reason"] == "tier retired"
+    assert parked["available"] is False
+
+    agents = {a["resource_id"]: a for a in cli(client, "show", "agents")["agents"]}
+    assert agents[resource["id"]]["status"] == "disabled"
+    assert agents[resource["id"]]["note"] == "tier retired"
+
+    revived = cli(client, "resource-enable", resource["id"])
+    assert revived["enabled"] is True and revived["disabled_reason"] == ""
+
+
 def test_resolve_targets_precedence(monkeypatch, tmp_path):
     """An explicit URL (env > stored) names exactly one chief — no discovery
     beyond it. A one-off `HIVE_URL=…` still overrides the saved default."""

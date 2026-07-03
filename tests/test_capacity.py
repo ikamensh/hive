@@ -108,6 +108,18 @@ def test_discovery_offers_only_proven_unsubscribed_providers():
     assert candidates[0]["evidence"] == "usable on laptop"
 
 
+def test_discovery_evidence_prefers_machine_name():
+    """The machine is the user-facing identity; the runner name (asserted
+    above) is only the fallback for legacy rows with no machine link."""
+    machine = Machine(name="macbook")
+    runner = Runner(name="macbook-runner", machine_id=machine.id, backends=["claude"])
+    resource = _usable(runner.id, "claude")
+    resource.machine_id = machine.id
+
+    candidates = subscription_candidates([], [resource], [runner], [machine])
+    assert candidates[0]["evidence"] == "usable on macbook"
+
+
 def test_discovery_carries_provider_rulebook_licensing():
     """Each candidate starts from the backend's licensing default so confirming
     one does not silently guess portable/machine-bound wrong."""

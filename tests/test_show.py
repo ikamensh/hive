@@ -192,6 +192,8 @@ def test_usable_backend_without_subscription_becomes_license_candidate():
     _usable_agent(store, backend="cursor")
     candidates = _show(store)["agents"]["license_candidates"]
     assert [c["provider"] for c in candidates] == ["cursor"]
+    # evidence names the machine (user-facing identity), not the runner process
+    assert candidates[0]["evidence"] == "usable on mini"
 
 
 def test_autonomy_lists_jobs_with_period_action_and_candidate_machines():
