@@ -19,11 +19,15 @@ if gcloud compute instances describe $VM --zone=$ZONE --project=$PROJECT --accou
     --metadata-from-file=startup-script=deploy/vm_startup.sh
   gcloud compute instances reset $VM --zone=$ZONE --project=$PROJECT --account=$ACCOUNT
 else
+  # e2-medium (4GB) fits the measured load (chief+runner idle ~1GB, agent CLIs
+  # spike ~1GB mid-task; swap in vm_startup.sh is the backstop). The static IP
+  # is pinned because the public hostnames (Caddyfile) encode 34.62.218.54.
   gcloud compute instances create $VM \
     --zone=$ZONE --project=$PROJECT --account=$ACCOUNT \
-    --machine-type=e2-standard-2 \
+    --machine-type=e2-medium \
+    --address=hive-vm-ip \
     --image-family=debian-12 --image-project=debian-cloud \
-    --boot-disk-size=60GB --boot-disk-type=pd-balanced \
+    --boot-disk-size=30GB --boot-disk-type=pd-balanced \
     --service-account="$SA" --scopes=cloud-platform \
     --metadata-from-file=startup-script=deploy/vm_startup.sh
 fi

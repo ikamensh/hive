@@ -10,6 +10,15 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y git curl ca-certificates gnupg docker.io rsync
 
+# --- swap: backstop for npm builds + agent CLI peaks on a 4GB machine ---
+if [ ! -f /swapfile ]; then
+  fallocate -l 2G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+swapon -a
+
 # docker.io stays installed for the runner's `docker` capability, but the
 # chief runs bare (systemd) below — no image build in the deploy loop.
 # `deploy/Dockerfile` + `deploy/compose.yaml` remain for a future stability mode.

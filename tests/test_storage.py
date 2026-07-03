@@ -13,7 +13,7 @@ from hive.persistence.storage import (
     migrate_local_state,
     storage_info,
 )
-from hive.persistence.store import FileStore, MemoryStore
+from hive.persistence.store import CachedStore, FileStore, MemoryStore
 
 
 class FakeFirestoreStore(MemoryStore):
@@ -77,8 +77,10 @@ def test_runtime_storage_uses_managed_backends(tmp_path, monkeypatch):
     store = make_store(cfg)
     blobs = make_blob_store(cfg)
 
-    assert isinstance(store, FakeFirestoreStore)
-    assert store.project == "proj"
+    # The chief gets a write-through cache; the backing store is Firestore.
+    assert isinstance(store, CachedStore)
+    assert isinstance(store.inner, FakeFirestoreStore)
+    assert store.inner.project == "proj"
     assert isinstance(blobs, FakeGcsBlobStore)
     assert blobs.bucket_name == "bucket"
 

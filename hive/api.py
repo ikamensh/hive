@@ -128,6 +128,10 @@ log = logging.getLogger("hive.api")
 
 RUNNER_POLL_WAIT_S = 5.0
 RUNNER_POLL_SLEEP_S = 1.0
+# Persist a polling runner's last_seen at most this often. Firestore charges
+# per write, the register() heartbeat already refreshes every 30s, and
+# Runner.ONLINE_WINDOW_S is 90s — so per-second bumps buy nothing.
+RUNNER_LAST_SEEN_REFRESH_S = 15.0
 
 
 def canonical_repo(url: str) -> str:
@@ -1569,8 +1573,9 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             raise HTTPException(404, "unknown runner — re-register")
         deadline = time.monotonic() + RUNNER_POLL_WAIT_S
         while True:
-            runner.last_seen = time.time()
-            store.put(runner)
+            if time.time() - runner.last_seen > RUNNER_LAST_SEEN_REFRESH_S:
+                runner.last_seen = time.time()
+                store.put(runner)
             for task in store.list(
                 Task, workspace_id=workspace_id, status=TaskStatus.running, runner_id=runner_id
             ):

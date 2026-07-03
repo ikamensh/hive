@@ -377,3 +377,53 @@ def test_boot_marks_interrupted_probe_unknown_then_queues_fresh_probe():
     assert len(probes) == 2
     assert probes[-1].id != first_probe.id
     assert probes[-1].status == TaskStatus.running
+
+
+def test_poll_persists_last_seen_only_when_stale():
+    """Regression: the poll loop used to write the runner document every
+    second, around the clock — ~86K Firestore writes per idle runner-day.
+    A polling runner is self-evidently alive, register() heartbeats every
+    30s, and ONLINE_WINDOW_S is 90s, so a persisted last_seen may lag by
+    RUNNER_LAST_SEEN_REFRESH_S without ever appearing offline."""
+
+    class RunnerPutCountingStore(MemoryStore):
+        def __init__(self):
+            super().__init__()
+            self.runner_puts = 0
+
+        def put(self, obj):
+            if isinstance(obj, Runner):
+                self.runner_puts += 1
+            return super().put(obj)
+
+    store = RunnerPutCountingStore()
+    client = make_client(store)
+    rid = client.post(
+        "/api/runners/register",
+        json={"name": "r", "backends": ["cursor"], "boot": True},
+        headers=H,
+    ).json()["runner_id"]
+    project = store.put(Project(name="p", spec_repo="s"))
+    ws = store.put(Workstream(project_id=project.id, title="w"))
+
+    def deliverable_task():
+        return store.put(
+            Task(project_id=project.id, workstream_id=ws.id, repo="r",
+                 instructions="i", status=TaskStatus.running, runner_id=rid)
+        )
+
+    # Fresh last_seen (just registered): polling must not rewrite the runner.
+    deliverable_task()
+    store.runner_puts = 0
+    assert client.post(f"/api/runners/{rid}/poll", headers=H).json()["task"]
+    assert store.runner_puts == 0
+
+    # Stale last_seen: polling refreshes it, once.
+    def age(runner):
+        runner.last_seen = time.time() - 30
+    store.update(Runner, rid, age)
+    deliverable_task()
+    store.runner_puts = 0
+    assert client.post(f"/api/runners/{rid}/poll", headers=H).json()["task"]
+    assert store.runner_puts == 1
+    assert time.time() - store.get(Runner, rid).last_seen < 5

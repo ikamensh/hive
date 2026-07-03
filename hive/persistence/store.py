@@ -1,6 +1,7 @@
 """Persistence. `StoreBase` is the contract; `MemoryStore` (tests), `FileStore`
 (local dev — JSON files under HIVE_DATA_DIR), and `FirestoreStore` (prod) are
-independent implementations of it.
+independent implementations of it. The chief wraps its store in `CachedStore`
+so the control loops read from memory and only writes reach the backend.
 
 Documents are pydantic models serialized to dicts. `update` is the atomic
 read-modify-write: the way to mutate a document without clobbering a concurrent
@@ -137,6 +138,12 @@ class StoreBase(ABC):
     def delete(self, model: type[M], id: str) -> None: ...
 
     @abstractmethod
+    def raw_docs(self, collection: str) -> list[dict]:
+        """Every serialized document of `collection`, unvalidated. Exists so
+        `CachedStore` can hydrate without forcing old rows through current
+        pydantic schemas (validation stays lazy, at get/list time)."""
+
+    @abstractmethod
     def get_org_context(self, workspace_id: str = DEFAULT_WORKSPACE_ID) -> str: ...
 
     @abstractmethod
@@ -208,6 +215,10 @@ class MemoryStore(StoreBase):
     def delete(self, model: type[M], id: str) -> None:
         with self._lock:
             self._data[_COLLECTIONS[model]].pop(id, None)
+
+    def raw_docs(self, collection: str) -> list[dict]:
+        with self._lock:
+            return [dict(raw) for raw in self._data[collection].values()]
 
     def get_org_context(self, workspace_id: str = DEFAULT_WORKSPACE_ID) -> str:
         with self._lock:
@@ -471,6 +482,9 @@ class FirestoreStore(StoreBase):
     def delete(self, model: type[M], id: str) -> None:
         self._db.collection(_COLLECTIONS[model]).document(id).delete()
 
+    def raw_docs(self, collection: str) -> list[dict]:
+        return [snap.to_dict() for snap in self._db.collection(collection).stream()]
+
     def get_org_context(self, workspace_id: str = DEFAULT_WORKSPACE_ID) -> str:
         snap = (
             self._db.collection("workspaces")
@@ -537,3 +551,67 @@ class FirestoreStore(StoreBase):
             return True
 
         return attempt(transaction)
+
+
+class CachedStore(MemoryStore):
+    """Write-through in-memory cache over a backing store, for the chief.
+
+    The leader lease guarantees exactly one chief per workspace, and every
+    other writer (runners, web UI, CLI) mutates state through that chief's
+    API — so the chief can serve all reads from process memory and only pay
+    the backing store for writes. Without this, the supervisor tick and the
+    runner poll/heartbeat loops re-scan Firestore around the clock (~1.5M
+    document reads per idle day, measured).
+
+    Collections hydrate once at construction. Mutations persist to the
+    backing store *first*, then commit to memory, so a backend failure
+    surfaces as an exception while memory still mirrors durable state.
+    Leases and org context pass through uncached: the lease is the
+    cross-process fencing primitive and must stay authoritative in the
+    backing store.
+    """
+
+    def __init__(self, inner: StoreBase) -> None:
+        super().__init__()
+        self.inner = inner
+        for collection in _COLLECTIONS.values():
+            for raw in inner.raw_docs(collection):
+                self._data[collection][raw["id"]] = raw
+
+    def put(self, obj: M) -> M:
+        with self._lock:
+            self.inner.put(obj)
+            return super().put(obj)
+
+    def update(self, model: type[M], id: str, mutate: Callable[[M], None]) -> M | None:
+        # The in-process lock is the atomicity guarantee (single-writer chief);
+        # the backing store's own concurrent-writer protection is not needed.
+        with self._lock:
+            collection = self._data[_COLLECTIONS[model]]
+            raw = collection.get(id)
+            if raw is None:
+                return None
+            obj = model.model_validate(raw)
+            mutate(obj)
+            self.inner.put(obj)
+            collection[obj.id] = obj.model_dump()
+            return obj
+
+    def delete(self, model: type[M], id: str) -> None:
+        with self._lock:
+            self.inner.delete(model, id)
+            super().delete(model, id)
+
+    def get_org_context(self, workspace_id: str = DEFAULT_WORKSPACE_ID) -> str:
+        return self.inner.get_org_context(workspace_id)
+
+    def set_org_context(self, text: str, workspace_id: str = DEFAULT_WORKSPACE_ID) -> None:
+        self.inner.set_org_context(text, workspace_id)
+
+    def claim_leader(
+        self, holder: str, ttl_s: float, workspace_id: str = DEFAULT_WORKSPACE_ID
+    ) -> str:
+        return self.inner.claim_leader(holder, ttl_s, workspace_id)
+
+    def release_leader(self, holder: str, workspace_id: str = DEFAULT_WORKSPACE_ID) -> bool:
+        return self.inner.release_leader(holder, workspace_id)

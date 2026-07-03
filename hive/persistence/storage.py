@@ -9,6 +9,7 @@ from hive.persistence.blobstore import GcsBlobStore, LocalBlobStore
 from hive.config.settings import Config
 from hive.models import DEFAULT_WORKSPACE_ID, Workspace
 from hive.persistence.store import (
+    CachedStore,
     FileStore,
     FirestoreStore,
     StoreBase,
@@ -49,7 +50,9 @@ def managed_state_error(config: Config) -> ManagedStateConfigError:
 def make_store(config: Config) -> StoreBase:
     if not config.gcp_project.strip():
         raise managed_state_error(config)
-    return FirestoreStore(config.gcp_project.strip())
+    # The chief is the single writer (leader lease), so it reads from memory
+    # and writes through — Firestore charges per document read otherwise.
+    return CachedStore(FirestoreStore(config.gcp_project.strip()))
 
 
 def make_blob_store(config: Config):
@@ -59,6 +62,8 @@ def make_blob_store(config: Config):
 
 
 def storage_info(store: StoreBase, config: Config, blobs) -> dict:
+    if isinstance(store, CachedStore):
+        store = store.inner  # report on the backing store, not the cache
     if isinstance(store, FirestoreStore):
         backend = "firestore"
         store_path = None
