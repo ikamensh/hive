@@ -1248,6 +1248,36 @@ def test_intake_auth_block_marks_backend_failed_escalates_and_retries(harness):
     assert store.get(Project, pid).intake_conversation_id == retry["id"]
 
 
+def test_login_todo_for_renamed_runner_still_closes():
+    """Regression (live fleet): a runner rename (laptop-raven -> raven) left a
+    'Fix gemini-cli login on laptop-raven' todo no event could ever close,
+    because auto-close matched only the current runner name. Resolving the
+    backend's resource also sweeps its login todos naming runners that no
+    longer exist — while todos for other live runners stay open."""
+    from hive.models import HumanTask, Resource, Runner
+    from hive.runner._task_results import complete_resource_login_todos
+
+    store = MemoryStore()
+    runner = store.put(Runner(name="raven", backends=["gemini-cli"]))
+    store.put(Runner(name="hive-vm", backends=["gemini-cli"]))
+    resource = store.put(Resource(runner_id=runner.id, backend="gemini-cli"))
+    for title in (
+        "Fix gemini-cli login on raven",  # this runner: closes
+        "Fix gemini-cli login on laptop-raven",  # zombie runner name: swept
+        "Fix gemini-cli login on hive-vm",  # other live runner: stays open
+        "Fix claude login on laptop-raven",  # other backend: not this resource's call
+    ):
+        store.put(HumanTask(title=title, instructions="", project_id=""))
+
+    complete_resource_login_todos(store, resource)
+
+    status = {t.title: t.status for t in store.list(HumanTask)}
+    assert status["Fix gemini-cli login on raven"] == "done"
+    assert status["Fix gemini-cli login on laptop-raven"] == "done"
+    assert status["Fix gemini-cli login on hive-vm"] == "open"
+    assert status["Fix claude login on laptop-raven"] == "open"
+
+
 def test_intake_failed_conversation_is_restartable(harness):
     """A failed intake conversation must not 409 the user into a dead end: a
     fresh start mints a new conversation; messaging the dead one is rejected

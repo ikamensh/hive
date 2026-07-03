@@ -208,15 +208,23 @@ def sync_landing_failure_human_task(
 
 
 def complete_resource_login_todos(store, resource: Resource) -> None:
+    """Close open "Fix <backend> login on <runner>" todos this resource
+    resolves: the one naming its own runner, and any naming a runner that no
+    longer exists — a rename (laptop-raven -> raven) otherwise leaves a zombie
+    todo no event can ever close."""
     runner = store.get(Runner, resource.runner_id)
     runner_name = runner.name if runner else resource.runner_id
-    title = f"Fix {resource.backend} login on {runner_name}"
+    prefix = f"Fix {resource.backend} login on "
+    live_names = {r.name for r in store.list(Runner, workspace_id=resource.workspace_id)}
     for task in store.list(HumanTask, workspace_id=resource.workspace_id):
         if (
-            task.status == HumanTaskStatus.open
-            and task.project_id == ""
-            and task.title == title
+            task.status != HumanTaskStatus.open
+            or task.project_id != ""
+            or not task.title.startswith(prefix)
         ):
+            continue
+        named = task.title.removeprefix(prefix)
+        if named == runner_name or named not in live_names:
             task.status = HumanTaskStatus.done
             task.done_at = time.time()
             store.put(task)
