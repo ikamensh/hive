@@ -48,8 +48,18 @@ from hive.models import (
 from hive.runner._backends import backend_licensing
 
 
+_ERRORISH = ("error", "fail", "not logged", "denied", "unauthorized", "authentication", "quota")
+
+
 def _first_line(text: str) -> str:
-    return next((line.strip() for line in text.splitlines() if line.strip()), "")
+    """The most actionable line of a probe/exhaustion message: agent CLIs often
+    front-load banner noise, so prefer the first error-looking line and fall
+    back to the first non-empty one."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in lines:
+        if any(marker in line.lower() for marker in _ERRORISH):
+            return line
+    return lines[0] if lines else ""
 
 
 def machines_view(groups: list[MachineGroup], chief_machine_name: str = "") -> list[dict]:

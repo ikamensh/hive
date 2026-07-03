@@ -125,7 +125,10 @@ def test_non_ready_agents_explain_themselves():
     store.put(Resource(
         workspace_id=WS, machine_id=machine.id, runner_id=runner.id, backend="claude",
         usability_status=ResourceUsability.failed,
-        last_probe_text="Not logged in · Please run /login\n\nHIVE PROBE FAILED",
+        # banner noise first, the real error below — the note must find it
+        last_probe_text="YOLO mode is enabled. All tool calls approved.\n"
+                        "Loaded cached credentials.\n"
+                        "Not logged in · Please run /login\n\nHIVE PROBE FAILED",
     ))
     store.put(Resource(
         workspace_id=WS, machine_id=machine.id, runner_id=runner.id, backend="cursor",
