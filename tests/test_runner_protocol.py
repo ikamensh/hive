@@ -462,3 +462,28 @@ def test_register_response_advertises_chief_urls():
         data = client.post("/api/runners/register",
                            json={"name": "r", "backends": ["cursor"]}, headers=H).json()
         assert data["chief_urls"] == expected
+
+
+def test_poll_response_carries_chief_version():
+    """Every poll response (task or not) carries the chief's version, so a
+    self-updating runner notices a redeployed chief within one poll cycle —
+    the fleet runs mixed versions for seconds, not a periodic-timer interval."""
+    from hive.version import get_version
+
+    store = MemoryStore()
+    client = make_client(store)
+    rid = client.post("/api/runners/register",
+                      json={"name": "r", "backends": ["cursor"], "boot": True},
+                      headers=H).json()["runner_id"]
+
+    empty = client.post(f"/api/runners/{rid}/poll", headers=H).json()
+    assert empty["task"] is None
+    assert empty["chief_version"] == get_version()
+
+    project = store.put(Project(name="p", spec_repo="s"))
+    ws = store.put(Workstream(project_id=project.id, title="w"))
+    store.put(Task(project_id=project.id, workstream_id=ws.id, repo="r",
+                   instructions="i", status=TaskStatus.running, runner_id=rid))
+    loaded = client.post(f"/api/runners/{rid}/poll", headers=H).json()
+    assert loaded["task"] is not None
+    assert loaded["chief_version"] == get_version()

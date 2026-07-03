@@ -1585,6 +1585,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         runner = store.get(Runner, runner_id)
         if not runner or runner.workspace_id != workspace_id:
             raise HTTPException(404, "unknown runner — re-register")
+        # chief_version rides every poll so self-updating runners notice a
+        # redeployed chief within one poll cycle instead of a periodic timer —
+        # keeps the window of mixed versions in the fleet to seconds.
+        chief_version = get_version()
         deadline = time.monotonic() + RUNNER_POLL_WAIT_S
         while True:
             if time.time() - runner.last_seen > RUNNER_LAST_SEEN_REFRESH_S:
@@ -1596,14 +1600,14 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 if not task.delivered:
                     task.delivered = True
                     store.put(task)
-                    return {"task": task.model_dump()}
+                    return {"task": task.model_dump(), "chief_version": chief_version}
             if time.monotonic() > deadline:
-                return {"task": None}
+                return {"task": None, "chief_version": chief_version}
             try:
                 await asyncio.sleep(RUNNER_POLL_SLEEP_S)
             except asyncio.CancelledError:
                 log.info("runner poll for %s cancelled during shutdown", runner_id)
-                return {"task": None}
+                return {"task": None, "chief_version": chief_version}
 
     @app.post("/api/tasks/{task_id}/result")
     def task_result(

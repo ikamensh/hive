@@ -36,6 +36,7 @@ from hive.runner._agent_results import call_agent, result_spec_for_task
 from hive.runner._chief_roster import ChiefRoster, parse_urls
 from hive.runner._machine import machine_metadata
 from hive.models import DEFAULT_WORKSPACE_ID
+from hive.version import get_version
 
 MACHINE_METADATA = machine_metadata()
 HIVE_URL = os.environ.get("HIVE_URL", "http://localhost:8000")
@@ -64,6 +65,7 @@ RECONNECT_AFTER_FAILURES = 3  # consecutive errors before re-resolving across th
 SELF_UPDATE = os.environ.get("HIVE_RUNNER_SELF_UPDATE", "") == "1"
 UPDATE_CHECK_INTERVAL_S = 900.0
 REPO_ROOT = Path(__file__).resolve().parents[2]
+RUNNER_VERSION = get_version()
 
 log = logging.getLogger("hive.runner._daemon")
 
@@ -884,6 +886,7 @@ def main(argv: list[str] | None = None) -> None:
 
     failures = 0
     last_update_check = time.monotonic()
+    update_checked_for = ""  # chief version we already fetched for, to fetch once per skew
     while True:
         try:
             if SELF_UPDATE and time.monotonic() - last_update_check > UPDATE_CHECK_INTERVAL_S:
@@ -900,7 +903,29 @@ def main(argv: list[str] | None = None) -> None:
                 runner_id, backends = register(client)
                 continue
             failures = 0
-            task = response.raise_for_status().json().get("task")
+            data = response.raise_for_status().json()
+            chief_version = data.get("chief_version", "")
+            if (
+                SELF_UPDATE
+                and chief_version
+                and chief_version not in (RUNNER_VERSION, update_checked_for)
+            ):
+                # The chief changed version (a deploy restarts it): check for an
+                # update now rather than waiting out the periodic timer, so the
+                # fleet runs mixed versions for seconds, not minutes. The
+                # update_available() gate matters: a chief on uncommitted code
+                # (push.sh ships working trees) must not exit-loop runners that
+                # can only ever update to origin/main — hence the memo.
+                update_checked_for = chief_version
+                last_update_check = time.monotonic()
+                if update_available(REPO_ROOT):
+                    log.info(
+                        "chief is at %s, we are at %s and origin/main moved — "
+                        "exiting so the service wrapper updates us",
+                        chief_version, RUNNER_VERSION,
+                    )
+                    return
+            task = data.get("task")
             if not task:
                 continue
             log.info("executing %s task %s on %s", task["kind"], task["id"], task["repo"])
