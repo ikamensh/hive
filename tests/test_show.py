@@ -181,7 +181,7 @@ def test_licenses_map_to_machines_where_provider_proved_usable():
     store.put(Subscription(workspace_id=WS, provider="claude", plan="Claude Max"))
 
     agents = _show(store)["agents"]
-    licenses = {l["provider"]: l for l in agents["licenses"]}
+    licenses = {license_row["provider"]: license_row for license_row in agents["licenses"]}
     assert [m["machine"] for m in licenses["codex"]["machines"]] == [machine.name]
     assert licenses["claude"]["machines"] == []  # license present, no machine can serve it
     assert agents["license_candidates"] == []  # every usable backend already registered
