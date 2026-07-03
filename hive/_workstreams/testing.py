@@ -522,10 +522,12 @@ def story_health(stories: Iterable[Story], *, refresh_active: bool = False) -> S
 AUTO_TESTING_INTERVAL_S = 24 * 3600.0
 
 
-def auto_testing_action(store, project: Project, workstream: ProjectWorkstream, *, now_epoch: float = 0.0) -> str:
-    """What Hive should do for this testing workstream on its own, right now:
-    "refresh" (draft/repair the backlog), "episode" (sweep unproven stories),
-    or "" (nothing).
+def auto_testing_decision(
+    store, project: Project, workstream: ProjectWorkstream, *, now_epoch: float = 0.0
+) -> tuple[str, str]:
+    """What Hive should do for this testing workstream on its own, right now,
+    and why: ("refresh", …) to draft/repair the backlog, ("episode", …) to
+    sweep unproven stories, or ("", reason) when nothing would fire.
 
     Acts on the `story_health` verdict, but only inside the autonomy envelope:
     the project opted in (`testing_auto`) *and* set a positive daily budget
@@ -534,12 +536,19 @@ def auto_testing_action(store, project: Project, workstream: ProjectWorkstream, 
     workstream is enabled, nothing testing-related is in flight, and the last
     same-kind activity is older than `AUTO_TESTING_INTERVAL_S`. All gates are
     store facts, so a chief restart never re-fires work.
+
+    The reason string is what `hive show autonomy` surfaces, so it names the
+    specific gate rather than a generic "no".
     """
     now_epoch = now_epoch or now_s()
-    if not project.testing_auto or project.daily_budget_usd <= 0 or not workstream.enabled:
-        return ""
+    if not project.testing_auto:
+        return "", "autonomous testing is off (testing_auto)"
+    if project.daily_budget_usd <= 0:
+        return "", "no daily budget (autonomy only spends inside a positive cap)"
+    if not workstream.enabled:
+        return "", "workstream disabled"
     if project.state == ProjectState.intake:
-        return ""
+        return "", "project is still in intake"
     episodes = store.list(
         TestEpisode,
         workspace_id=project.workspace_id,
@@ -550,7 +559,7 @@ def auto_testing_action(store, project: Project, workstream: ProjectWorkstream, 
         e.status in (TestEpisodeStatus.refreshing, TestEpisodeStatus.sweeping, TestEpisodeStatus.confirming)
         for e in episodes
     ):
-        return ""
+        return "", "a testing episode is already in flight"
     refresh_tasks = store.list(
         Task,
         workspace_id=project.workspace_id,
@@ -573,10 +582,16 @@ def auto_testing_action(store, project: Project, workstream: ProjectWorkstream, 
     elif health.action == "episode":
         last = max((e.created_at for e in episodes), default=0.0)
     else:
-        return ""
+        return "", f"backlog needs nothing ({health.state})"
     if now_epoch - last < AUTO_TESTING_INTERVAL_S:
-        return ""
-    return health.action
+        hours_ago = (now_epoch - last) / 3600
+        return "", f"{health.action} on daily cooldown (last one {hours_ago:.1f}h ago)"
+    return health.action, health.summary
+
+
+def auto_testing_action(store, project: Project, workstream: ProjectWorkstream, *, now_epoch: float = 0.0) -> str:
+    """The action half of `auto_testing_decision` — what the autonomous tick acts on."""
+    return auto_testing_decision(store, project, workstream, now_epoch=now_epoch)[0]
 
 
 def _priority_score(story: Story, now_epoch: float) -> tuple[int, float, int]:

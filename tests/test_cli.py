@@ -85,7 +85,7 @@ def test_cli_drives_full_loop(harness, tmp_path):
     assert cli(client, "projects")[0]["id"] == pid
     _pump(client, store)
 
-    detail = cli(client, "show", pid)
+    detail = cli(client, "project", pid)
     build_tasks = [task for task in detail["tasks"] if task["kind"] not in ("intake", "probe")]
     assert len(detail["work_items"]) == 1 and len(build_tasks) == 1
     assert detail["workstreams"][0]["kind"] == "iteration"
@@ -102,14 +102,22 @@ def test_cli_drives_full_loop(harness, tmp_path):
     full_task = cli(client, "task", build_tasks[0]["id"])
     assert "implement feature" in full_task["instructions"]
 
-    question = cli(client, "show", pid)["questions"][0]
+    question = cli(client, "project", pid)["questions"][0]
     cli(client, "answer", question["id"], "yes, add B")
     _pump(client, store)
-    assert cli(client, "show", pid)["project"]["goal_complete"]
+    assert cli(client, "project", pid)["project"]["goal_complete"]
 
     cli(client, "iterate", pid, "now add C")
     _pump(client, store)
-    assert not cli(client, "show", pid)["project"]["goal_complete"]
+    assert not cli(client, "project", pid)["project"]["goal_complete"]
+
+    # `hive show` is the subsystem introspection view; a part argument selects
+    # one section, no argument returns all of them.
+    full = cli(client, "show")
+    assert set(full) == {"machines", "agents", "autonomy"}
+    assert cli(client, "show", "agents") == full["agents"]
+    assert full["agents"]["launchable_now"] >= 1  # the registered fake runners
+    assert any(j["job"] == "dark_machine_watch" for j in full["autonomy"])
 
 
 def test_resolve_target_precedence():

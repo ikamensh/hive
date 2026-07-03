@@ -112,6 +112,7 @@ from hive._control.capacity import (
     subscription_candidates,
 )
 from hive._control.overview import build_overview
+from hive._control.show import build_show
 from hive._control.supervisor import Supervisor
 from hive.version import get_version, version_payload
 from hive.runner import registration
@@ -572,6 +573,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     @app.get("/api/overview")
     def overview(ctx: AuthContext = Depends(current)):
         return build_overview(store, ctx.workspace_id, supervisor.spend_today)
+
+    @app.get("/api/show")
+    def show(ctx: AuthContext = Depends(current)):
+        return build_show(store, ctx.workspace_id, supervisor.spend_today, config)
 
     @app.get("/api/projects")
     def list_projects(include_archived: bool = False, ctx: AuthContext = Depends(current)):

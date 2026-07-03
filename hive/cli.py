@@ -167,8 +167,19 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("intake-approve", help="accept existing mission.md and iteration.md as finalized intake")
     p.add_argument("conversation_id")
 
-    p = sub.add_parser("show", help="project detail: workstreams, tasks, questions")
+    p = sub.add_parser("project", help="project detail: workstreams, tasks, questions")
     p.add_argument("project_id")
+
+    p = sub.add_parser(
+        "show",
+        help="inspect hive's subsystems: machines, launchable agents, autonomy jobs",
+    )
+    p.add_argument(
+        "part",
+        nargs="?",
+        choices=["machines", "agents", "autonomy"],
+        help="one subsystem (default: all)",
+    )
 
     p = sub.add_parser("set", help="patch project settings")
     p.add_argument("project_id")
@@ -195,7 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("check-ci", help="check a repo's CI; file+fix an issue if it's red")
     p.add_argument("project_id")
-    p.add_argument("workstream_id", help="the github_issues workstream for the repo (see `hive show`)")
+    p.add_argument("workstream_id", help="the github_issues workstream for the repo (see `hive project`)")
 
     p = sub.add_parser("test-refresh", help="draft/align acceptance stories from the spec (no sweep)")
     p.add_argument("project_id")
@@ -622,8 +633,11 @@ def run(args: argparse.Namespace, client) -> dict | list:
         r = client.post(f"/api/conversations/{args.conversation_id}/message", json={
             "action": "approve",
         })
-    elif c == "show":
+    elif c == "project":
         r = client.get(f"/api/projects/{args.project_id}")
+    elif c == "show":
+        data = client.get("/api/show").raise_for_status().json()
+        return data[args.part] if args.part else data
     elif c == "set":
         body = {k: v for k, v in {
             "mode": args.mode, "autonomy": args.autonomy,
