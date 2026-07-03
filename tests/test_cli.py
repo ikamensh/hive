@@ -120,22 +120,47 @@ def test_cli_drives_full_loop(harness, tmp_path):
     assert any(j["job"] == "dark_machine_watch" for j in full["autonomy"])
 
 
-def test_resolve_target_precedence():
-    """The CLI's client target resolves env > stored > default, so a saved
-    remote is the default but a one-off `HIVE_URL=…` still overrides it."""
-    from hive.cli import DEFAULT_HIVE_URL, resolve_target
+def test_resolve_targets_precedence(monkeypatch, tmp_path):
+    """An explicit URL (env > stored) names exactly one chief — no discovery
+    beyond it. A one-off `HIVE_URL=…` still overrides the saved default."""
+    from hive.cli import DEFAULT_HIVE_URL, resolve_targets
 
-    assert resolve_target({}, {}).base_url == DEFAULT_HIVE_URL
+    monkeypatch.setenv("HIVE_RUNNER_ENV_FILE", str(tmp_path / "absent.env"))
+    assert [t.base_url for t in resolve_targets({}, {})] == [DEFAULT_HIVE_URL]
 
     stored = {"HIVE_URL": "https://hive.example", "HIVE_BASIC_AUTH": "ilya:pw", "HIVE_TOKEN": "tok"}
-    saved = resolve_target({}, stored)
+    [saved] = resolve_targets({}, stored)
     assert saved.base_url == "https://hive.example"
     assert saved.auth == ("ilya", "pw")
     assert saved.token == "tok"
 
-    overridden = resolve_target({"HIVE_URL": "http://localhost:9000"}, stored)
+    [overridden] = resolve_targets({"HIVE_URL": "http://localhost:9000"}, stored)
     assert overridden.base_url == "http://localhost:9000"
     assert overridden.auth == ("ilya", "pw")  # unrelated keys still come from stored
+
+
+def test_unconfigured_cli_discovers_chief_from_runner_env(monkeypatch, tmp_path):
+    """A machine with an installed runner already knows its chief: with no
+    HIVE_URL configured, the CLI tries localhost (dev loop) first and then the
+    runner.env chief — carrying that file's own perimeter credentials, not the
+    CLI's. An explicit URL suppresses discovery entirely."""
+    from hive.cli import DEFAULT_HIVE_URL, resolve_targets
+
+    runner_env = tmp_path / "runner.env"
+    runner_env.write_text(
+        "HIVE_URL=https://hive.34-62-218-54.sslip.io\n"
+        "HIVE_BASIC_AUTH=ilya:secret\n"
+        "HIVE_RUNNER_TOKEN=rt\n"
+    )
+    monkeypatch.setenv("HIVE_RUNNER_ENV_FILE", str(runner_env))
+
+    local, fleet = resolve_targets({}, {})
+    assert local.base_url == DEFAULT_HIVE_URL
+    assert fleet.base_url == "https://hive.34-62-218-54.sslip.io"
+    assert fleet.auth == ("ilya", "secret")
+    assert fleet.token == ""  # the runner token is protocol auth, not client auth
+
+    assert [t.base_url for t in resolve_targets({"HIVE_URL": "http://x:1"}, {})] == ["http://x:1"]
 
 
 def test_client_target_keys_never_reach_server_env(monkeypatch):
@@ -504,8 +529,47 @@ def test_unreachable_api_prints_concise_error(monkeypatch, capsys):
 
     assert exc.value.code == 1
     err = capsys.readouterr().err
-    assert "Hive API unreachable at http://127.0.0.1:65533" in err
+    assert "Hive API unreachable (tried http://127.0.0.1:65533)" in err
     assert "Traceback" not in err
+
+
+def test_main_falls_back_to_runner_env_chief(monkeypatch, capsys, tmp_path):
+    """The user's actual failure: no HIVE_URL configured, no local chief.
+    main() must fall through to the runner.env chief instead of dying on
+    localhost — and say so on stderr while keeping stdout pure JSON."""
+    runner_env = tmp_path / "runner.env"
+    runner_env.write_text("HIVE_URL=https://fleet.example\nHIVE_BASIC_AUTH=ilya:pw\n")
+    monkeypatch.setenv("HIVE_RUNNER_ENV_FILE", str(runner_env))
+    monkeypatch.delenv("HIVE_URL", raising=False)
+    monkeypatch.setenv("HIVE_CONFIG_FILE", str(tmp_path / "config.env"))
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return self
+
+        def json(self):
+            return [{"id": "p1"}]
+
+    class RoutedClient:
+        def __init__(self, *, base_url, auth, **kwargs):
+            self.base_url, self.auth = base_url, auth
+
+        def get(self, path):
+            if "localhost" in self.base_url:
+                raise httpx.ConnectError(
+                    "connection refused", request=httpx.Request("GET", self.base_url + path)
+                )
+            assert self.auth == ("ilya", "pw")  # runner.env creds ride along
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "Client", RoutedClient)
+
+    from hive.cli import main
+
+    main(["projects"])
+    captured = capsys.readouterr()
+    assert '"id": "p1"' in captured.out
+    assert "no chief at http://localhost:8000; trying https://fleet.example" in captured.err
 
 
 def test_doctor_storage_uses_managed_state_config(monkeypatch, capsys):

@@ -5,10 +5,12 @@ JSON, so `hive projects | jq ...` and scripted tests work the same way the
 web UI does.
 
 Where it sends commands and how it authenticates is a *client target*:
-HIVE_URL (default http://localhost:8000), HIVE_BASIC_AUTH="user:pass" for a
-chief behind basic auth (Caddy), and HIVE_TOKEN for app-level (github)
-auth. Each can be a one-off env var or persisted with `hive config set …`
-(env wins, so ad-hoc targeting overrides the saved default). `hive whoami`
+HIVE_URL, HIVE_BASIC_AUTH="user:pass" for a chief behind basic auth (Caddy),
+and HIVE_TOKEN for app-level (github) auth. Each can be a one-off env var or
+persisted with `hive config set …` (env wins, so ad-hoc targeting overrides
+the saved default). With no HIVE_URL configured the CLI discovers the chief:
+localhost:8000 first (the `hive run` dev loop), then the chief this machine's
+installed runner reports to (`~/.config/hive/runner.env`). `hive whoami`
 resolves the target and reports the authenticated identity.
 
 Run as `python -m hive.cli <command>` or the `hive` console script.
@@ -52,24 +54,52 @@ class Target(NamedTuple):
     token: str  # bearer token (app-level github auth)
 
 
-def resolve_target(env: dict[str, str], stored: dict[str, str]) -> Target:
-    """Where the CLI talks to and how it authenticates.
+def _basic_auth(value: str) -> tuple[str, str] | None:
+    return tuple(value.split(":", 1)) if value else None  # type: ignore[return-value]
 
-    Precedence is explicit env var > stored config > built-in default, so a
-    one-off ``HIVE_URL=… hive …`` overrides the saved default the way a
-    ``--context`` flag would. This is the inverse of `prepare_run_env`'s
-    server precedence on purpose: there stored config gives the *server* its
-    own keys; here env gives the *operator* ad-hoc targeting."""
 
-    def pick(key: str, default: str = "") -> str:
-        return env.get(key) or stored.get(key, default)
+def runner_env_target() -> Target | None:
+    """The chief this machine's installed runner reports to.
 
-    basic = pick("HIVE_BASIC_AUTH")
-    return Target(
-        base_url=pick("HIVE_URL", DEFAULT_HIVE_URL),
-        auth=tuple(basic.split(":", 1)) if basic else None,  # type: ignore[return-value]
-        token=pick("HIVE_TOKEN"),
-    )
+    Runner installs materialize their credentials file (Mac launchd:
+    `~/.config/hive/runner.env`) with the chief URL and its perimeter
+    credentials, so a machine that already executes hive tasks can drive that
+    same chief with zero CLI configuration."""
+    path = Path(
+        os.environ.get("HIVE_RUNNER_ENV_FILE", "~/.config/hive/runner.env")
+    ).expanduser()
+    values = load_stored_config(path)
+    url = values.get("HIVE_URL", "").strip()
+    if not url:
+        return None
+    return Target(url, _basic_auth(values.get("HIVE_BASIC_AUTH", "")), values.get("HIVE_TOKEN", ""))
+
+
+def resolve_targets(env: dict[str, str], stored: dict[str, str]) -> list[Target]:
+    """Chief candidates the CLI will try in order.
+
+    An explicit URL names the one chief the operator means — no guessing
+    beyond it. Precedence there is env var > stored config, so a one-off
+    ``HIVE_URL=… hive …`` overrides the saved default the way a ``--context``
+    flag would (the inverse of `prepare_run_env`'s server precedence on
+    purpose: there stored config gives the *server* its own keys; here env
+    gives the *operator* ad-hoc targeting).
+
+    With no URL configured the CLI discovers: a chief on localhost first (the
+    `hive run` dev loop), then the chief this machine's runner is installed
+    against — so any machine in the fleet finds its chief out of the box."""
+
+    def pick(key: str) -> str:
+        return env.get(key) or stored.get(key, "")
+
+    auth = _basic_auth(pick("HIVE_BASIC_AUTH"))
+    token = pick("HIVE_TOKEN")
+    if url := pick("HIVE_URL"):
+        return [Target(url, auth, token)]
+    targets = [Target(DEFAULT_HIVE_URL, auth, token)]
+    if fallback := runner_env_target():
+        targets.append(fallback)
+    return targets
 
 
 def _is_secret(key: str) -> bool:
@@ -770,34 +800,47 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "migrate-local-state":
         _run_migrate_local_state(args)
         return
-    target = resolve_target(os.environ, load_stored_config())
-    client = httpx.Client(
-        base_url=target.base_url,
-        auth=target.auth,
-        headers={"Authorization": f"Bearer {target.token}"} if target.token else {},
-        timeout=30.0,
-    )
-    try:
-        if args.command == "trace":
-            # Raw JSONL, not JSON-wrapped, so it pipes into kodo's viewer / jq.
-            print(client.get(f"/api/tasks/{args.task_id}/trace").raise_for_status().text)
+    targets = resolve_targets(os.environ, load_stored_config())
+    last_error: httpx.RequestError | None = None
+    for i, target in enumerate(targets):
+        client = httpx.Client(
+            base_url=target.base_url,
+            auth=target.auth,
+            headers={"Authorization": f"Bearer {target.token}"} if target.token else {},
+            timeout=30.0,
+        )
+        try:
+            if args.command == "trace":
+                # Raw JSONL, not JSON-wrapped, so it pipes into kodo's viewer / jq.
+                print(client.get(f"/api/tasks/{args.task_id}/trace").raise_for_status().text)
+                return
+            print(json.dumps(run(args, client), indent=2))
             return
-        print(json.dumps(run(args, client), indent=2))
-    except httpx.HTTPStatusError as exc:
-        code = exc.response.status_code
-        if code in (401, 403):
-            print(
-                f"Not authorized at {target.base_url} (HTTP {code}). Set credentials with "
-                "`hive config set HIVE_BASIC_AUTH user:pass` (chief behind basic auth) "
-                "or `hive config set HIVE_TOKEN …` (app-level auth).",
-                file=sys.stderr,
-            )
-        else:
-            print(f"Hive API error {code} at {target.base_url}: {exc.response.text}", file=sys.stderr)
-        raise SystemExit(1) from exc
-    except httpx.RequestError as exc:
-        print(f"Hive API unreachable at {target.base_url}: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
+        except httpx.HTTPStatusError as exc:
+            # A status code means we found a chief here; other candidates are moot.
+            code = exc.response.status_code
+            if code in (401, 403):
+                print(
+                    f"Not authorized at {target.base_url} (HTTP {code}). Set credentials with "
+                    "`hive config set HIVE_BASIC_AUTH user:pass` (chief behind basic auth) "
+                    "or `hive config set HIVE_TOKEN …` (app-level auth).",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"Hive API error {code} at {target.base_url}: {exc.response.text}", file=sys.stderr)
+            raise SystemExit(1) from exc
+        except httpx.RequestError as exc:
+            last_error = exc
+            if i + 1 < len(targets):
+                print(
+                    f"no chief at {target.base_url}; trying {targets[i + 1].base_url}",
+                    file=sys.stderr,
+                )
+    print(
+        f"Hive API unreachable (tried {', '.join(t.base_url for t in targets)}): {last_error}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1) from last_error
 
 
 if __name__ == "__main__":
