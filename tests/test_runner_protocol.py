@@ -445,11 +445,20 @@ def test_register_response_advertises_chief_urls():
                        json={"name": "r", "backends": ["cursor"]}, headers=H).json()
     assert data["chief_urls"] == ["https://hive.example", "https://hive-alt.example"]
 
-    # Unset: falls back to the configured public URL.
-    config_default = Config(gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
-                            orch_model="", runner_token="t", data_dir=None)
-    client = TestClient(create_app(MemoryStore(), Supervisor(MemoryStore(), lambda p, e: None),
-                                   config_default))
-    data = client.post("/api/runners/register",
-                       json={"name": "r", "backends": ["cursor"]}, headers=H).json()
-    assert data["chief_urls"] == [config_default.public_url]
+    # Unset: falls back to public_url — but never advertises loopback, which
+    # points at the wrong host on every other machine (a default local chief
+    # once polluted a runner's roster with http://localhost:8000).
+    for public_url, expected in [
+        ("https://hive.example", ["https://hive.example"]),
+        ("http://localhost:8000", []),
+        ("http://127.0.0.1:8000", []),
+    ]:
+        store = MemoryStore()
+        config_default = Config(gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
+                                orch_model="", runner_token="t", data_dir=None,
+                                public_url=public_url)
+        client = TestClient(create_app(store, Supervisor(store, lambda p, e: None),
+                                       config_default))
+        data = client.post("/api/runners/register",
+                           json={"name": "r", "backends": ["cursor"]}, headers=H).json()
+        assert data["chief_urls"] == expected

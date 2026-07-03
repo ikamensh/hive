@@ -1569,7 +1569,15 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         # Advertise this chief's reachable URLs: runners persist them as
         # reconnect candidates, so relocating the chief only requires the new
         # instance to advertise itself (see hive/runner/_chief_roster.py).
-        payload["chief_urls"] = parse_urls(config.advertised_urls or config.public_url)
+        # Explicit HIVE_ADVERTISED_URLS is trusted verbatim; the public_url
+        # fallback drops loopback addresses — they point at the wrong host on
+        # every other machine, so a default local chief advertises nothing.
+        advertised = parse_urls(config.advertised_urls) or [
+            url
+            for url in parse_urls(config.public_url)
+            if "//localhost" not in url and "//127.0.0.1" not in url
+        ]
+        payload["chief_urls"] = advertised
         return payload
 
     @app.post("/api/runners/{runner_id}/poll")
