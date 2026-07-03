@@ -143,7 +143,10 @@ REGISTRY: dict[str, Backend] = {
             _claude,
             binary="claude",
             preflight=("claude", "--version"),
-            login_hint="Run `claude login` on the runner, then let Hive probe it again.",
+            login_hint=(
+                "Run `hive login claude --machine <machine>` from your desk "
+                "(SSH channel, OAuth in your local browser), or `claude login` on the runner."
+            ),
             licensing="machine_bound",  # Claude Max login is bound to the machine that authed
         ),
         Backend(
@@ -152,8 +155,8 @@ REGISTRY: dict[str, Backend] = {
             binary="cursor-agent",
             preflight=("cursor-agent", "--version"),
             login_hint=(
-                "Refresh the Cursor Agent login on the runner "
-                "(`cursor-agent login` if available), then let Hive probe it again."
+                "Run `hive login cursor --machine <machine>` from your desk, or refresh "
+                "the Cursor Agent login on the runner (`cursor-agent login`)."
             ),
             licensing="portable",  # Cursor API key spends subscription quota on any machine
         ),
@@ -162,7 +165,10 @@ REGISTRY: dict[str, Backend] = {
             _codex,
             binary="codex",
             preflight=("codex", "--version"),
-            login_hint="Run `codex login` on the runner, then let Hive probe it again.",
+            login_hint=(
+                "Run `hive login codex --machine <machine>` from your desk (forwards the "
+                "OAuth callback port), or `codex login` on the runner."
+            ),
             licensing="machine_bound",  # ChatGPT/codex login is a per-machine OAuth device flow
         ),
         Backend(

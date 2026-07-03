@@ -138,6 +138,7 @@ hive cancel <task_id>              # dequeue if pending, stop the agent if runni
 hive trace <task_id>              # raw kodo JSONL run trace (pipe into jq / kodo's viewer)
 hive agents                       # local supported agent CLIs detected on this machine
 hive resources | hive probe <resource_id>
+hive login claude --machine hive-vm  # fix a remote agent login: SSH channel, OAuth in your local browser
 hive subs | hive todos | hive org-context
 ```
 

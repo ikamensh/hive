@@ -141,6 +141,48 @@ def test_cli_parks_and_revives_a_resource(harness):
     assert revived["enabled"] is True and revived["disabled_reason"] == ""
 
 
+def test_login_ssh_argv_recipes():
+    """Each recipe channels the interaction correctly: a TTY always (-t), the
+    codex OAuth callback port forwarded, credentials landing in the runner's
+    user (sudo -i), and HIVE_VM* coordinates overridable like deploy/vm.sh."""
+    from hive.cli import LOGIN_RECIPES, login_ssh_argv
+
+    for backend in LOGIN_RECIPES:
+        argv = login_ssh_argv(backend, "hive-vm", {})
+        assert argv[:4] == ["gcloud", "compute", "ssh", "hive-vm"]
+        assert "-t" in argv
+        assert argv[-1].startswith("sudo -i ")
+    codex = login_ssh_argv("codex", "hive-vm", {})
+    assert "1455:localhost:1455" in codex  # OAuth callback rides the tunnel
+    custom = login_ssh_argv("claude", "other-vm", {"HIVE_VM_ZONE": "eu-x", "HIVE_VM_PROJECT": "p1"})
+    assert "--zone=eu-x" in custom and "--project=p1" in custom and custom[3] == "other-vm"
+
+
+def test_login_flow_opens_ssh_then_probes(harness, monkeypatch):
+    """`hive login` = SSH session + proof: it must call the recipe's SSH
+    command and then queue a probe on the exact (machine, backend) resource.
+    Unsupported backends and unknown machines fail with actionable errors."""
+    client, store = harness
+    _register_usable_runner(client, name="fake", backend="codex")
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr("hive.cli.subprocess.call", lambda argv: calls.append(argv) or 0)
+    monkeypatch.setattr("hive.cli.time.sleep", lambda s: None)
+
+    result = cli(client, "login", "codex", "--machine", "fake")
+    assert calls and calls[0][3] == "fake" and "sudo -i codex login" in calls[0]
+    # probe queued and polled; no fake runner executes it here, so it stays probing
+    assert result["probe"] == "probing"
+
+    with pytest.raises(SystemExit) as exc:
+        cli(client, "login", "gemini-cli", "--machine", "fake")
+    assert "portable API key" in str(exc.value)
+
+    with pytest.raises(SystemExit) as exc:
+        cli(client, "login", "codex", "--machine", "ghost")
+    assert "known machines" in str(exc.value)
+
+
 def test_resolve_targets_precedence(monkeypatch, tmp_path):
     """An explicit URL (env > stored) names exactly one chief — no discovery
     beyond it. A one-off `HIVE_URL=…` still overrides the saved default."""

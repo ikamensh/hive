@@ -283,6 +283,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("trace", help="print a task's raw kodo JSONL run trace")
     p.add_argument("task_id")
 
+    p = sub.add_parser(
+        "login",
+        help="fix an agent login on a remote runner machine: SSH channel from here, OAuth in your local browser",
+    )
+    p.add_argument("backend", help="claude | codex | cursor (machine-bound logins)")
+    p.add_argument("--machine", default=os.environ.get("HIVE_VM", "hive-vm"),
+                   help="runner machine name as shown by `hive show machines` (GCE VM)")
+
     sub.add_parser("agents", help="list locally detected supported agent backends")
     sub.add_parser("resources", help="runners and backend resources")
     p = sub.add_parser("probe", help="probe one registered backend resource")
@@ -324,6 +332,110 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _csv(value: str) -> list[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
+
+
+# How to run each machine-bound login on a remote runner. The runner services
+# run as root (deploy/vm_startup.sh: HOME=/root), so credentials must land in
+# root's home — hence `sudo -i`. The OAuth interaction itself stays on the
+# operator's machine: URLs print into the SSH'd terminal and are opened in the
+# LOCAL browser; codex additionally needs its localhost callback port
+# forwarded through the tunnel.
+LOGIN_RECIPES: dict[str, dict] = {
+    "claude": {
+        "remote": "sudo -i claude",
+        "forwards": (),
+        "coach": (
+            "claude opens its UI on the VM. Run /login, pick the subscription "
+            "account, open the printed URL in your LOCAL browser, authorize, "
+            "paste the code back into the terminal, then exit claude."
+        ),
+    },
+    "codex": {
+        "remote": "sudo -i codex login",
+        "forwards": ("-L", "1455:localhost:1455"),
+        "coach": (
+            "codex prints a http://localhost:1455/... URL. Open it in your "
+            "LOCAL browser — the SSH session forwards that port to the VM."
+        ),
+    },
+    "cursor": {
+        "remote": "sudo -i cursor-agent login",
+        "forwards": (),
+        "coach": (
+            "cursor-agent prints a login URL. Open it in your LOCAL browser "
+            "and finish the flow; the CLI picks the session up."
+        ),
+    },
+}
+
+
+def login_ssh_argv(backend: str, machine: str, env: dict[str, str]) -> list[str]:
+    """The gcloud SSH invocation for one login recipe. Coordinates default to
+    the hive VM and are overridable with the same HIVE_VM* vars deploy/vm.sh
+    uses; `-t` allocates the TTY the interactive login needs."""
+    recipe = LOGIN_RECIPES[backend]
+    return [
+        "gcloud", "compute", "ssh", machine,
+        f"--zone={env.get('HIVE_VM_ZONE', 'europe-west1-b')}",
+        f"--project={env.get('HIVE_VM_PROJECT', 'hive-ikamen')}",
+        f"--account={env.get('HIVE_VM_ACCOUNT', 'ikamenshchikov@gmail.com')}",
+        "--", "-t", *recipe["forwards"], recipe["remote"],
+    ]
+
+
+def run_login(args: argparse.Namespace, client) -> dict:
+    """Channel a machine-bound agent login through the operator's machine:
+    open the SSH session, let the human do the OAuth locally, then probe the
+    resource so success is proven (and its 'Fix login' todo auto-closes)."""
+    backend = args.backend
+    if backend not in LOGIN_RECIPES:
+        raise SystemExit(
+            f"`hive login` handles interactive machine-bound logins ({', '.join(sorted(LOGIN_RECIPES))}). "
+            f"`{backend}` uses a portable API key — set it in the runner's environment instead."
+        )
+    data = client.get("/api/resources").raise_for_status().json()
+    machine = next((m for m in data["machines"] if m["name"] == args.machine), None)
+    if machine is None:
+        known = ", ".join(m["name"] for m in data["machines"]) or "(none)"
+        raise SystemExit(f"unknown machine {args.machine!r}; known machines: {known}")
+    resource = next(
+        (r for r in data["resources"]
+         if r["machine_id"] == machine["id"] and r["backend"] == backend),
+        None,
+    )
+
+    recipe = LOGIN_RECIPES[backend]
+    argv = login_ssh_argv(backend, args.machine, dict(os.environ))
+    print(f"Logging in `{backend}` on {args.machine} — the browser part happens HERE, locally.", file=sys.stderr)
+    print(f"  {recipe['coach']}", file=sys.stderr)
+    print(f"  $ {' '.join(argv)}\n", file=sys.stderr)
+    ssh_exit = subprocess.call(argv)
+
+    result: dict = {"backend": backend, "machine": args.machine, "ssh_exit_code": ssh_exit}
+    if resource is None:
+        result["probe"] = "skipped: that machine has no discovered resource for this backend"
+        return result
+    print("Verifying with a probe…", file=sys.stderr)
+    probe = client.post(f"/api/resources/{resource['id']}/probe")
+    if probe.status_code == 409:
+        result["probe"] = f"not started: {probe.json().get('detail', 'runner offline')}"
+        return result
+    task = probe.raise_for_status().json()["task"]
+    for _ in range(90):
+        polled = client.get(f"/api/tasks/{task['id']}").raise_for_status().json()
+        if polled["status"] in ("done", "failed", "cancelled"):
+            break
+        time.sleep(2)
+    fresh = next(
+        r for r in client.get("/api/resources").raise_for_status().json()["resources"]
+        if r["id"] == resource["id"]
+    )
+    result["probe"] = fresh["usability_status"]
+    if fresh["usability_status"] == "usable":
+        result["message"] = "Login proven usable; the matching 'Fix login' todo closes automatically."
+    elif fresh["last_probe_text"]:
+        result["note"] = fresh["last_probe_text"].splitlines()[0]
+    return result
 
 
 def prepare_run_env(env: dict[str, str], stored: dict[str, str]) -> list[str]:
@@ -760,6 +872,8 @@ def run(args: argparse.Namespace, client) -> dict | list:
         r = client.get("/api/resources")
     elif c == "probe":
         r = client.post(f"/api/resources/{args.resource_id}/probe")
+    elif c == "login":
+        return run_login(args, client)
     elif c == "resource-disable":
         r = client.patch(f"/api/resources/{args.resource_id}",
                          json={"enabled": False, "disabled_reason": args.reason})
