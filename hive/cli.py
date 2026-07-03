@@ -2,7 +2,8 @@
 
 Built for agents as much as humans: every command prints the API response as
 JSON, so `hive projects | jq ...` and scripted tests work the same way the
-web UI does.
+web UI does. The one human-first exception is `hive show`, which renders a
+readable summary by default (`--json` restores the raw payload).
 
 Where it sends commands and how it authenticates is a *client target*:
 HIVE_URL, HIVE_BASIC_AUTH="user:pass" for a chief behind basic auth (Caddy),
@@ -210,6 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["machines", "agents", "autonomy"],
         help="one subsystem (default: all)",
     )
+    p.add_argument("--json", action="store_true", help="raw payload instead of the readable summary")
 
     p = sub.add_parser("set", help="patch project settings")
     p.add_argument("project_id")
@@ -381,6 +383,84 @@ def login_ssh_argv(backend: str, machine: str, env: dict[str, str]) -> list[str]
         f"--account={env.get('HIVE_VM_ACCOUNT', 'ikamenshchikov@gmail.com')}",
         "--", "-t", *recipe["forwards"], recipe["remote"],
     ]
+
+
+def _human_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    if seconds < 3600:
+        return f"{seconds / 60:.0f}m"
+    if seconds < 86400:
+        return f"{seconds / 3600:.0f}h"
+    return f"{seconds / 86400:.0f}d"
+
+
+def _fmt_machines(rows: list[dict]) -> list[str]:
+    out = ["MACHINES"]
+    for m in rows:
+        if m["online"]:
+            state = "online"
+        elif m["retired"]:
+            state = "retired"
+        elif m["dark"]:
+            state = f"DARK {_human_duration(time.time() - m['last_seen'])}"
+        else:
+            state = f"offline {_human_duration(time.time() - m['last_seen'])}"
+        chief = " [chief]" if m["hosts_chief"] else ""
+        backends = ", ".join(sorted({b for r in m["runners"] for b in r["backends"]})) or "-"
+        out.append(f"  {m['name']:<12} {m['device_kind']}/{m['os']:<8} {state:<12}{chief} {backends}")
+    return out if len(out) > 1 else out + ["  (none)"]
+
+
+def _fmt_agents(data: dict) -> list[str]:
+    out = [f"AGENTS — {data['launchable_now']} of {len(data['agents'])} launchable now"]
+    for a in data["agents"]:
+        note = f" — {a['note']}" if a["note"] else ""
+        out.append(f"  {a['status']:<9} {a['backend']:<11} @ {a['machine']}{note}")
+    if data["licenses"]:
+        out.append("licenses")
+        for lic in data["licenses"]:
+            where = ", ".join(m["machine"] for m in lic["machines"]) or "no machine can serve it"
+            plan = f" {lic['plan']}" if lic["plan"] else ""
+            out.append(f"  {lic['provider']:<11} ({lic['licensing_mode']}){plan} -> {where}")
+    if data["license_candidates"]:
+        out.append("unregistered licenses (hive saw these work; `hive sub-add <provider>` to record)")
+        for c in data["license_candidates"]:
+            out.append(f"  {c['provider']:<11} {c['evidence']}")
+    return out
+
+
+def _fmt_autonomy(rows: list[dict]) -> list[str]:
+    out = ["AUTONOMY"]
+    for j in rows:
+        where = f" [{j['project_name']}]" if j["project_id"] else ""
+        head = f"  {j['job']}{where} every {_human_duration(j['interval_s'])}"
+        if j["action_now"]:
+            via = ""
+            if j["backends"]:
+                machines = ", ".join(j["machines"]) or "NO MACHINE AVAILABLE"
+                via = f" via {'/'.join(j['backends'])} on {machines}"
+            out.append(f"{head}{via}: {j['action_now']}")
+        else:
+            out.append(f"{head}: idle — {j['reason']}")
+    return out
+
+
+def format_show(payload, part: str | None) -> str:
+    """Readable rendering of the /api/show payload (or one selected part)."""
+    if part == "machines":
+        return "\n".join(_fmt_machines(payload))
+    if part == "agents":
+        return "\n".join(_fmt_agents(payload))
+    if part == "autonomy":
+        return "\n".join(_fmt_autonomy(payload))
+    return "\n".join(
+        _fmt_machines(payload["machines"])
+        + [""]
+        + _fmt_agents(payload["agents"])
+        + [""]
+        + _fmt_autonomy(payload["autonomy"])
+    )
 
 
 def run_login(args: argparse.Namespace, client) -> dict:
@@ -938,7 +1018,11 @@ def main(argv: list[str] | None = None) -> None:
                 # Raw JSONL, not JSON-wrapped, so it pipes into kodo's viewer / jq.
                 print(client.get(f"/api/tasks/{args.task_id}/trace").raise_for_status().text)
                 return
-            print(json.dumps(run(args, client), indent=2))
+            payload = run(args, client)
+            if args.command == "show" and not args.json:
+                print(format_show(payload, args.part))
+            else:
+                print(json.dumps(payload, indent=2))
             return
         except httpx.HTTPStatusError as exc:
             # A status code means we found a chief here; other candidates are moot.

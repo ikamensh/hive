@@ -141,6 +141,58 @@ def test_cli_parks_and_revives_a_resource(harness):
     assert revived["enabled"] is True and revived["disabled_reason"] == ""
 
 
+def test_format_show_renders_readable_summary():
+    """Default `hive show` output is a human summary, not JSON: every section
+    header present, the actionable facts (chief tag, agent notes, launchable
+    count, idle reasons) readable, and no JSON syntax anywhere."""
+    from hive.cli import format_show
+
+    payload = {
+        "machines": [
+            {"name": "hive-vm", "device_kind": "server", "os": "linux", "online": True,
+             "dark": False, "retired": False, "hosts_chief": True, "last_seen": 0.0,
+             "runners": [{"backends": ["codex", "claude"]}]},
+            {"name": "raven", "device_kind": "laptop", "os": "macos", "online": False,
+             "dark": True, "retired": False, "hosts_chief": False, "last_seen": 0.0,
+             "runners": []},
+        ],
+        "agents": {
+            "launchable_now": 1,
+            "agents": [
+                {"backend": "codex", "machine": "hive-vm", "status": "ready", "available": True, "note": ""},
+                {"backend": "claude", "machine": "hive-vm", "status": "failed", "available": False,
+                 "note": "Not logged in · Please run /login"},
+            ],
+            "licenses": [{"provider": "claude", "plan": "Claude Max", "licensing_mode": "machine_bound",
+                          "machines": []}],
+            "license_candidates": [{"provider": "codex", "evidence": "usable on hive-vm"}],
+        },
+        "autonomy": [
+            {"job": "ci_check", "project_id": "p1", "project_name": "hive", "interval_s": 300.0,
+             "action_now": "poll CI", "reason": "", "backends": ["codex"], "machines": ["hive-vm"]},
+            {"job": "testing_check", "project_id": "p1", "project_name": "hive", "interval_s": 900.0,
+             "action_now": "", "reason": "no daily budget", "backends": ["codex"], "machines": []},
+        ],
+    }
+
+    text = format_show(payload, None)
+    for fact in (
+        "MACHINES", "AGENTS — 1 of 2 launchable now", "AUTONOMY",
+        "[chief]", "DARK",
+        "Not logged in · Please run /login",
+        "no machine can serve it",
+        "usable on hive-vm",
+        "every 5m via codex on hive-vm: poll CI",
+        "idle — no daily budget",
+    ):
+        assert fact in text
+    assert "{" not in text and '"' not in text  # readable, not JSON
+
+    # a selected part renders alone
+    assert format_show(payload["machines"], "machines").startswith("MACHINES")
+    assert "AUTONOMY" not in format_show(payload["agents"], "agents")
+
+
 def test_login_ssh_argv_recipes():
     """Each recipe channels the interaction correctly: a TTY always (-t), the
     codex OAuth callback port forwarded, credentials landing in the runner's
