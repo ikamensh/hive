@@ -327,6 +327,9 @@ def _create_via_gh_cli(name: str, *, private: bool, description: str) -> dict:
         name,
         "--confirm",
         "--clone=false",
+        # Born with an initial commit, like the API path's auto_init: a clone of
+        # an empty repo has no HEAD and breaks the first checkout on a runner.
+        "--add-readme",
     ]
     args.append("--private" if private else "--public")
     if description.strip():

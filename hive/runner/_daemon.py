@@ -343,6 +343,25 @@ def checkout(repo_url: str, branch: str = "", fresh_branch: bool = False) -> Pat
             repo_url=checkout_url,
             branch=branch,
         )
+    remote_refs = subprocess.run(
+        ["git", "for-each-ref", "refs/remotes/origin"],
+        cwd=path, capture_output=True, text=True, env=env,
+    ).stdout.strip()
+    if not remote_refs:
+        # Empty origin (a brand-new project repo): nothing to reset to. Park
+        # HEAD on an unborn branch; the first push creates it on origin.
+        _run_checkout_git(
+            ["checkout", "-B", branch or "main"],
+            cwd=path,
+            timeout=60,
+            env=env,
+            repo_url=checkout_url,
+            branch=branch,
+        )
+        _run_checkout_git(
+            ["clean", "-fd"], cwd=path, timeout=60, env=env, repo_url=checkout_url, branch=branch
+        )
+        return path
     default_head = subprocess.run(
         ["git", "symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
         cwd=path, capture_output=True, text=True, env=env,

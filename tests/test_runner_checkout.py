@@ -202,6 +202,8 @@ def test_checkout_uses_https_token_auth_for_github_ssh_urls(monkeypatch, tmp_pat
             assert github_headers == ["", env["GIT_CONFIG_VALUE_2"]]
             assert "AUTHORIZATION: bearer ambient" not in github_headers
             assert "ghp_runner" not in env["GIT_CONFIG_VALUE_2"]
+        if args[:2] == ["git", "for-each-ref"]:
+            return _completed(args, "abc123 commit\trefs/remotes/origin/main\n")
         if args[:2] == ["git", "symbolic-ref"]:
             return _completed(args, "origin/main\n")
         return _completed(args)
@@ -223,6 +225,8 @@ def test_checkout_rewrites_existing_github_origin_before_fetch(monkeypatch, tmp_
 
     def fake_run(args, **kwargs):
         calls.append((args, kwargs))
+        if args[:2] == ["git", "for-each-ref"]:
+            return _completed(args, "abc123 commit\trefs/remotes/origin/main\n")
         if args[:2] == ["git", "symbolic-ref"]:
             return _completed(args, "origin/main\n")
         return _completed(args)
@@ -250,6 +254,8 @@ def test_checkout_restores_requested_origin_when_token_is_unavailable(monkeypatc
 
     def fake_run(args, **kwargs):
         calls.append((args, kwargs))
+        if args[:2] == ["git", "for-each-ref"]:
+            return _completed(args, "abc123 commit\trefs/remotes/origin/main\n")
         if args[:2] == ["git", "symbolic-ref"]:
             return _completed(args, "origin/main\n")
         return _completed(args)
@@ -308,3 +314,46 @@ def test_checkout_failure_message_is_actionable(monkeypatch, tmp_path):
     assert "Permission denied (publickey)" in message
     assert "HIVE_GH_TOKEN" in message
     assert "Command '[" not in message
+
+
+def test_checkout_of_empty_origin_yields_pushable_unborn_main(monkeypatch, tmp_path):
+    """Greenfield intake: a brand-new project repo has no commits, yet checkout
+    must produce a working tree whose first commit can be pushed to create
+    origin's default branch (the scout writes spec files into an empty repo)."""
+    monkeypatch.setattr(runner, "WORKDIR", tmp_path / "work")
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True)
+
+    path = runner.checkout(str(origin))
+
+    head = subprocess.run(
+        ["git", "symbolic-ref", "HEAD"], cwd=path, capture_output=True, text=True
+    ).stdout.strip()
+    assert head == "refs/heads/main"
+    (path / "mission.md").write_text("# mission\n")
+    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t.invalid", "-c", "user.name=t", "commit", "-qm", "seed"],
+        cwd=path,
+        check=True,
+    )
+    subprocess.run(["git", "push", "-q", "origin", "main"], cwd=path, check=True)
+    heads = subprocess.run(
+        ["git", "ls-remote", "--heads", "origin"], cwd=path, capture_output=True, text=True
+    ).stdout
+    assert "refs/heads/main" in heads
+
+
+def test_checkout_of_empty_origin_supports_a_named_branch(monkeypatch, tmp_path):
+    """PR-mode work on a brand-new repo starts on the workstream branch even
+    though origin has nothing to base it on."""
+    monkeypatch.setattr(runner, "WORKDIR", tmp_path / "work")
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True)
+
+    path = runner.checkout(str(origin), branch="hive/ws-1")
+
+    head = subprocess.run(
+        ["git", "symbolic-ref", "HEAD"], cwd=path, capture_output=True, text=True
+    ).stdout.strip()
+    assert head == "refs/heads/hive/ws-1"
