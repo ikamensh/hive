@@ -99,3 +99,29 @@ def test_ask_user_requires_options_and_recommendation():
     assert "error:" in result
     assert store.list(Question) == []
     assert store.get(Workstream, ws_id).status == WorkstreamStatus.active
+
+
+def test_create_task_requires_a_usable_agent_not_just_an_installed_one():
+    """Installed is not usable: an online runner advertising a backend whose
+    resource is parked/failed must not receive work — the planner gets an
+    actionable error naming what *is* usable (live: two cursor tasks queued
+    against a dead subscription)."""
+    from hive.models import Resource, ResourceUsability, Runner
+
+    store = MemoryStore()
+    project = store.put(Project(name="p", spec_repo="https://example.com/s.git"))
+    ws = store.put(Workstream(project_id=project.id, title="w"))
+    runner = store.put(Runner(name="r1", backends=["cursor", "claude"]))
+    store.put(Resource(runner_id=runner.id, backend="claude",
+                       usability_status=ResourceUsability.usable))
+    store.put(Resource(runner_id=runner.id, backend="cursor",
+                       usability_status=ResourceUsability.failed))
+
+    out = Tools(store, project, spec=None).create_task(ws.id, "r", "do it", backend="cursor")
+
+    assert out.startswith("error: no usable 'cursor' agent")
+    assert "claude" in out
+    assert not store.list(Task, project_id=project.id)
+
+    ok = Tools(store, project, spec=None).create_task(ws.id, "r", "do it", backend="claude")
+    assert not ok.startswith("error")

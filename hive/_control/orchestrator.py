@@ -118,18 +118,31 @@ class Tools:
         """Queue a task for a coding agent. repo is the git URL to check out.
         kind is 'work' (implements, then lands changes) or 'verify' (fresh-eyes
         review of the previous task; landing is disabled). backend is one of
-        claude | cursor | codex | gemini-cli — pick one that an online runner
-        advertises (see RUNNERS in the snapshot), or the task cannot dispatch."""
+        claude | cursor | codex | gemini-cli — pick one with a *usable* agent
+        on an online machine (see RUNNERS in the snapshot), or the task cannot
+        dispatch."""
         if backend not in BACKEND_NAMES:
             return f"error: unknown backend {backend!r}, use one of {BACKEND_NAMES}"
-        online = [
-            b
+        online_runners = {
+            r.id
             for r in self.store.list(Runner, workspace_id=self.project.workspace_id)
             if r.online()
-            for b in r.backends
-        ]
-        if online and backend not in online:
-            return f"error: no online runner offers {backend!r}; available now: {sorted(set(online))}"
+        }
+        usable = sorted(
+            {
+                res.backend
+                for res in self.store.list(Resource, workspace_id=self.project.workspace_id)
+                if res.available() and res.runner_id in online_runners
+            }
+        )
+        if usable and backend not in usable:
+            # Installed is not usable: a parked/failed/cooling-down agent must
+            # not receive work (live: two cursor tasks queued against a dead
+            # subscription before this gate existed).
+            return (
+                f"error: no usable {backend!r} agent is available right now "
+                f"(offline, parked, failed, or cooling down); pick from: {usable}"
+            )
         ws = self.store.get(Workstream, workstream_id)
         if not ws:
             return f"error: no workstream {workstream_id}"
