@@ -904,7 +904,7 @@ def test_testing_check_due_respects_envelope_and_interval():
     store = MemoryStore()
     sup = Supervisor(store, lambda p, e: None, testing_check=lambda pid: None)
     on = store.put(Project(name="on", spec_repo="x", daily_budget_usd=5.0))
-    unbudgeted = store.put(Project(name="free", spec_repo="x"))
+    unbudgeted = store.put(Project(name="free", spec_repo="x", daily_budget_usd=0.0))
     opted_out = store.put(Project(name="off", spec_repo="x", daily_budget_usd=5.0, testing_auto=False))
 
     assert sup._testing_check_due(on)

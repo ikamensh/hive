@@ -233,7 +233,8 @@ class Supervisor:
         return tasks + orchestrator
 
     def over_budget(self, project: Project) -> bool:
-        return project.daily_budget_usd > 0 and self.spend_today(project.id) >= project.daily_budget_usd
+        """The daily budget caps every spender; 0 means paid work is paused."""
+        return self.spend_today(project.id) >= project.daily_budget_usd
 
     def refresh_state(self, project: Project) -> ProjectState:
         conversation = (

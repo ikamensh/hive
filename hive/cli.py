@@ -180,7 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("name")
     p.add_argument("--spec", help="path to your spec document ('-' reads stdin)")
     p.add_argument("--repo", default="", help="existing repo git URL (default: create a private repo)")
-    p.add_argument("--budget", type=float, help="daily spend cap in USD")
+    p.add_argument("--budget", type=float, help="daily spend cap in USD (default 10)")
     p.add_argument("--public", action="store_true", help="make the created repo public")
 
     p = sub.add_parser("start", help="wake planning after approved project intake")
@@ -237,7 +237,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="autonomously draft/repair stories and sweep unproven ones (needs a daily budget)",
     )
     p.add_argument("--paused", choices=["true", "false"])
-    p.add_argument("--daily-budget", type=float, help="daily spend cap in USD (0 = no cap)")
+    p.add_argument("--daily-budget", type=float, help="daily cap on all paid work in USD (0 pauses it; new projects default to 10)")
     p.add_argument("--member-repos", help="comma-separated git URLs (replaces the list)")
     p.add_argument("--spec-repo", help="spec home git URL")
 

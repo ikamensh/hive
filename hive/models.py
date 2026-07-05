@@ -111,7 +111,10 @@ class Project(BaseModel):
     testing_auto: bool = True
     paused: bool = False
     archived: bool = False  # hidden from the default list; data retained
-    daily_budget_usd: float = 0.0  # 0 = no cap; else soft cap on today's task spend
+    # One number for money: the daily soft cap on *all* the project's paid work —
+    # planner invocations, build/verify tasks, and autonomous testing alike.
+    # 0 pauses paid work entirely (blocked_budget); raise it to spend more.
+    daily_budget_usd: float = 10.0
     goal_complete: bool = False
     goal_complete_note: str = ""
     intake_conversation_id: str = ""
