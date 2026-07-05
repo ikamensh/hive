@@ -1247,6 +1247,42 @@ def test_spec_handed_at_creation_reaches_scout_and_single_approve_ships_it(harne
     )
 
 
+def test_intake_failure_todo_self_heals_on_successful_retry(harness, tmp_path):
+    """A failed intake turn files an operator todo; the retried, successful
+    turn closes it again — a fixed condition must not leave a zombie entry in
+    Needs-you (live regression: rust-td's checkout-failure todo outlived the
+    fix, 2026-07-05)."""
+    client, store, _orch = harness
+    origin = _spec_origin(tmp_path, {"mission.md": "# Mission\nBuild.\n"})
+    project = client.post("/api/projects", json={"name": "flaky-intake"}).json()
+    pid = project["id"]
+    _configure_project(client, pid, str(origin))
+    rid = _register_usable_runner(client, backend="codex")
+
+    first = client.post(f"/api/projects/{pid}/intake/start").json()
+    _pump(client, store)
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    client.post(
+        f"/api/tasks/{task['id']}/result",
+        json={"text": "checkout failed: no HEAD", "is_error": True},
+        headers=RUNNER_HEADERS,
+    )
+    todos = [t for t in store.list(HumanTask) if t.title == "Intake scout failed for flaky-intake"]
+    assert [t.status for t in todos] == [HumanTaskStatus.open]
+
+    retry = client.post(f"/api/projects/{pid}/intake/start").json()
+    assert retry["id"] != first["id"]
+    _pump(client, store)
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    client.post(
+        f"/api/tasks/{task['id']}/result",
+        json={"text": "Brief: repo inspected. Questions: none."},
+        headers=RUNNER_HEADERS,
+    )
+    todos = [t for t in store.list(HumanTask) if t.title == "Intake scout failed for flaky-intake"]
+    assert [t.status for t in todos] == [HumanTaskStatus.done]
+
+
 CLAUDE_SUBSCRIPTION_DISABLED = (
     "Your organization has disabled Claude subscription access for Claude Code · "
     "Use an Anthropic API key instead, or ask your admin to enable access"

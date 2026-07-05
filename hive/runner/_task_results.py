@@ -230,6 +230,22 @@ def complete_resource_login_todos(store, resource: Resource) -> None:
             store.put(task)
 
 
+def complete_intake_failure_todo(store, project) -> None:
+    """A successful intake turn resolves any open "Intake scout failed for …"
+    todo for this project — otherwise the fixed condition leaves a zombie entry
+    in Needs-you that only the operator can clear."""
+    title = f"Intake scout failed for {project.name}"
+    for task in store.list(HumanTask, workspace_id=project.workspace_id):
+        if (
+            task.status == HumanTaskStatus.open
+            and task.title == title
+            and task.project_id in ("", project.id)
+        ):
+            task.status = HumanTaskStatus.done
+            task.done_at = time.time()
+            store.put(task)
+
+
 def _is_merge_conflict(exc: Exception) -> bool:
     return isinstance(exc, MergeConflictError) or "merge conflict" in str(exc).lower()
 
@@ -485,6 +501,8 @@ class TaskResultProcessor:
         conversation = self.store.update(AgentConversation, task.conversation_id, update_conversation)
         project = self.store.get(Project, task.project_id)
         if project and conversation:
+            if not body.is_error and not body.cancelled:
+                complete_intake_failure_todo(self.store, project)
             if conversation.status == ConversationStatus.done:
                 project.state = ProjectState.idle
                 self.store.put(project)
