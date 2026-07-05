@@ -1093,7 +1093,15 @@ def main(argv: list[str] | None = None) -> None:
         try:
             if args.command == "trace":
                 # Raw JSONL, not JSON-wrapped, so it pipes into kodo's viewer / jq.
-                print(client.get(f"/api/tasks/{args.task_id}/trace").raise_for_status().text)
+                response = client.get(f"/api/tasks/{args.task_id}/trace")
+                if response.status_code == 404:
+                    print(
+                        "no trace recorded for this task (it may have failed "
+                        "before an agent ran, e.g. at checkout)",
+                        file=sys.stderr,
+                    )
+                    raise SystemExit(1)
+                print(response.raise_for_status().text)
                 return
             payload = run(args, client)
             if args.command == "show" and not args.json:
@@ -1115,12 +1123,10 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"Hive API error {code} at {target.base_url}: {exc.response.text}", file=sys.stderr)
             raise SystemExit(1) from exc
         except httpx.RequestError as exc:
+            # Quiet fall-through: discovery walking past a dead candidate is
+            # normal (no localhost chief on a fleet machine), not news worth a
+            # line on every command. Total failure below names what was tried.
             last_error = exc
-            if i + 1 < len(targets):
-                print(
-                    f"no chief at {target.base_url}; trying {targets[i + 1].base_url}",
-                    file=sys.stderr,
-                )
     print(
         f"Hive API unreachable (tried {', '.join(t.base_url for t in targets)}): {last_error}",
         file=sys.stderr,

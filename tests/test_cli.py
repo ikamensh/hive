@@ -703,7 +703,9 @@ def test_main_falls_back_to_runner_env_chief(monkeypatch, capsys, tmp_path):
     main(["projects"])
     captured = capsys.readouterr()
     assert '"id": "p1"' in captured.out
-    assert "no chief at http://localhost:8000; trying https://fleet.example" in captured.err
+    # Walking past a dead localhost candidate is normal discovery, not news:
+    # stdout stays pure JSON and stderr stays empty on success.
+    assert captured.err == ""
 
 
 def test_doctor_storage_uses_managed_state_config(monkeypatch, capsys):
