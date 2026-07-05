@@ -72,16 +72,19 @@ uv run python -m hive.runner                    # registers this machine, then l
 
 The runner defaults already point at `localhost:8000`. It advertises each detected backend as a resource.
 
-### 4. Make a backend usable
+### 4. Watch the backends prove themselves
 
-A freshly registered backend is `unknown` until proven. Probe it (cheap smoke run against a temp repo):
+A freshly registered backend is `unknown` until proven — the runner **probes it
+automatically** on registration (a cheap smoke run against a throwaway repo), so
+there is nothing to do here in the happy path:
 
 ```bash
-uv run hive resources                 # find the resource id for the backend you want
-uv run hive probe <resource_id>       # marks it usable, or surfaces an auth/quota/login fix
+uv run hive show agents               # each (backend, machine) pair and whether it's ready
 ```
 
-Only `usable` backends get real work. A failed probe stays non-dispatchable and files a human todo telling you exactly what to fix on the CLI.
+Only `usable` backends get real work. A failed probe stays non-dispatchable and
+files a human todo telling you exactly what to fix; after fixing a login, re-check
+with `uv run hive probe <resource_id>` (ids in `hive resources`).
 
 ### 5. Create your first project and set the goal
 

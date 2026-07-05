@@ -131,7 +131,7 @@ Numbered for reference from commits/fixes. Status: `open` | `fixing` | `done`.
 | G1 | No spec-first project creation: `create` takes a name only; a written spec has no direct entry (live run: one full scout turn burned to learn "repo is empty, what do you want?", and the spec had to travel as a chat message CLI arg) | A | high | done — `Project.initial_spec` + `spec_text` on create; spec injected into scout turn 1; `hive new <name> --spec f [--repo url] [--budget n]` one-step CLI; spec textarea on the web create form |
 | G2 | Directive brain stubbed: launchpad's primary input dispatches nothing | C | high | done — a directive files a GitHub issue (provenance marker in body) + starts a selected-scope issue run; landing → `done`, external close → `cancelled`, filing failure → `triaging` with the reason |
 | G3 | Budget semantics split: 0 = uncapped manual spend but disabled autonomy; silent no-op | A,B | med | done — one universal daily cap; new projects default $10; 0 pauses paid work (visible blocked_budget) |
-| G4 | Manual probe step (`hive probe <resource_id>`) in the first-work path | all | med | open |
+| G4 | Manual probe step (`hive probe <resource_id>`) in the first-work path | all | med | done — was stale docs, not product: registration auto-probes unknown backends (`should_auto_probe`); README quickstart rewritten; `hive probe` stays as the after-a-fix re-check |
 | G5 | `repo-create` is a separate user step for greenfield projects | A | low | open |
 | G6 | No scheduled issue scan — new GitHub issues wait for a human `hive scan` | B,C | med | open |
 | G7 | Completion evidence unverified: does `goal_complete_note` carry a runnable demo? | A | med | open |
