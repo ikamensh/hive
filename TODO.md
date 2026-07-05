@@ -3,6 +3,19 @@
 Deferred gap-closing work (Phase 3). Captured, not yet started — see chat
 context for the full gap analysis these came from.
 
+## Dispatch: toolchain + warm-checkout awareness
+First-fit dispatch is toolchain-blind and checkout-blind: a Rust task can land
+on a machine without cargo (agent then installs or fails), and a machine with
+a warm checkout of the repo has no preference over one that must clone cold
+(observed 2026-07-05: rust-td landed on the only cargo-equipped machine by
+list-order luck). The pieces exist — `Task.required_capabilities`,
+`Resource.supports`, runner `detect_capabilities` (browser today), and
+`Checkout` rows per (machine, repo). Design: advertise common toolchains
+(cargo, node, go, uv) as capabilities; let the orchestrator set
+`required_capabilities` from the project's language; prefer (don't require)
+machines whose Checkout of the task repo exists. Keep it a preference, not a
+hard constraint, to avoid capacity deadlocks.
+
 (Gap 11 episode traces and gap 9 iteration.md ownership are done — see the
 runner trace upload / `hive trace`, and the iterate path in `api.py` +
 `wiki/architecture.md`.)
