@@ -96,6 +96,9 @@ class Project(BaseModel):
     workspace_id: str = DEFAULT_WORKSPACE_ID
     name: str
     spec_repo: str = ""  # git URL of the spec home; empty = draft (not yet configured)
+    # The spec the user handed over at creation, verbatim. Intake treats it as the
+    # primary statement of intent and preserves it under input-log/ when finalizing.
+    initial_spec: str = ""
     member_repos: list[str] = []  # git URLs; spec_repo included if it holds code
     mode: Mode = Mode.build
     autonomy: Autonomy = Autonomy.direct_push

@@ -156,6 +156,7 @@ def canonical_repo(url: str) -> str:
 
 class ProjectCreate(BaseModel):
     name: str
+    spec_text: str = ""  # the user's spec, handed over at creation
 
 
 class ProjectStart(BaseModel):
@@ -587,7 +588,13 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @app.post("/api/projects")
     def create_project(body: ProjectCreate, ctx: AuthContext = Depends(current)):
-        project = store.put(Project(workspace_id=ctx.workspace_id, name=body.name.strip()))
+        project = store.put(
+            Project(
+                workspace_id=ctx.workspace_id,
+                name=body.name.strip(),
+                initial_spec=body.spec_text.strip(),
+            )
+        )
         return project.model_dump()
 
     @app.post("/api/projects/{project_id}/start")
@@ -686,7 +693,9 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         except httpx.HTTPStatusError as exc:
             detail = exc.response.text[:1000] if exc.response is not None else str(exc)
             raise HTTPException(exc.response.status_code if exc.response else 502, detail) from exc
-        project.spec_repo = repo["ssh_url"] or repo["clone_url"]
+        # https, not ssh: every part of the fleet (chief spec clones, runner
+        # checkouts) authenticates to GitHub with tokens over https.
+        project.spec_repo = repo["clone_url"] or repo["ssh_url"]
         project.member_repos = [project.spec_repo]
         project.state = ProjectState.intake
         store.put(project)
@@ -714,8 +723,20 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if action == "message" and not body.message.strip():
             raise HTTPException(400, "message is required")
         if action == "approve":
-            conversation, status = intake.accept(store, supervisor, config, project, conversation)
-            return {"conversation": conversation.model_dump(), "spec_status": status.model_dump()}
+            # Durable spec files already in the repo: accept directly. Otherwise
+            # approval *is* the ask to finalize: one scout turn writes and pushes
+            # the spec files, and its completion wakes planning (see
+            # TaskResultProcessor._handle_intake_result on the finalize turn).
+            status = intake.spec_status(config, project)
+            if status.ready:
+                conversation, status = intake.accept(store, supervisor, config, project, conversation)
+                return {"conversation": conversation.model_dump(), "spec_status": status.model_dump()}
+            task = intake.queue_turn(store, project, conversation, "finalize")
+            return {
+                "conversation": store.get(AgentConversation, conversation.id).model_dump(),
+                "task": task.model_dump(),
+                "spec_status": status.model_dump(),
+            }
         turn = "proceed" if action == "proceed" else "message"
         task = intake.queue_turn(store, project, conversation, turn, body.message)
         return {"conversation": store.get(AgentConversation, conversation.id).model_dump(), "task": task.model_dump()}

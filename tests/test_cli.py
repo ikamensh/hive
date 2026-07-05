@@ -876,3 +876,32 @@ def test_cli_stories_coverage_view(harness, tmp_path):
 
     cancelled = cli(client, "test-cancel", episode["id"])
     assert cancelled["status"] == "cancelled"
+
+
+def test_cli_new_hands_spec_to_intake_in_one_command(harness, tmp_path):
+    """`hive new` collapses create + repo wiring + budget + spec handover +
+    intake-start into one command; the spec text reaches the scout's first-turn
+    instructions verbatim (the spec-only journey in wiki/ideal-ux.md)."""
+    client, store = harness
+    spec = tmp_path / "spec.md"
+    spec.write_text("# Game\nA tower defense game in Rust.\n")
+    _register_usable_runner(client, backend="codex")
+
+    out = cli(
+        client, "new", "td",
+        "--spec", str(spec),
+        "--repo", "https://example.com/td.git",
+        "--budget", "5",
+    )
+
+    detail = client.get(f"/api/projects/{out['project_id']}").json()
+    project = detail["project"]
+    assert project["spec_repo"] == "https://example.com/td.git"
+    assert project["member_repos"] == ["https://example.com/td.git"]
+    assert project["daily_budget_usd"] == 5.0
+    assert project["initial_spec"].startswith("# Game")
+    intake_tasks = [t for t in detail["tasks"] if t["kind"] == "intake"]
+    assert len(intake_tasks) == 1
+    assert "A tower defense game in Rust." in intake_tasks[0]["instructions"]
+    assert out["conversation_id"]
+    assert f"hive project {out['project_id']}" in out["next"]

@@ -172,6 +172,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("create", help="create a project (name only; configure in project view)")
     p.add_argument("name")
 
+    p = sub.add_parser(
+        "new",
+        help="one-step project start: create, wire or create the repo, hand over "
+        "the spec, and launch the intake scout",
+    )
+    p.add_argument("name")
+    p.add_argument("--spec", help="path to your spec document ('-' reads stdin)")
+    p.add_argument("--repo", default="", help="existing repo git URL (default: create a private repo)")
+    p.add_argument("--budget", type=float, help="daily spend cap in USD")
+    p.add_argument("--public", action="store_true", help="make the created repo public")
+
     p = sub.add_parser("start", help="wake planning after approved project intake")
     p.add_argument("project_id")
     p.add_argument("--mission", default="", help=argparse.SUPPRESS)
@@ -851,6 +862,43 @@ def run(args: argparse.Namespace, client) -> dict | list:
         r = client.get("/api/projects")
     elif c == "create":
         r = client.post("/api/projects", json={"name": args.name})
+    elif c == "new":
+        spec_text = ""
+        if args.spec:
+            spec_text = sys.stdin.read() if args.spec == "-" else Path(args.spec).read_text()
+        project = client.post(
+            "/api/projects", json={"name": args.name, "spec_text": spec_text}
+        ).raise_for_status().json()
+        pid = project["id"]
+        if args.repo:
+            repo = args.repo
+            client.patch(
+                f"/api/projects/{pid}",
+                json={"spec_repo": repo, "member_repos": [repo]},
+            ).raise_for_status()
+        else:
+            created = client.post(
+                f"/api/projects/{pid}/repo", json={"name": "", "private": not args.public}
+            ).raise_for_status().json()
+            repo = created["repo"]["full_name"]
+        if args.budget is not None:
+            client.patch(
+                f"/api/projects/{pid}", json={"daily_budget_usd": args.budget}
+            ).raise_for_status()
+        conversation = client.post(
+            f"/api/projects/{pid}/intake/start"
+        ).raise_for_status().json()
+        return {
+            "project_id": pid,
+            "repo": repo,
+            "conversation_id": conversation["id"],
+            "scout": f"{conversation['backend']} {conversation.get('model', '')}".strip(),
+            "next": (
+                f"The scout is reading your spec. Follow with `hive project {pid}`; "
+                f"answer with `hive intake-send {conversation['id']} <msg>`; approve with "
+                f"`hive intake-approve {conversation['id']}`."
+            ),
+        }
     elif c == "start":
         r = client.post(f"/api/projects/{args.project_id}/start", json={
             "mission": args.mission,

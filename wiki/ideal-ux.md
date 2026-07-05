@@ -128,12 +128,16 @@ Numbered for reference from commits/fixes. Status: `open` | `fixing` | `done`.
 
 | # | Gap | Archetype | Severity | Status |
 |---|-----|-----------|----------|--------|
-| G1 | No spec-first project creation: `create` takes a name only; a written spec has no direct entry | A | high | open |
+| G1 | No spec-first project creation: `create` takes a name only; a written spec has no direct entry (live run: one full scout turn burned to learn "repo is empty, what do you want?", and the spec had to travel as a chat message CLI arg) | A | high | done — `Project.initial_spec` + `spec_text` on create; spec injected into scout turn 1; `hive new <name> --spec f [--repo url] [--budget n]` one-step CLI; spec textarea on the web create form |
 | G2 | Directive brain stubbed: launchpad's primary input dispatches nothing | C | high | open |
 | G3 | Budget semantics split: 0 = uncapped manual spend but disabled autonomy; silent no-op | A,B | med | open |
 | G4 | Manual probe step (`hive probe <resource_id>`) in the first-work path | all | med | open |
 | G5 | `repo-create` is a separate user step for greenfield projects | A | low | open |
 | G6 | No scheduled issue scan — new GitHub issues wait for a human `hive scan` | B,C | med | open |
 | G7 | Completion evidence unverified: does `goal_complete_note` carry a runnable demo? | A | med | open |
+| G8 | `repo-create` (gh CLI path) made a commit-less repo; the scout's first checkout died on `origin/main is not a commit` — the recommended greenfield flow broke at turn 1 | A | high | done — gh path adds `--add-readme`; `checkout()` handles an empty origin (unborn branch, first push creates it) |
+| G9 | CLI rough edges met on the way: every command prints chief-discovery noise; `hive trace` on a task that never ran an agent surfaces raw `{"detail":"Not Found"}` | all | low | open |
+| G10 | Approval drifted into a two-command tail (`intake-write-mission` + `intake-approve`); the design doc's "approve = finalize and go" existed only as dead `finalize`-turn handling nothing queued | A,B | med | done — approve with missing spec files queues the scout finalize turn; its completion wakes planning |
+| G11 | Chief verifies/reads the spec repo by *ssh* clone when the repo was wired via `repo-create` (stores `ssh_url`) — `Host key verification failed` on approve; the fleet's auth model is https+token everywhere | A | high | done — `authed_url` normalizes GitHub ssh remotes; `repo-create` stores the https clone URL |
 
 (Gaps found during the validation projects get appended here.)

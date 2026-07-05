@@ -168,6 +168,7 @@ function machineAvailabilityLabel(machine: OverviewMachine): string {
 function NewProjectModal({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const [name, setName] = useState("");
+  const [specText, setSpecText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -176,7 +177,7 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setError("");
     try {
-      const p = await api.createProject({ name: name.trim() });
+      const p = await api.createProject({ name: name.trim(), spec_text: specText.trim() });
       navigate(`/p/${p.id}`);
     } catch {
       setError("create failed — is the chief up?");
@@ -192,6 +193,15 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
         <label>
           name
           <input value={name} onChange={(e) => setName(e.target.value)} required autoFocus placeholder="atlas" />
+        </label>
+        <label>
+          spec <span className="muted">(optional — paste what you want built)</span>
+          <textarea
+            value={specText}
+            onChange={(e) => setSpecText(e.target.value)}
+            rows={8}
+            placeholder="Mission, the first iteration's outcome, anything you already know…"
+          />
         </label>
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions">

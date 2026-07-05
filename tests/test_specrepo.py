@@ -67,6 +67,13 @@ def test_authed_url():
     )
     assert authed_url("/local/path", "tok") == "/local/path"
     assert authed_url("https://github.com/a/b.git", "") == "https://github.com/a/b.git"
+    # ssh remotes are normalized: the chief authenticates over https with a
+    # token, never over ssh (a repo wired via its ssh_url must still clone).
+    assert (
+        authed_url("git@github.com:a/b.git", "tok")
+        == "https://x-access-token:tok@github.com/a/b.git"
+    )
+    assert authed_url("git@github.com:a/b.git", "") == "https://github.com/a/b.git"
 
 
 def test_spec_status_requires_mission_and_iteration(tmp_path):

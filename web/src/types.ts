@@ -630,6 +630,7 @@ export interface Overview {
 
 export interface ProjectCreate {
   name: string;
+  spec_text?: string;
 }
 
 export interface ProjectStart {

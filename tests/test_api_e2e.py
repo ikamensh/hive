@@ -1140,7 +1140,14 @@ def test_web_intake_contract_holds_until_durable_spec_finalize(harness, tmp_path
     assert any("Intake accepted from durable spec files" in event for batch in orch.invocations for event in batch)
 
 
-def test_intake_finalize_requires_spec_files_not_ready_brief(harness, tmp_path):
+def test_approve_without_spec_files_queues_finalize_and_proceed_stays_conversational(
+    harness, tmp_path
+):
+    """Approval is one action: with durable spec files missing, approve queues
+    the scout's finalize turn (write + push the files) instead of bouncing the
+    user into a separate write-mission step. Proceed remains conversational —
+    canonical readiness still comes from dedicated spec files, not from a
+    regex-shaped brief."""
     client, store, _orch = harness
     origin = _spec_origin(tmp_path, {"mission.md": "# Mission\nBuild Hive.\n"})
     project = client.post("/api/projects", json={"name": "intake-questions"}).json()
@@ -1165,17 +1172,79 @@ def test_intake_finalize_requires_spec_files_not_ready_brief(harness, tmp_path):
         headers=RUNNER_HEADERS,
     )
 
-    blocked = client.post(f"/api/conversations/{conversation['id']}/message", json={"action": "approve"})
-    assert blocked.status_code == 409
-    assert "iteration.md" in blocked.json()["detail"]
     proceed = client.post(f"/api/conversations/{conversation['id']}/message", json={"action": "proceed"})
     assert proceed.status_code == 200
     proceed_task = proceed.json()["task"]
-    # Regression: proceed stays conversational; canonical readiness comes from
-    # dedicated spec files, not from a regex-shaped brief.
     assert proceed_task["conversation_turn"] == "proceed"
     assert "Return a compact updated brief" in proceed_task["instructions"]
     assert "Do not edit files" in proceed_task["instructions"]
+    _pump(client, store)
+    polled = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    client.post(
+        f"/api/tasks/{polled['id']}/result",
+        json={"text": "Updated brief with assumptions."},
+        headers=RUNNER_HEADERS,
+    )
+
+    approved = client.post(f"/api/conversations/{conversation['id']}/message", json={"action": "approve"})
+    assert approved.status_code == 200
+    body = approved.json()
+    assert body["spec_status"]["ready"] is False
+    assert body["task"]["conversation_turn"] == "finalize"
+    assert "mission.md" in body["task"]["instructions"]
+    assert "Commit and push" in body["task"]["instructions"]
+    assert store.get(AgentConversation, conversation["id"]).status == "finalizing"
+
+
+def test_spec_handed_at_creation_reaches_scout_and_single_approve_ships_it(harness, tmp_path):
+    """The spec-only journey (wiki/ideal-ux.md): a spec given at creation is the
+    scout's primary context on turn 1 — no blind turn against an empty repo —
+    and one approve drives finalize -> push -> planning without further user
+    steps."""
+    client, store, orch = harness
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    project = client.post(
+        "/api/projects",
+        json={"name": "spec-first", "spec_text": "# TD game\nBuild a tower defense game."},
+    ).json()
+    assert project["initial_spec"] == "# TD game\nBuild a tower defense game."
+    pid = project["id"]
+    _configure_project(client, pid, str(spec_dir))
+    rid = _register_usable_runner(client, backend="codex")
+
+    conversation = client.post(f"/api/projects/{pid}/intake/start").json()
+    _pump(client, store)
+    first = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert "Build a tower defense game." in first["instructions"]
+    assert "primary statement of intent" in first["instructions"]
+    client.post(
+        f"/api/tasks/{first['id']}/result",
+        json={"text": "Brief: build the TD game. No material questions."},
+        headers=RUNNER_HEADERS,
+    )
+
+    approved = client.post(
+        f"/api/conversations/{conversation['id']}/message", json={"action": "approve"}
+    ).json()
+    assert approved["task"]["conversation_turn"] == "finalize"
+    assert "input-log/" in approved["task"]["instructions"]
+    _pump(client, store)
+    finalize = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert finalize["id"] == approved["task"]["id"]
+    (spec_dir / "mission.md").write_text("# Mission\nA polished TD game.\n")
+    (spec_dir / "iteration.md").write_text("# Iteration 1\nPlayable core loop.\n")
+    client.post(
+        f"/api/tasks/{finalize['id']}/result",
+        json={"text": "Pushed mission.md and iteration.md at abc123."},
+        headers=RUNNER_HEADERS,
+    )
+    assert store.get(AgentConversation, conversation["id"]).status == "done"
+    assert store.get(Project, pid).state == "idle"
+    _pump(client, store)
+    assert any(
+        "Intake accepted and pushed" in event for batch in orch.invocations for event in batch
+    )
 
 
 CLAUDE_SUBSCRIPTION_DISABLED = (

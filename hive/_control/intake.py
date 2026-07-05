@@ -204,6 +204,17 @@ def prompt(
 ) -> str:
     if turn == "initial":
         org_context = store.get_org_context(project.workspace_id).strip()
+        handed_spec = (
+            [
+                "The user handed over this spec when creating the project. Treat it as the "
+                "primary statement of intent; the repo may not reflect it yet:",
+                "",
+                project.initial_spec.strip(),
+                "",
+            ]
+            if project.initial_spec.strip()
+            else []
+        )
         return "\n".join(
             [
                 "You are Hive's intake scout.",
@@ -220,6 +231,7 @@ def prompt(
                 f"Member repos: {', '.join(project.member_repos) or '(none)'}",
                 f"Guess propensity: {project.guess_propensity}",
                 "",
+                *handed_spec,
                 "Org context:",
                 org_context or "(none)",
                 "",
@@ -254,6 +266,26 @@ def prompt(
             "edit files, commit, push, or report on file changes. Do not ask more "
             "questions unless work would be impossible rather than merely risky. Clearly "
             "list the assumptions you are making."
+        )
+    if turn == "finalize":
+        original_spec = (
+            "\n- input-log/ — preserve the user's original spec verbatim if it is not "
+            "already recorded there.\n"
+            if project.initial_spec.strip()
+            else "\n"
+        )
+        return (
+            _context(conversation)
+            + "\n"
+            "The user approved the latest intake brief.\n\n"
+            "Write the durable spec files to match it and push:\n"
+            "- mission.md — the long-term mission and operating principles.\n"
+            "- iteration.md — the concrete next iteration goal and acceptance signal.\n"
+            "- wiki/decisions.md — each assumption and accepted answer, with provenance."
+            + original_spec
+            + "\nPreserve coherent existing spec text; rewrite stale or wrong content. "
+            "Do not modify product code. Commit and push the spec changes. Report the "
+            "commit SHA and the files changed."
         )
     if turn == "write_mission":
         return (

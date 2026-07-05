@@ -81,6 +81,10 @@ def _run(args: list[str], cwd: Path | None = None) -> str:
 
 
 def authed_url(url: str, token: str) -> str:
+    if url.startswith("git@github.com:"):
+        # The fleet authenticates to GitHub with tokens over https; normalize an
+        # ssh remote so a repo wired via its ssh_url still works on the chief.
+        url = "https://github.com/" + url.removeprefix("git@github.com:")
     if token and url.startswith("https://"):
         return url.replace("https://", f"https://x-access-token:{token}@", 1)
     return url
