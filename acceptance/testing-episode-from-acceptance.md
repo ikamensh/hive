@@ -3,7 +3,9 @@ As an operator I can run a testing episode from acceptance stories so that Hive 
 
 ## Rules
 - Story refresh updates `acceptance/` from `mission.md`, `iteration.md`, `wiki/`, and `input-log/`, never from product code.
-- Ambiguous acceptance becomes a question instead of a guessed pass/fail oracle.
+- If `acceptance/` is empty or missing, story refresh creates a bounded first backlog of 5-8 core user-facing stories rather than trying to enumerate every feature.
+- Compatible human-edited stories remain stable; ambiguous or conflicting acceptance becomes a question instead of a silent rewrite.
+- When story refresh changes files, Hive commits and pushes only the acceptance changes needed for the refreshed backlog.
 - A test episode snapshots the story keys in scope so the run remains auditable if the spec changes afterward.
 - Each sweep tests one story in an isolated local or Docker environment, records achieved fidelity, and uploads evidence such as command output, browser state, screenshots, video, console logs, or network logs.
 - A UI sweep runs only on a resource with a usable backend and a probed browser capability, plus a probed Docker capability when the environment recipe requires a container.
@@ -19,6 +21,9 @@ As an operator I can run a testing episode from acceptance stories so that Hive 
 - Given `acceptance/` is missing in a spec home
   When a story refresh runs
   Then Hive creates a bounded first backlog of core user-facing stories from the intention artifacts only
+- Given a human-edited story still matches the current intent artifacts
+  When story refresh runs
+  Then the story remains byte-stable and is not rewritten for style alone
 - Given an episode cancellation is requested while a sweep task is executing on a runner
   When the cancellation is processed
   Then the executing task receives a termination signal, any undelivered sweep tasks are cancelled, and no further testing tasks are dispatched to polling runners

@@ -1,10 +1,11 @@
 # story: local-managed-chief [ui]
-As an operator I can start Hive locally against managed state so that my MacBook can safely take over the chief without forking runtime data.
+As an operator I can start Hive's control plane against managed state so that a local or VM chief sees one shared runtime truth.
 
 ## Rules
 - Hive exposes a storage doctor that proves Firestore, GCS, workspace bootstrap, runner token presence, and leader lease status before startup.
 - Starting the production chief requires both `HIVE_GCP_PROJECT` and `HIVE_GCS_BUCKET`; missing managed-state configuration fails before startup with actionable output.
-- A local chief connected to the same workspace shows the same projects, resources, traces, org context, and human todos as the VM chief.
+- Starting the chief prints the active Firestore project, GCS bucket, workspace, auth mode, public URL, and runner autostart state.
+- A chief connected to the same workspace shows the same projects, resources, traces, org context, and human todos whether it is running locally or on the VM.
 - `hive projects`, `hive resources`, and the web Resources page report the same managed-state projects, runners, backend resources, cooldowns, and human todos.
 - If the local API is unreachable, the CLI and web UI show a clear unreachable or error state instead of stale successful data.
 - A second live chief against the same workspace is refused by the leader lease instead of running concurrently.
