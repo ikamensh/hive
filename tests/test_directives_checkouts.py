@@ -131,3 +131,26 @@ def test_checkout_report_is_upserted_not_duplicated():
     checkouts = client.get(f"/api/projects/{pid}").json()["checkouts"]
     assert len(checkouts) == 1  # same (machine, repo) -> one record
     assert checkouts[0]["ahead"] == 0 and checkouts[0]["dirty"] is False
+
+
+def test_cli_ask_files_directive(monkeypatch):
+    """`hive ask` is the CLI face of the launchpad box — full parity."""
+    from hive.cli import build_parser, run
+
+    store = MemoryStore()
+    client = make_client(store)
+    pid = make_project(client, spec_repo="https://github.com/o/r.git")
+    monkeypatch.setattr(
+        "hive.api.create_issue",
+        lambda repo, title, body, token: {"number": 5, "html_url": "https://github.com/o/r/issues/5"},
+    )
+    monkeypatch.setattr("hive.api.preflight_checks", lambda store, config, project, repo=None: [])
+    monkeypatch.setattr(
+        "hive.api.fetch_open_issues_full",
+        lambda repo, token: [{"number": 5, "title": "Add a doctor command", "doc": "…",
+                              "url": "https://github.com/o/r/issues/5", "attachments": []}],
+    )
+
+    out = run(build_parser().parse_args(["ask", pid, "Add a doctor command"]), client)
+
+    assert out["status"] == "working" and out["issue_number"] == 5

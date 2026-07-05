@@ -241,6 +241,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--member-repos", help="comma-separated git URLs (replaces the list)")
     p.add_argument("--spec-repo", help="spec home git URL")
 
+    p = sub.add_parser(
+        "ask",
+        help="give Hive a task: files your ask as a GitHub issue and the issue "
+        "pipeline works it to done",
+    )
+    p.add_argument("project_id")
+    p.add_argument("text", help="what you want done ('-' reads stdin)")
+
     p = sub.add_parser("scan", help="scan the project's open GitHub issues and queue fixes")
     p.add_argument("project_id")
 
@@ -946,6 +954,9 @@ def run(args: argparse.Namespace, client) -> dict | list:
         if args.spec_repo is not None:
             body["spec_repo"] = args.spec_repo
         r = client.patch(f"/api/projects/{args.project_id}", json=body)
+    elif c == "ask":
+        text = sys.stdin.read() if args.text == "-" else args.text
+        r = client.post(f"/api/projects/{args.project_id}/directives", json={"text": text})
     elif c == "scan":
         r = client.post(f"/api/projects/{args.project_id}/scan-issues")
     elif c == "check-ci":
