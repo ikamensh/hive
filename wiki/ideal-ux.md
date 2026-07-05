@@ -148,5 +148,6 @@ Numbered for reference from commits/fixes. Status: `open` | `fixing` | `done`.
 | G17 | CLI had no directive command despite "full web-API parity" | C | low | done — `hive ask <project> <text>` |
 | G18 | Chief trusted the finalize scout's "pushed" claim: gleaner's push 403'd (no org write access) yet intake went done and planning woke on an empty spec repo | B | high | done — finalize is verified against the actual repo (`spec_status`); failure reopens intake + files a todo naming the fix |
 | G19 | Directive filing raced GitHub's eventually-consistent list API: issue created but the immediate selected run refused ("select at least one open issue") | C | med | done — work item seeded from what was just filed; reconcile grants just-created items a 3-min grace before reading absence as an external close |
+| G20 | An intake retry starts cold: the fresh conversation re-asked material questions the user had already answered in the failed round (observed on gleaner's fork restart) | B | med | open — seed a new intake conversation with the prior conversation's answered Q&A (it's all in the store) |
 
 (Gaps found during the validation projects get appended here.)
