@@ -391,10 +391,16 @@ class Supervisor:
             for t in tasks
             if t.status == TaskStatus.running and _serializes_repo(t)
         }
+        # Workspace-wide, not per-project: a runner executes one task at a time,
+        # so stacking another project's task on it leaves other machines idle
+        # while this one queues (observed live: raven ran one project's intake
+        # with a second project's verify claimed behind it, hive-vm idle).
         busy_runners = {
             t.runner_id
-            for t in tasks
-            if t.status == TaskStatus.running and t.runner_id
+            for t in self.store.list(
+                Task, workspace_id=self.workspace_id, status=TaskStatus.running
+            )
+            if t.runner_id
         }
         runners = [r for r in self.store.list(Runner, workspace_id=self.workspace_id) if r.online()]
         resources = {

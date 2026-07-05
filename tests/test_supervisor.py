@@ -392,3 +392,38 @@ def test_testing_capability_blocker_files_project_todo():
 
     sup.refresh_state(project)
     assert len(store.list(HumanTask, project_id=project.id)) == 1
+
+
+def test_dispatch_counts_running_tasks_across_projects():
+    """A runner executes one task at a time, so a runner busy with *another*
+    project's task must not be double-booked — the pending task should go to a
+    free machine instead (observed live: two projects stacked on one laptop
+    while the cloud server idled, 2026-07-05)."""
+    store = MemoryStore()
+    project_a = seed(store)  # r1/cursor
+    runner2 = store.put(Runner(name="r2", backends=["cursor"]))
+    store.put(Resource(runner_id=runner2.id, backend="cursor",
+                       usability_status=ResourceUsability.usable))
+    ws_a = store.put(Workstream(project_id=project_a.id, title="a"))
+    project_b = store.put(Project(name="q", spec_repo="https://example.com/other.git"))
+    ws_b = store.put(Workstream(project_id=project_b.id, title="b"))
+
+    sup = make_supervisor(store)
+    store.put(Task(project_id=project_a.id, workstream_id=ws_a.id,
+                   repo="repo-a", instructions="a"))
+    assert sup.dispatch(project_a) == 1
+    busy_runner = store.list(Task, status=TaskStatus.running)[0].runner_id
+
+    store.put(Task(project_id=project_b.id, workstream_id=ws_b.id,
+                   repo="repo-b", instructions="b"))
+    assert sup.dispatch(project_b) == 1
+    b_task = next(t for t in store.list(Task, status=TaskStatus.running)
+                  if t.project_id == project_b.id)
+    assert b_task.runner_id != busy_runner  # went to the free runner
+
+    # With every runner busy, a third task waits instead of stacking.
+    project_c = store.put(Project(name="r", spec_repo="https://example.com/third.git"))
+    ws_c = store.put(Workstream(project_id=project_c.id, title="c"))
+    store.put(Task(project_id=project_c.id, workstream_id=ws_c.id,
+                   repo="repo-c", instructions="c"))
+    assert sup.dispatch(project_c) == 0
