@@ -151,3 +151,33 @@ Numbered for reference from commits/fixes. Status: `open` | `fixing` | `done`.
 | G20 | An intake retry starts cold: the fresh conversation re-asked material questions the user had already answered in the failed round (observed on gleaner's fork restart) | B | med | done — a new conversation carries the prior round's user answers; the scout's first prompt lists them as settled |
 
 (Gaps found during the validation projects get appended here.)
+
+## Under the hood: efficiency findings (2026-07-05/06)
+
+What the machines/resources/time audit found while the three projects ran;
+each either became a fix above or a TODO note.
+
+- **Dispatch double-booking (fixed, G14)** was the largest time sink observed:
+  gleaner's intake queued ~40 min behind a rust-td verify on one laptop while
+  the cloud server idled.
+- **Dead credentials burned real work**: the dead OpenAI key cost a failed
+  adapter attempt per planner invoke until its secret was disabled
+  (orchestrator is Gemini-only now); the broken Cursor subscription failed a
+  live work slice before the resource was parked — the failure now records
+  itself as the agent's usability evidence (G13) and dispatch stops choosing
+  it.
+- **Planner overhead is small**: Gemini invocations run $0.03–0.06 each
+  against $0.4–1.4 per build slice on the day's observations; rust-td's whole
+  playable game cost ≈ $6.5 of API spend plus subscription quota.
+- **Autonomy ticks no longer pay git for nothing** (G16): envelope gates run
+  before any clone; the scheduled issue scan reuses the same discipline and
+  never resurrects failed issues on its own.
+- **A result POST is the only copy of an hour of agent work** — it now
+  survives chief restarts (G15); deploys during live tasks are safe, and the
+  reboot-requeue path was observed doing its job through a mid-claim restart.
+- **Toolchain/warm-checkout-blind dispatch** remains open by choice
+  (TODO.md): rust tasks landed on the only cargo-equipped machine by list
+  order, not knowledge.
+- **Throughput bound**: one agent per machine, serialized per repo — with two
+  machines and three projects the fleet saturates; more machines is the lever,
+  not scheduler cleverness.
