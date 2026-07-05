@@ -49,6 +49,9 @@ ISSUE_DIR = ".hive/issue-{n}"
 RESOLVE_BACKEND = "codex"
 DEFAULT_ISSUE_MODEL = ""
 LANDING_FAILED_PREFIX = "accepted but landing failed"
+# How long a just-created issue may be missing from the (eventually consistent)
+# GitHub list API before its absence counts as an external close.
+GITHUB_LIST_LAG_GRACE_S = 180.0
 
 _IMG_MD = re.compile(r"!\[[^\]]*\]\(([^)\s]+)\)")
 _IMG_HTML = re.compile(r"""<img[^>]+src=["']([^"']+)["']""", re.IGNORECASE)
@@ -130,6 +133,38 @@ def directive_issue_content(directive: Directive) -> tuple[str, str]:
         "_Filed by Hive from a launchpad directive._"
     )
     return title, body
+
+
+def seed_filed_issue(
+    store, project: Project, workstream: ProjectWorkstream, number: int, url: str, title: str, body: str
+) -> Workstream:
+    """Upsert the work item for an issue Hive itself just filed.
+
+    The GitHub list API is eventually consistent: a create→list round trip can
+    miss the new issue for a few seconds. We know it exists — seed the work
+    item directly; the next scan reconciles content and comments."""
+    existing = [
+        w for w in _issue_workstreams(store, project, workstream) if w.issue_number == number
+    ]
+    if existing:
+        return existing[0]
+    return store.put(
+        Workstream(
+            workspace_id=project.workspace_id,
+            project_id=project.id,
+            workstream_id=workstream.id,
+            repo=workstream.repo,
+            title=f"#{number} {title}",
+            description=build_issue_doc(title, body, []),
+            status=WorkstreamStatus.queued,
+            source=WorkstreamSource.issue,
+            issue_number=number,
+            issue_url=url,
+            issue_attachments=extract_image_urls(body),
+            external_ref={"provider": "github", "issue_number": number, "url": url},
+            order=number,
+        )
+    )
 
 
 def sync_directives_for_issue(
@@ -569,6 +604,10 @@ def reconcile(
             WorkstreamStatus.done,
             WorkstreamStatus.cancelled,
         ):
+            continue
+        if ws.created_at > now_s() - GITHUB_LIST_LAG_GRACE_S:
+            # Just filed (e.g. by a directive): the eventually-consistent list
+            # API may not show it yet. Don't mistake lag for an external close.
             continue
         if ws.status == WorkstreamStatus.rejected and ws.parked_reason.startswith(LANDING_FAILED_PREFIX):
             ws.status = WorkstreamStatus.done

@@ -49,6 +49,7 @@ from hive._workstreams.issues import (
     refresh_issue_run,
     RESOLVE_BACKEND,
     resolve_issue_on_github,
+    seed_filed_issue,
 )
 from hive._workstreams.ci import check_and_autofix
 from hive._workstreams.preflight import (
@@ -1232,12 +1233,28 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             created = create_issue(workstream.repo, title, issue_body, config.gh_token)
             directive.issue_number = created["number"]
             directive.issue_url = created["html_url"]
-            run, _notes, _open, queued, _dl, _fail = start_issue_run(
-                project,
-                workstream,
-                IssueRunCreate(
-                    scope=IssueRunScope.selected, issue_numbers=[created["number"]]
-                ),
+            # Seed the work item from what we just filed instead of re-fetching:
+            # the GitHub list API is eventually consistent and can miss the new
+            # issue for seconds (observed live on the first real directive).
+            seed_filed_issue(
+                store, project, workstream,
+                created["number"], created["html_url"], title, issue_body,
+            )
+            run = store.put(
+                IssueRun(
+                    workspace_id=ctx.workspace_id,
+                    project_id=project.id,
+                    workstream_id=workstream.id,
+                    repo=workstream.repo,
+                    scope=IssueRunScope.selected,
+                    issue_numbers=[created["number"]],
+                    status=IssueRunStatus.queued,
+                    started_at=time.time(),
+                )
+            )
+            queued = advance_issues(
+                store, project, workstream=workstream, run=run,
+                backend=config.issue_backend, model=config.issue_model,
             )
             directive.status = DirectiveStatus.working
             directive.routing_note = (

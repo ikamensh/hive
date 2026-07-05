@@ -46,6 +46,14 @@ from hive._control.supervisor import Supervisor, compute_state
 from tests.test_api_e2e import RUNNER_HEADERS, _pump, _register_usable_runner
 
 
+def _age_items(store, project, seconds=600):
+    """Push work items past the list-lag grace so absence from the open set
+    counts as an external close (reconcile protects just-filed issues)."""
+    for w in store.list(Workstream, project_id=project.id):
+        w.created_at -= seconds
+        store.put(w)
+
+
 def issue(number, title="t", body="b", attachments=None):
     return {
         "number": number,
@@ -79,6 +87,7 @@ def test_reconcile_idempotent_and_cancels_closed():
     store = MemoryStore()
     project = issues_project(store)
     reconcile(store, project, [issue(1), issue(2)])
+    _age_items(store, project)
     reconcile(store, project, [issue(1)])  # #2 closed on GitHub
     ws = {w.issue_number: w for w in store.list(Workstream, project_id=project.id)}
     assert len(ws) == 2  # no duplicates
@@ -108,6 +117,7 @@ def test_reconcile_closed_landing_failure_is_done():
     ws.status = WorkstreamStatus.rejected
     ws.parked_reason = f"{LANDING_FAILED_PREFIX}: close issue #4 failed"
     store.put(ws)
+    _age_items(store, project)
 
     notes = reconcile(store, project, [])  # issue closed on GitHub
 
@@ -1016,6 +1026,7 @@ def test_directive_cancelled_when_its_issue_is_closed_externally(app, monkeypatc
     assert directive["status"] == "working"
 
     # Next scan: the issue is gone from the open set (closed on GitHub).
+    _age_items(store, store.get(Project, pid))
     monkeypatch.setattr("hive.api.fetch_open_issues_full", lambda repo, token: [])
     client.post(f"/api/projects/{pid}/scan-issues")
 
