@@ -1,14 +1,13 @@
-"""Launchpad slices: Directive create/preview-routing, and Checkout reporting
-from the runner heartbeat with canonical-repo drift surfacing.
+"""Launchpad slices: Directive intake (file-as-issue brain), and Checkout
+reporting from the runner heartbeat with canonical-repo drift surfacing.
 
-See wiki/project-launchpad.md. The routing brain and sync action are stubbed;
-these tests pin the real read/write paths that exist now."""
+See wiki/project-launchpad.md. The full directive → resolve → review → landed
+loop is covered in test_issues.py; here we pin the create-path contracts."""
 
 from fastapi.testclient import TestClient
 
 from hive.config.settings import Config
 from hive._control.supervisor import Supervisor
-from hive.models import Machine, Resource, ResourceUsability
 from hive.persistence.store import MemoryStore
 
 RUNNER_HEADERS = {"X-Hive-Token": "t"}
@@ -29,7 +28,9 @@ def make_project(client, **patch):
     return pid
 
 
-def test_directive_persisted_and_in_project_payload():
+def test_directive_without_repo_stays_triaging_with_reason():
+    """A directive on an unconfigured project is never a silent dead end: it
+    stays `triaging` and routing_note says exactly what is missing."""
     store = MemoryStore()
     client = make_client(store)
     pid = make_project(client)
@@ -38,27 +39,45 @@ def test_directive_persisted_and_in_project_payload():
     assert created.status_code == 200
     body = created.json()
     assert body["text"] == "set up CI"
-    # No online agent in this store -> stays triaging, with an honest note.
     assert body["status"] == "triaging"
-    assert "wait" in body["routing_note"].lower()
+    assert "configure a repo" in body["routing_note"]
 
     payload = client.get(f"/api/projects/{pid}").json()
     assert [d["id"] for d in payload["directives"]] == [body["id"]]
 
 
-def test_directive_preview_routes_to_available_agent():
+def test_directive_files_issue_and_hands_to_pipeline(monkeypatch):
+    """The launchpad ask becomes a GitHub issue plus a selected-scope issue run
+    — the directive records the issue and reports the pipeline engaged."""
     store = MemoryStore()
     client = make_client(store)
-    pid = make_project(client)
-    machine = store.put(Machine(name="MacBook"))
-    store.put(Resource(machine_id=machine.id, runner_id="r1", backend="codex",
-                        usability_status=ResourceUsability.usable, enabled=True))
+    pid = make_project(client, spec_repo="https://github.com/o/r.git")
 
-    body = client.post(f"/api/projects/{pid}/directives", json={"text": "upgrade deps"}).json()
-    assert body["status"] == "awaiting_executor"
-    assert body["suggested_backend"] == "codex"
-    assert body["suggested_machine_id"] == machine.id
-    assert "MacBook" in body["routing_note"]
+    filed = {}
+
+    def fake_create_issue(repo, title, body, token):
+        filed["repo"], filed["title"], filed["body"] = repo, title, body
+        return {"number": 7, "html_url": "https://github.com/o/r/issues/7"}
+
+    monkeypatch.setattr("hive.api.create_issue", fake_create_issue)
+    monkeypatch.setattr("hive.api.preflight_checks", lambda store, config, project, repo=None: [])
+    monkeypatch.setattr(
+        "hive.api.fetch_open_issues_full",
+        lambda repo, token: [{"number": 7, "title": filed["title"], "doc": filed["body"],
+                              "url": "https://github.com/o/r/issues/7", "attachments": []}],
+    )
+
+    body = client.post(
+        f"/api/projects/{pid}/directives",
+        json={"text": "Upgrade deps\n\nEverything minor, keep lockfile tidy."},
+    ).json()
+
+    assert body["status"] == "working"
+    assert body["issue_number"] == 7
+    assert body["issue_url"].endswith("/issues/7")
+    assert filed["title"] == "Upgrade deps"
+    assert "hive-directive id=" in filed["body"]
+    assert "resolve task queued" in body["routing_note"]
 
 
 def test_empty_directive_rejected():

@@ -36,7 +36,9 @@ from hive._integrations.specrepo import SpecRepo
 from hive._workstreams.issues import (
     advance_issues,
     attachment_key,
+    create_issue,
     delete_branch,
+    directive_issue_content,
     download_issue_attachments,
     ensure_issue_workstream,
     fetch_open_issues_full,
@@ -1205,48 +1207,48 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             if canonical_repo(c.repo) in repos
         ]
 
-    def suggest_executor(project: Project) -> tuple[str, str, str, str]:
-        """Preview routing for a directive: pick a plausible (backend, model,
-        machine_id) over live capacity, with a one-line rationale. This is a
-        stub — the real triage/dispatch engine is unbuilt (see
-        wiki/project-launchpad.md). Returns ("", "", "", note) when nothing is
-        online so the UI can say so honestly."""
-        available = [
-            r
-            for r in store.list(Resource, workspace_id=project.workspace_id)
-            if r.available()
-        ]
-        if not available:
-            return "", "", "", "No online agent right now — routing will wait for capacity."
-        pick = min(available, key=lambda r: (r.total_tasks, r.total_cost_usd))
-        machine = store.get(Machine, pick.machine_id) if pick.machine_id else None
-        where = machine.name if machine else "an available machine"
-        return (
-            pick.backend,
-            "",
-            pick.machine_id,
-            f"Preview: would run on {pick.backend} on {where} (least-loaded online agent).",
-        )
-
     @app.post("/api/projects/{project_id}/directives")
     def create_directive(
         project_id: str, body: DirectiveCreate, ctx: AuthContext = Depends(current)
     ):
+        """File the ask as a GitHub issue on the project repo and hand it to the
+        issue pipeline (resolve → review → merge), scoped to just that issue.
+        The issue is the durable record; the directive tracks it to done. When
+        filing fails (no token, no repo, preflight), the directive stays
+        `triaging` with the reason in routing_note — never a silent dead end."""
         project = require_project(project_id, ctx)
         text = body.text.strip()
         if not text:
             raise HTTPException(400, "directive text cannot be empty")
-        backend, model, machine_id, note = suggest_executor(project)
-        directive = Directive(
-            workspace_id=ctx.workspace_id,
-            project_id=project_id,
-            text=text,
-            status=DirectiveStatus.awaiting_executor if backend else DirectiveStatus.triaging,
-            suggested_backend=backend,
-            suggested_model=model,
-            suggested_machine_id=machine_id,
-            routing_note=note,
+        directive = store.put(
+            Directive(workspace_id=ctx.workspace_id, project_id=project_id, text=text)
         )
+        try:
+            if not project.spec_repo.strip():
+                raise RuntimeError("configure a repo for this project first")
+            workstream = ensure_issue_workstream(store, project, repo=project.spec_repo)
+            require_enabled_workstream(workstream)
+            title, issue_body = directive_issue_content(directive)
+            created = create_issue(workstream.repo, title, issue_body, config.gh_token)
+            directive.issue_number = created["number"]
+            directive.issue_url = created["html_url"]
+            run, _notes, _open, queued, _dl, _fail = start_issue_run(
+                project,
+                workstream,
+                IssueRunCreate(
+                    scope=IssueRunScope.selected, issue_numbers=[created["number"]]
+                ),
+            )
+            directive.status = DirectiveStatus.working
+            directive.routing_note = (
+                f"filed issue #{created['number']}; "
+                + ("resolve task queued" if queued else "queued behind the issue in flight")
+            )
+        except HTTPException as exc:
+            directive.routing_note = f"needs attention: {exc.detail}"
+        except Exception as exc:
+            directive.routing_note = f"needs attention: {exc}"
+        directive.updated_at = time.time()
         store.put(directive)
         return directive.model_dump()
 

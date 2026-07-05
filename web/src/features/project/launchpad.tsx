@@ -2,9 +2,9 @@ import { useState, type FormEvent } from "react";
 import { repoShort } from "../../api";
 import type { Checkout, Directive } from "../../types";
 
-/** The hero of the launchpad: a free-form ask that Hive triages and routes.
- * Routing/dispatch is not wired yet (see wiki/project-launchpad.md) — submitting
- * persists the directive and shows a preview executor suggestion. */
+/** The hero of the launchpad: a free-form ask. Hive files it as a GitHub
+ * issue on the project repo and the issue pipeline (resolve → review → merge)
+ * tracks it to done. */
 export function DirectiveComposer({
   onSubmit,
 }: {
@@ -33,7 +33,7 @@ export function DirectiveComposer({
         <div>
           <h3>Give Hive a task</h3>
           <p className="muted">
-            Describe what you want done. Hive will find an executor and a machine.
+            Describe what you want done. Hive files it as an issue and works it to done.
           </p>
         </div>
       </div>
@@ -44,7 +44,6 @@ export function DirectiveComposer({
         placeholder="e.g. Add a dark-mode toggle, or investigate the slow nightly export…"
       />
       <div className="directive-composer-actions">
-        <span className="muted preview-tag">preview — routing not yet dispatched</span>
         <button type="submit" disabled={!trimmed || busy}>
           {busy ? "sending…" : "give to Hive"}
         </button>
@@ -95,20 +94,13 @@ export function JobTiles({
 }
 
 const DIRECTIVE_STATUS_LABEL: Record<Directive["status"], string> = {
-  triaging: "triaging",
-  awaiting_executor: "routed (preview)",
+  triaging: "needs attention",
   working: "working",
   done: "done",
   cancelled: "cancelled",
 };
 
-export function DirectivesList({
-  directives,
-  machineName,
-}: {
-  directives: Directive[];
-  machineName: (id: string) => string;
-}) {
+export function DirectivesList({ directives }: { directives: Directive[] }) {
   if (directives.length === 0) return null;
   return (
     <div className="directives-list">
@@ -121,13 +113,13 @@ export function DirectivesList({
             </span>
           </header>
           <div className="directive-routing">
-            {d.suggested_backend ? (
+            {d.issue_url ? (
               <>
                 <i className="ti ti-route" aria-hidden />
-                <span>
-                  {d.suggested_backend}
-                  {d.suggested_machine_id ? ` · ${machineName(d.suggested_machine_id)}` : ""}
-                </span>
+                <a href={d.issue_url} target="_blank" rel="noreferrer">
+                  issue #{d.issue_number}
+                </a>
+                <span className="muted"> · {d.routing_note}</span>
               </>
             ) : (
               <>

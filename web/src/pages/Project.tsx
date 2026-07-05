@@ -256,7 +256,7 @@ export default function ProjectPage() {
           <h2 className="col-title">
             directives <span className="col-count">{directives.length}</span>
           </h2>
-          <DirectivesList directives={directives} machineName={(mid) => machineMeta(mid).name} />
+          <DirectivesList directives={directives} />
         </div>
       )}
       <div className="launch-block" id="machines-panel">

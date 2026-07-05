@@ -742,32 +742,28 @@ class OrchestratorRun(BaseModel):
 
 
 class DirectiveStatus(StrEnum):
-    triaging = "triaging"  # received; no executor chosen yet
-    awaiting_executor = "awaiting_executor"  # routed (preview only), not dispatched
-    working = "working"  # (future) Hive seeded work that is in flight
-    done = "done"
-    cancelled = "cancelled"
+    triaging = "triaging"  # received; not yet handed to a pipeline (see routing_note)
+    working = "working"  # filed as a GitHub issue; the issue pipeline owns it
+    done = "done"  # the issue landed (merged + closed by Hive)
+    cancelled = "cancelled"  # the issue was closed outside Hive without landing
 
 
 class Directive(BaseModel):
     """A persisted, human-authored ask to a project — "just tell Hive what you
-    want" (see CONTEXT.md "Directive"). Hive triages it, assigns an executor and
-    machine, may seed work items, and tracks it to done. Distinct from the
-    iteration goal (standing strategy) and GitHub issues (external source).
-
-    This pass persists directives and shows a *preview* routing suggestion; the
-    triage/dispatch engine is intentionally unbuilt (see
-    wiki/project-launchpad.md)."""
+    want" (see CONTEXT.md "Directive"). Hive files it as a GitHub issue on the
+    project repo (the issue is the durable record) and the proven issue
+    pipeline (resolve → review → merge) tracks it to done. Distinct from the
+    iteration goal (standing strategy) and from issues authored on GitHub
+    (external origin) — a directive is the user's direct ask through Hive."""
 
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
     project_id: str
     text: str
     status: DirectiveStatus = DirectiveStatus.triaging
-    suggested_backend: str = ""  # preview routing: chosen executor backend
-    suggested_model: str = ""
-    suggested_machine_id: str = ""  # preview routing: chosen machine
-    routing_note: str = ""  # one-line rationale for the preview suggestion
+    issue_number: int = 0  # the GitHub issue Hive filed for this ask
+    issue_url: str = ""
+    routing_note: str = ""  # one line: where this stands / what it needs
     created_at: float = Field(default_factory=now)
     updated_at: float = Field(default_factory=now)
 

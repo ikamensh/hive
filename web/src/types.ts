@@ -199,23 +199,18 @@ export interface ProjectDetail {
   checkouts?: Checkout[];
 }
 
-export type DirectiveStatus =
-  | "triaging"
-  | "awaiting_executor"
-  | "working"
-  | "done"
-  | "cancelled";
+export type DirectiveStatus = "triaging" | "working" | "done" | "cancelled";
 
-/** A human-authored ask to a project that Hive routes (see CONTEXT.md). */
+/** A human-authored ask to a project. Hive files it as a GitHub issue and the
+ * issue pipeline tracks it to done (see CONTEXT.md). */
 export interface Directive {
   id: string;
   workspace_id?: string;
   project_id: string;
   text: string;
   status: DirectiveStatus;
-  suggested_backend: string;
-  suggested_model: string;
-  suggested_machine_id: string;
+  issue_number: number;
+  issue_url: string;
   routing_note: string;
   created_at: number;
   updated_at: number;

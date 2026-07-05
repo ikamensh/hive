@@ -25,6 +25,8 @@ import httpx
 
 from hive._integrations.github_repos import _GH_HEADERS, parse_repo_ref
 from hive.models import (
+    Directive,
+    DirectiveStatus,
     IssueRun,
     IssueRunScope,
     IssueRunStatus,
@@ -98,6 +100,54 @@ def list_open_issues(repo_ref: str, token: str) -> list[dict]:
             break
         page += 1
     return issues
+
+
+def create_issue(repo_ref: str, title: str, body: str, token: str) -> dict:
+    """Create a GitHub issue; returns {"number", "html_url"}. Directive intake
+    files the user's ask as a real issue so the resolve→review pipeline owns
+    it end to end and the ask is durable outside Hive's store."""
+    owner_repo = parse_repo_ref(repo_ref)
+    response = httpx.post(
+        f"https://api.github.com/repos/{owner_repo}/issues",
+        json={"title": title, "body": body},
+        headers=_headers(token),
+        timeout=30.0,
+    )
+    if response.status_code >= 300:
+        raise _github_error(response, "create issue")
+    data = response.json()
+    return {"number": int(data["number"]), "html_url": str(data.get("html_url") or "")}
+
+
+def directive_issue_content(directive: Directive) -> tuple[str, str]:
+    """The GitHub issue title/body for a directive: first line as the title,
+    the full ask as the body, plus a provenance marker."""
+    first = directive.text.strip().splitlines()[0].strip()
+    title = first if len(first) <= 80 else first[:77] + "..."
+    body = (
+        directive.text.strip()
+        + f"\n\n<!-- hive-directive id={directive.id} -->\n"
+        "_Filed by Hive from a launchpad directive._"
+    )
+    return title, body
+
+
+def sync_directives_for_issue(
+    store, project: Project, issue_number: int, status: DirectiveStatus, note: str
+) -> None:
+    """Reflect an issue's terminal event onto the directive that filed it."""
+    for directive in store.list(
+        Directive, workspace_id=project.workspace_id, project_id=project.id
+    ):
+        if directive.issue_number != issue_number or directive.status in (
+            DirectiveStatus.done,
+            DirectiveStatus.cancelled,
+        ):
+            continue
+        directive.status = status
+        directive.routing_note = note
+        directive.updated_at = now_s()
+        store.put(directive)
 
 
 def fetch_issue_comments(repo_ref: str, number: int, token: str) -> list[dict]:
@@ -517,11 +567,17 @@ def reconcile(
             ws.status = WorkstreamStatus.done
             ws.parked_reason = ""
             store.put(ws)
+            sync_directives_for_issue(
+                store, project, number, DirectiveStatus.done, "landed; issue closed on GitHub"
+            )
             notes.append(f"marked #{number} done: issue closed on GitHub after landing retry")
             continue
         ws.status = WorkstreamStatus.cancelled
         ws.parked_reason = "issue closed on GitHub"
         store.put(ws)
+        sync_directives_for_issue(
+            store, project, number, DirectiveStatus.cancelled, "issue closed on GitHub without landing"
+        )
         notes.append(f"cancelled #{number}: issue closed on GitHub")
 
     return notes

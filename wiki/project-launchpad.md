@@ -61,33 +61,36 @@ later — not the default.
 
 A `Directive` is a persisted, human-authored ask to a project — the hero box on
 the launchpad. It is distinct from the iteration goal (standing strategy, one at
-a time) and from GitHub issues (external source).
+a time) and from issues authored on GitHub (external origin).
 
-This pass: **real model + create/list API + real launchpad UI; stubbed brain.**
+The brain is deliberately **not a new pipeline**: Hive files the ask as a
+GitHub issue on the project repo and hands it to the proven issue pipeline
+(resolve → review → merge, wiki/issue-solving.md) as a selected-scope run. The
+issue is the durable record of the ask; the directive tracks it to done.
 
-- Submitting a directive persists it at `triaging`.
-- A routing panel shows a *suggested* executor (backend/model) + machine, derived
-  from a simple heuristic over live capacity, clearly labeled "preview — not
-  dispatched."
-- Nothing is dispatched. The triage→assign→seed-work-items→track-to-done engine
-  is intentionally unbuilt.
+- Submitting a directive files the issue (provenance marker
+  `<!-- hive-directive id=… -->` in the body) and starts a selected-scope
+  issue run → status `working`, with the issue linked on the card.
+- Landing (merge + close by Hive) flips the directive to `done`; an issue
+  closed on GitHub without landing flips it to `cancelled`.
+- When filing is impossible (no repo, no token, preflight failure), the
+  directive stays `triaging` with the exact reason in `routing_note` — never a
+  silent dead end.
 
 ```python
 class DirectiveStatus(StrEnum):
-    triaging = "triaging"        # received, no executor chosen yet
-    awaiting_executor = "awaiting_executor"  # routed (preview), not dispatched
-    working = "working"          # (future) seeded work in flight
-    done = "done"
-    cancelled = "cancelled"
+    triaging = "triaging"        # received; not yet handed over (see routing_note)
+    working = "working"          # filed as a GitHub issue; pipeline owns it
+    done = "done"                # landed: merged + closed by Hive
+    cancelled = "cancelled"      # issue closed externally without landing
 
 class Directive(BaseModel):
     id; workspace_id; project_id
     text: str                    # the human ask
     status: DirectiveStatus = triaging
-    suggested_backend: str = ""  # preview routing
-    suggested_model: str = ""
-    suggested_machine_id: str = ""
-    routing_note: str = ""       # one-line rationale (preview)
+    issue_number: int = 0        # the GitHub issue Hive filed
+    issue_url: str = ""
+    routing_note: str = ""       # one line: where this stands / what it needs
     created_at: float
 ```
 

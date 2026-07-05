@@ -36,10 +36,12 @@ from hive._workstreams.issues import (
     merge_branch as default_merge_branch,
     refresh_issue_run,
     resolve_issue_on_github as default_resolve_issue_on_github,
+    sync_directives_for_issue,
 )
 from hive.models import (
     AgentConversation,
     ConversationStatus,
+    DirectiveStatus,
     Finding,
     FindingStatus,
     HumanTask,
@@ -719,6 +721,15 @@ class TaskResultProcessor:
         except Exception as exc:  # never fail a completed landing over branch cleanup
             log.info("issue #%s landed; leftover branch %s not deleted: %s", ws.issue_number, branch, exc)
         _set_ws_status(self.store, ws.id, WorkstreamStatus.done, "")
+        project = self.store.get(Project, task.project_id)
+        if project:
+            sync_directives_for_issue(
+                self.store,
+                project,
+                ws.issue_number,
+                DirectiveStatus.done,
+                f"landed: issue #{ws.issue_number} merged and closed",
+            )
         self._refresh_run(task)
 
     @staticmethod

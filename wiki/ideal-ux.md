@@ -129,7 +129,7 @@ Numbered for reference from commits/fixes. Status: `open` | `fixing` | `done`.
 | # | Gap | Archetype | Severity | Status |
 |---|-----|-----------|----------|--------|
 | G1 | No spec-first project creation: `create` takes a name only; a written spec has no direct entry (live run: one full scout turn burned to learn "repo is empty, what do you want?", and the spec had to travel as a chat message CLI arg) | A | high | done — `Project.initial_spec` + `spec_text` on create; spec injected into scout turn 1; `hive new <name> --spec f [--repo url] [--budget n]` one-step CLI; spec textarea on the web create form |
-| G2 | Directive brain stubbed: launchpad's primary input dispatches nothing | C | high | open |
+| G2 | Directive brain stubbed: launchpad's primary input dispatches nothing | C | high | done — a directive files a GitHub issue (provenance marker in body) + starts a selected-scope issue run; landing → `done`, external close → `cancelled`, filing failure → `triaging` with the reason |
 | G3 | Budget semantics split: 0 = uncapped manual spend but disabled autonomy; silent no-op | A,B | med | open |
 | G4 | Manual probe step (`hive probe <resource_id>`) in the first-work path | all | med | open |
 | G5 | `repo-create` is a separate user step for greenfield projects | A | low | open |

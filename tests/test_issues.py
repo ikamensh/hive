@@ -939,3 +939,87 @@ def test_scan_blocked_by_failing_preflight(app, monkeypatch):
     resp = client.post(f"/api/projects/{pid}/scan-issues")
     assert resp.status_code == 409
     assert any(c["name"] == "repo_write_access" for c in resp.json()["detail"]["checks"])
+
+
+def test_directive_lands_and_completes(app, monkeypatch):
+    """The full launchpad-ask journey: directive -> Hive files issue ->
+    resolve -> review accept -> merged+closed -> the directive itself flips to
+    done with the landing note. This is the G2 'directive brain' contract
+    (wiki/ideal-ux.md, archetype C)."""
+    client, store = app
+    pid = _issues_project_via_api(client)
+    rid = _register_usable_runner(client, name="codex-runner", backend="codex")
+    _pass_preflight(monkeypatch)
+
+    filed = {}
+
+    def fake_create_issue(repo, title, body, token):
+        filed.update(title=title, body=body)
+        return {"number": 3, "html_url": "https://github.com/o/r/issues/3"}
+
+    monkeypatch.setattr("hive.api.create_issue", fake_create_issue)
+    monkeypatch.setattr(
+        "hive.api.fetch_open_issues_full",
+        lambda repo, token: [issue(3, filed["title"], filed["body"])],
+    )
+
+    directive = client.post(
+        f"/api/projects/{pid}/directives",
+        json={"text": "Add a --version flag to the CLI"},
+    ).json()
+    assert directive["status"] == "working" and directive["issue_number"] == 3
+
+    _pump(client, store)
+    resolve = _poll(client, rid)
+    assert resolve["kind"] == "resolve" and resolve["branch"] == "hive/issue-3"
+    _report(
+        client,
+        resolve["id"],
+        "Added the flag.",
+        structured_result={"task_id": resolve["id"], "outcome": "fixed",
+                           "tests_run": ["pytest"], "branch_pushed": True},
+    )
+    _pump(client, store)
+    review = _poll(client, rid)
+    assert review["kind"] == "review"
+    monkeypatch.setattr("hive.api.merge_branch", lambda repo, head, token, message="": None)
+    monkeypatch.setattr("hive.api.resolve_issue_on_github", lambda repo, number, comment, token: None)
+    monkeypatch.setattr("hive.api.delete_branch", lambda repo, branch, token: None)
+    _report(
+        client,
+        review["id"],
+        "Verified.",
+        structured_result={"task_id": review["id"], "outcome": "accept",
+                           "tests_run": ["pytest"], "changes_pushed": False},
+    )
+
+    final = next(d for d in client.get(f"/api/projects/{pid}").json()["directives"]
+                 if d["id"] == directive["id"])
+    assert final["status"] == "done"
+    assert "merged and closed" in final["routing_note"]
+
+
+def test_directive_cancelled_when_its_issue_is_closed_externally(app, monkeypatch):
+    """Closing the filed issue on GitHub without landing marks the directive
+    cancelled (the ask was resolved or withdrawn outside Hive)."""
+    client, store = app
+    pid = _issues_project_via_api(client)
+    _pass_preflight(monkeypatch)
+    monkeypatch.setattr(
+        "hive.api.create_issue",
+        lambda repo, title, body, token: {"number": 9, "html_url": "https://github.com/o/r/issues/9"},
+    )
+    monkeypatch.setattr("hive.api.fetch_open_issues_full", lambda repo, token: [issue(9, "ask")])
+    directive = client.post(
+        f"/api/projects/{pid}/directives", json={"text": "ask"}
+    ).json()
+    assert directive["status"] == "working"
+
+    # Next scan: the issue is gone from the open set (closed on GitHub).
+    monkeypatch.setattr("hive.api.fetch_open_issues_full", lambda repo, token: [])
+    client.post(f"/api/projects/{pid}/scan-issues")
+
+    final = next(d for d in client.get(f"/api/projects/{pid}").json()["directives"]
+                 if d["id"] == directive["id"])
+    assert final["status"] == "cancelled"
+    assert "closed on GitHub" in final["routing_note"]

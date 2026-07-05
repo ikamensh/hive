@@ -1664,7 +1664,6 @@ textarea:focus {
   font-size: 14px;
   color: var(--accent-2);
 }
-.chip-directive-awaiting_executor,
 .chip-directive-working {
   color: var(--accent);
 }
