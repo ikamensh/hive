@@ -997,3 +997,42 @@ def test_failing_story_survives_reconcile_and_green_closes_every_issue(tmp_path,
     assert story.open_issue_number == 0 and story.open_issue_url == ""
     assert sorted(closed) == [99, 100]
     assert {f.status for f in store.list(Finding, project_id=pid)} == {FindingStatus.resolved}
+
+
+def test_testing_check_skips_spec_sync_outside_the_envelope(tmp_path, monkeypatch):
+    """The 15-min autonomy poll must cost no git traffic for projects it can
+    never act on this tick. Regression: an intake-stage project's spec repo was
+    cloned every poll (rust-td, 2026-07-05) — the sync ran before the gates."""
+    from hive import api as api_mod
+    from hive.config.settings import Config
+    from hive.models import ProjectState
+
+    store = MemoryStore()
+    project = store.put(
+        Project(
+            name="p",
+            spec_repo=str(tmp_path / "spec-home"),
+            daily_budget_usd=5.0,
+            state=ProjectState.intake,
+        )
+    )
+    config = Config(
+        gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
+        orch_model="", runner_token="t", data_dir=tmp_path,
+    )
+    synced = []
+
+    class BoomRepo:
+        def __init__(self, *args, **kwargs):
+            synced.append(True)
+            raise RuntimeError("sync attempted")
+
+    monkeypatch.setattr(api_mod, "SpecRepo", BoomRepo)
+
+    api_mod.make_testing_check(store, config)(project.id)
+    assert synced == []
+
+    # Inside the envelope the sync does happen (its failure stays contained).
+    store.put(project.model_copy(update={"state": ProjectState.idle}))
+    api_mod.make_testing_check(store, config)(project.id)
+    assert synced == [True]

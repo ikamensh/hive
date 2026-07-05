@@ -1716,6 +1716,7 @@ def make_testing_check(store, config: Config) -> Callable[[str], None]:
             return
         from hive._workstreams.testing import (
             auto_testing_action,
+            autonomy_envelope_reason,
             ensure_testing_workstream,
             reconcile_story_backlog,
             start_episode,
@@ -1728,6 +1729,8 @@ def make_testing_check(store, config: Config) -> Callable[[str], None]:
         for repo in repos:
             try:
                 workstream = ensure_testing_workstream(store, project, repo=repo)
+                if autonomy_envelope_reason(store, project, workstream):
+                    continue  # outside the envelope: no action could fire, skip the spec sync
                 # Mirror acceptance/ into Story rows first, so a freshly registered
                 # project with authored stories is judged on them, not on empty rows.
                 spec = SpecRepo(

@@ -522,6 +522,36 @@ def story_health(stories: Iterable[Story], *, refresh_active: bool = False) -> S
 AUTO_TESTING_INTERVAL_S = 24 * 3600.0
 
 
+def autonomy_envelope_reason(store, project: Project, workstream: ProjectWorkstream) -> str:
+    """The repo-independent autonomy gates: "" inside the envelope, else why not.
+
+    Cheap store facts only — `testing_check` consults this before syncing the
+    spec repo, so projects autonomy would never act on this tick (opted out,
+    unbudgeted, disabled, still in intake, episode in flight) cost no git
+    traffic every poll.
+    """
+    if not project.testing_auto:
+        return "autonomous testing is off (testing_auto)"
+    if project.daily_budget_usd <= 0:
+        return "no daily budget (autonomy only spends inside a positive cap)"
+    if not workstream.enabled:
+        return "workstream disabled"
+    if project.state == ProjectState.intake:
+        return "project is still in intake"
+    episodes = store.list(
+        TestEpisode,
+        workspace_id=project.workspace_id,
+        project_id=project.id,
+        workstream_id=workstream.id,
+    )
+    if any(
+        e.status in (TestEpisodeStatus.refreshing, TestEpisodeStatus.sweeping, TestEpisodeStatus.confirming)
+        for e in episodes
+    ):
+        return "a testing episode is already in flight"
+    return ""
+
+
 def auto_testing_decision(
     store, project: Project, workstream: ProjectWorkstream, *, now_epoch: float = 0.0
 ) -> tuple[str, str]:
@@ -541,25 +571,15 @@ def auto_testing_decision(
     specific gate rather than a generic "no".
     """
     now_epoch = now_epoch or now_s()
-    if not project.testing_auto:
-        return "", "autonomous testing is off (testing_auto)"
-    if project.daily_budget_usd <= 0:
-        return "", "no daily budget (autonomy only spends inside a positive cap)"
-    if not workstream.enabled:
-        return "", "workstream disabled"
-    if project.state == ProjectState.intake:
-        return "", "project is still in intake"
+    envelope_reason = autonomy_envelope_reason(store, project, workstream)
+    if envelope_reason:
+        return "", envelope_reason
     episodes = store.list(
         TestEpisode,
         workspace_id=project.workspace_id,
         project_id=project.id,
         workstream_id=workstream.id,
     )
-    if any(
-        e.status in (TestEpisodeStatus.refreshing, TestEpisodeStatus.sweeping, TestEpisodeStatus.confirming)
-        for e in episodes
-    ):
-        return "", "a testing episode is already in flight"
     refresh_tasks = store.list(
         Task,
         workspace_id=project.workspace_id,
