@@ -130,7 +130,7 @@ Numbered for reference from commits/fixes. Status: `open` | `fixing` | `done`.
 |---|-----|-----------|----------|--------|
 | G1 | No spec-first project creation: `create` takes a name only; a written spec has no direct entry (live run: one full scout turn burned to learn "repo is empty, what do you want?", and the spec had to travel as a chat message CLI arg) | A | high | done — `Project.initial_spec` + `spec_text` on create; spec injected into scout turn 1; `hive new <name> --spec f [--repo url] [--budget n]` one-step CLI; spec textarea on the web create form |
 | G2 | Directive brain stubbed: launchpad's primary input dispatches nothing | C | high | done — a directive files a GitHub issue (provenance marker in body) + starts a selected-scope issue run; landing → `done`, external close → `cancelled`, filing failure → `triaging` with the reason |
-| G3 | Budget semantics split: 0 = uncapped manual spend but disabled autonomy; silent no-op | A,B | med | open |
+| G3 | Budget semantics split: 0 = uncapped manual spend but disabled autonomy; silent no-op | A,B | med | done — one universal daily cap; new projects default $10; 0 pauses paid work (visible blocked_budget) |
 | G4 | Manual probe step (`hive probe <resource_id>`) in the first-work path | all | med | open |
 | G5 | `repo-create` is a separate user step for greenfield projects | A | low | open |
 | G6 | No scheduled issue scan — new GitHub issues wait for a human `hive scan` | B,C | med | open |
@@ -139,5 +139,11 @@ Numbered for reference from commits/fixes. Status: `open` | `fixing` | `done`.
 | G9 | CLI rough edges met on the way: every command prints chief-discovery noise; `hive trace` on a task that never ran an agent surfaces raw `{"detail":"Not Found"}` | all | low | open |
 | G10 | Approval drifted into a two-command tail (`intake-write-mission` + `intake-approve`); the design doc's "approve = finalize and go" existed only as dead `finalize`-turn handling nothing queued | A,B | med | done — approve with missing spec files queues the scout finalize turn; its completion wakes planning |
 | G11 | Chief verifies/reads the spec repo by *ssh* clone when the repo was wired via `repo-create` (stores `ssh_url`) — `Host key verification failed` on approve; the fleet's auth model is https+token everywhere | A | high | done — `authed_url` normalizes GitHub ssh remotes; `repo-create` stores the https clone URL |
+
+| G12 | Zombie operator todos: a fixed condition (intake failure) left its "Needs you" entry open forever | all | med | done — a successful intake turn completes the project's intake-failure todo |
+| G13 | `hive show` quoted a stale happy probe (`HIVE_AGENT_PROBE_OK`) as the reason a billing-blocked agent was down | all | low | done — auth-blocked work records its failure as the resource's latest usability evidence |
+| G14 | Dispatch double-booked runners across projects (busy set was per-project): two tasks stacked on the laptop while the cloud server idled | all | high | done — running tasks count workspace-wide |
+| G15 | A result POST lost during a chief restart stranded the task as `running` forever (live runners are never orphan-failed) | all | high | done — runner retries result reporting with backoff (report_result) |
+| G16 | The 15-min autonomy tick cloned every budgeted project's spec repo before consulting any gate (incl. intake-stage projects) | all | med | done — envelope gates first, sync only inside the envelope |
 
 (Gaps found during the validation projects get appended here.)
