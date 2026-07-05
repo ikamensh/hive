@@ -1023,3 +1023,53 @@ def test_directive_cancelled_when_its_issue_is_closed_externally(app, monkeypatc
                  if d["id"] == directive["id"])
     assert final["status"] == "cancelled"
     assert "closed on GitHub" in final["routing_note"]
+
+
+def test_reconcile_requeue_stalled_false_never_resurrects_failures(app):
+    """The unattended poller variant ingests new issues and reflects closures
+    but must not resurrect blocked/rejected items — a periodic tick retrying a
+    failing issue forever would burn quota with no human decision."""
+    client, store = app
+    pid = _issues_project_via_api(client)
+    project = store.get(Project, pid)
+    ws = ensure_issue_workstream(store, project)
+
+    reconcile(store, project, [issue(1, "old"), issue(2, "new")], workstream=ws)
+    item = next(w for w in store.list(Workstream, project_id=pid) if w.issue_number == 1)
+    item.status = WorkstreamStatus.rejected
+    item.parked_reason = "rejected at review"
+    store.put(item)
+
+    notes = reconcile(
+        store, project, [issue(1, "old"), issue(2, "new"), issue(3, "brand new")],
+        workstream=ws, requeue_stalled=False,
+    )
+
+    assert any("ingested issue #3" in n for n in notes)
+    assert not any("re-queued" in n for n in notes)
+    rejected = next(w for w in store.list(Workstream, project_id=pid) if w.issue_number == 1)
+    assert rejected.status == WorkstreamStatus.rejected
+
+
+def test_scheduled_issue_scan_ingests_and_advances(app, monkeypatch):
+    """The supervisor's issue_scan callback keeps the pipeline fed without a
+    human `hive scan`: a new issue is ingested and its resolve task queued."""
+    from hive.api import make_issue_scan
+
+    client, store = app
+    pid = _issues_project_via_api(client)
+    project = store.get(Project, pid)
+    ensure_issue_workstream(store, project)
+    config = Config(gcp_project="", gcs_bucket="", gh_token="t", gemini_api_key="",
+                    orch_model="", runner_token="test-token", data_dir=None)
+    monkeypatch.setattr(
+        "hive._workstreams.issues.fetch_open_issues_full",
+        lambda repo, token: [issue(4, "found by testing")],
+    )
+
+    make_issue_scan(store, config)(pid)
+
+    items = [w for w in store.list(Workstream, project_id=pid) if w.issue_number == 4]
+    assert len(items) == 1 and items[0].status == WorkstreamStatus.resolving
+    tasks = store.list(Task, project_id=pid, kind=TaskKind.resolve)
+    assert len(tasks) == 1 and tasks[0].status == TaskStatus.pending

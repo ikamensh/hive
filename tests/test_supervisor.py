@@ -427,3 +427,19 @@ def test_dispatch_counts_running_tasks_across_projects():
     store.put(Task(project_id=project_c.id, workstream_id=ws_c.id,
                    repo="repo-c", instructions="c"))
     assert sup.dispatch(project_c) == 0
+
+
+def test_issue_scan_due_gate():
+    store = MemoryStore()
+    sup = Supervisor(store, lambda p, e: None, issue_scan=lambda pid: None)
+    project = store.put(Project(name="p", spec_repo="x"))
+
+    assert sup._issue_scan_due(project)
+    sup._last_issue_scan[project.id] = time.time()
+    assert not sup._issue_scan_due(project)
+    sup._last_issue_scan.pop(project.id)
+    sup._issue_scan_busy.add(project.id)
+    assert not sup._issue_scan_due(project)
+
+    unwired = Supervisor(store, lambda p, e: None)
+    assert not unwired._issue_scan_due(project)

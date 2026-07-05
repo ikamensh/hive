@@ -509,13 +509,19 @@ def reconcile(
     project: Project,
     issues: list[dict],
     workstream: ProjectWorkstream | None = None,
+    requeue_stalled: bool = True,
 ) -> list[str]:
     """Sync issue work items to the repo's open issues (full dicts from
     `fetch_open_issues_full`). New issues enter as `queued`; any still-open issue
     that isn't `done` and has no live task is reset to `queued` (so a re-scan
     restarts blocked/rejected/reopened or errored-mid-flight issues for another
     attempt); externally-closed ones are cancelled; content is refreshed.
-    `advance_issues` then starts the next one. Returns change notes."""
+    `advance_issues` then starts the next one. Returns change notes.
+
+    `requeue_stalled=False` is the unattended-poller variant: ingest new issues
+    and reflect closures, but never resurrect blocked/rejected items — retrying
+    a failed issue is a deliberate (human scan) act, not something a periodic
+    tick should burn quota on forever."""
     workstream = workstream or ensure_issue_workstream(store, project)
     by_number = {w.issue_number: w for w in _issue_workstreams(store, project, workstream)}
     open_numbers = {i["number"] for i in issues}
@@ -549,7 +555,8 @@ def reconcile(
         ws.issue_attachments = issue["attachments"]
         ws.external_ref = {"provider": "github", "issue_number": issue["number"], "url": issue["url"]}
         if (
-            ws.status not in (WorkstreamStatus.done, WorkstreamStatus.queued)
+            requeue_stalled
+            and ws.status not in (WorkstreamStatus.done, WorkstreamStatus.queued)
             and not _has_live_task(store, project, ws.id)
         ):
             ws.status = WorkstreamStatus.queued  # blocked/rejected/reopened/errored: retry

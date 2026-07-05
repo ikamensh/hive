@@ -1706,6 +1706,50 @@ def make_ci_check(store, config: Config) -> Callable[[str], None]:
     return ci_check
 
 
+def make_issue_scan(store, config: Config, blobs=None) -> Callable[[str], None]:
+    """Supervisor callback: periodically ingest new GitHub issues on every
+    enabled issues workstream and keep the resolve pipeline fed — so issue
+    solving (external issues, testing findings, directives) runs unattended
+    instead of waiting for a human `hive scan`. Unattended semantics: new
+    issues only (`requeue_stalled=False`); resurrecting blocked/rejected items
+    stays a deliberate human act."""
+
+    def issue_scan(project_id: str) -> None:
+        from hive._workstreams.issues import (
+            advance_issues,
+            download_issue_attachments,
+            fetch_open_issues_full,
+            project_workstreams,
+            reconcile,
+        )
+
+        project = store.get(Project, project_id)
+        if not project or not project.spec_repo.strip() or not config.gh_token.strip():
+            return
+        log_ = logging.getLogger("hive.api")
+        for ws in project_workstreams(store, project):
+            if ws.kind != ProjectWorkstreamKind.github_issues or not ws.enabled:
+                continue
+            try:
+                issues = fetch_open_issues_full(ws.repo, config.gh_token)
+                notes = reconcile(store, project, issues, workstream=ws, requeue_stalled=False)
+                if blobs is not None:
+                    download_issue_attachments(store, blobs, project, config.gh_token, workstream=ws)
+                queued = advance_issues(
+                    store, project, workstream=ws,
+                    backend=config.issue_backend, model=config.issue_model,
+                )
+                if notes or queued:
+                    log_.info(
+                        "issue scan for %s (%s): %s; started %s",
+                        project.name, ws.repo, "; ".join(notes) or "no changes", queued,
+                    )
+            except Exception:
+                log_.exception("issue scan failed for project %s repo %s", project_id, ws.repo)
+
+    return issue_scan
+
+
 def make_testing_check(store, config: Config) -> Callable[[str], None]:
     """Supervisor callback: act on the story-health verdict for a testing_auto
     project — queue a story refresh when the backlog is missing/weak, start a
@@ -1791,6 +1835,7 @@ def production_app() -> FastAPI:
         machine_name=config.machine_name,
         ci_check=make_ci_check(store, config),
         testing_check=make_testing_check(store, config),
+        issue_scan=make_issue_scan(store, config, blobs=blobs),
     )
     from hive.runner._local import LocalRunnerManager
 
