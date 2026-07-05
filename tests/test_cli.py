@@ -670,7 +670,7 @@ def test_unreachable_api_prints_concise_error(monkeypatch, capsys):
 def test_main_falls_back_to_runner_env_chief(monkeypatch, capsys, tmp_path):
     """The user's actual failure: no HIVE_URL configured, no local chief.
     main() must fall through to the runner.env chief instead of dying on
-    localhost — and say so on stderr while keeping stdout pure JSON."""
+    localhost, keeping stdout pure JSON and stderr quiet."""
     runner_env = tmp_path / "runner.env"
     runner_env.write_text("HIVE_URL=https://fleet.example\nHIVE_BASIC_AUTH=ilya:pw\n")
     monkeypatch.setenv("HIVE_RUNNER_ENV_FILE", str(runner_env))
