@@ -415,9 +415,13 @@ class TaskResultProcessor:
                 # credential is broken for all work on this resource. Mark it
                 # failed so dispatch stops choosing it until a re-probe proves the
                 # human fixed the login; clear any stale cooldown that would
-                # otherwise let it silently look "usable" again.
+                # otherwise let it silently look "usable" again. The failure text
+                # becomes the latest usability evidence — otherwise `hive show`
+                # keeps quoting the long-gone successful probe as the reason.
                 resource.usability_status = ResourceUsability.failed
                 resource.clear_exhaustion()
+                resource.last_probe_at = task.finished_at
+                resource.last_probe_text = body.text[:2000]
             if body.resource_exhausted:
                 resource.mark_exhausted(
                     until=time.time() + RATE_LIMIT_COOLDOWN_S,

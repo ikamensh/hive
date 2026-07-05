@@ -1339,6 +1339,9 @@ def test_intake_auth_block_marks_backend_failed_escalates_and_retries(harness):
     assert res.usability_status == "failed"
     assert not res.available()
     assert res.cooldown_until == 0
+    # The failure text is now the resource's latest usability evidence —
+    # `hive show` must quote the real reason, not the long-gone happy probe.
+    assert "subscription access" in res.last_probe_text
 
     # An operator todo names the fix, scoped org-wide (the login, not this project).
     todo = next(t for t in store.list(HumanTask) if t.title == "Fix claude login on raven")
