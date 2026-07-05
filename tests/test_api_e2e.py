@@ -1638,3 +1638,42 @@ def test_finalize_that_did_not_land_reopens_intake_instead_of_waking_planning(ha
     assert not any("Intake accepted and pushed" in e for batch in orch.invocations for e in batch)
     todo = next(t for t in store.list(HumanTask) if "finalize did not land" in t.title)
     assert "push access" in todo.instructions
+
+
+def test_intake_retry_carries_prior_answers(harness, tmp_path):
+    """A fresh intake conversation (after a failed/reopened round) seeds the
+    scout with the user's earlier answers instead of re-asking them (G20 —
+    observed live when gleaner's spec repo was re-pointed to a fork)."""
+    client, store, _orch = harness
+    origin = _spec_origin(tmp_path, {"mission.md": "# Mission\nBuild.\n"})
+    project = client.post("/api/projects", json={"name": "retry"}).json()
+    pid = project["id"]
+    _configure_project(client, pid, str(origin))
+    rid = _register_usable_runner(client, backend="codex")
+
+    first = client.post(f"/api/projects/{pid}/intake/start").json()
+    _pump(client, store)
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    client.post(
+        f"/api/tasks/{task['id']}/result",
+        json={"text": "Brief. Question: last-write-wins for duplicates?"},
+        headers=RUNNER_HEADERS,
+    )
+    client.post(
+        f"/api/conversations/{first['id']}/message",
+        json={"action": "message", "message": "Yes — last-write-wins; counters count unique ids."},
+    )
+    _pump(client, store)
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    client.post(
+        f"/api/tasks/{task['id']}/result",
+        json={"text": "Updated brief.", "is_error": True},  # round dies mid-flight
+        headers=RUNNER_HEADERS,
+    )
+
+    retry = client.post(f"/api/projects/{pid}/intake/start").json()
+    assert retry["id"] != first["id"]
+    _pump(client, store)
+    fresh = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert "do not re-ask" in fresh["instructions"]
+    assert "last-write-wins; counters count unique ids" in fresh["instructions"]

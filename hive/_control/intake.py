@@ -94,6 +94,22 @@ def require_spec_files_ready(config: Config, project: Project) -> SpecStatus:
     )
 
 
+def _carried_answers(store, project: Project) -> list[dict]:
+    """User messages from the project's previous intake conversation, so a
+    retry doesn't re-ask what was already answered (a failed finalize or a
+    repo re-point starts a fresh conversation, but the user's answers are
+    durable facts about intent)."""
+    prior = (
+        store.get(AgentConversation, project.intake_conversation_id)
+        if project.intake_conversation_id
+        else None
+    )
+    if not prior:
+        return []
+    answers = [t for t in prior.transcript if t.get("role") == "user" and t.get("text", "").strip()]
+    return answers[-6:]
+
+
 def create_conversation(store, project: Project, prefer_backend: str = "") -> AgentConversation:
     backend, model, _runner_id = trusted_capacity(store, project.workspace_id, prefer_backend)
     conversation = store.put(
@@ -104,6 +120,7 @@ def create_conversation(store, project: Project, prefer_backend: str = "") -> Ag
             backend=backend,
             model=model,
             status=ConversationStatus.open,
+            transcript=_carried_answers(store, project),
         )
     )
     project.intake_conversation_id = conversation.id
@@ -215,6 +232,18 @@ def prompt(
             if project.initial_spec.strip()
             else []
         )
+        carried = [t["text"].strip() for t in conversation.transcript if t.get("role") == "user"]
+        prior_answers = (
+            [
+                "The user already answered these questions in an earlier intake round — "
+                "treat them as settled; do not re-ask:",
+                "",
+                *(f"- {a}" for a in carried),
+                "",
+            ]
+            if carried
+            else []
+        )
         return "\n".join(
             [
                 "You are Hive's intake scout.",
@@ -232,6 +261,7 @@ def prompt(
                 f"Guess propensity: {project.guess_propensity}",
                 "",
                 *handed_spec,
+                *prior_answers,
                 "Org context:",
                 org_context or "(none)",
                 "",
