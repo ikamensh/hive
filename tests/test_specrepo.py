@@ -91,3 +91,17 @@ def test_spec_status_requires_mission_and_iteration(tmp_path):
     status = spec_status_dir(tmp_path)
     assert status.ready
     assert status.missing_files == ()
+
+
+def test_spec_cache_paths_do_not_collide_across_owners(tmp_path):
+    """A fork shares its upstream's name; the chief's spec cache must key on
+    the full URL or a re-pointed project verifies against the wrong clone
+    (G21, observed live on gleaner's fork)."""
+    from hive._integrations.specrepo import SpecRepo
+
+    upstream = SpecRepo("https://github.com/covenance-ai/gleaner.git", tmp_path)
+    fork = SpecRepo("https://github.com/ikamensh/gleaner.git", tmp_path)
+    assert upstream.path != fork.path
+    # Equivalent spellings of the same repo share one cache entry.
+    ssh = SpecRepo("git@github.com:ikamensh/gleaner.git", tmp_path)
+    assert ssh.path == fork.path

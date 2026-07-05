@@ -8,6 +8,7 @@ public repos and local paths work for tests.
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -90,15 +91,32 @@ def authed_url(url: str, token: str) -> str:
     return url
 
 
+def canonical_spec_url(url: str) -> str:
+    u = url.strip().rstrip("/")
+    if u.startswith("git@github.com:"):
+        u = "https://github.com/" + u.removeprefix("git@github.com:")
+    return u.removesuffix(".git").lower()
+
+
 class SpecRepo:
     def __init__(self, url: str, workdir: Path, token: str = "") -> None:
         self.url = url
         self.token = token
-        slug = url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
-        self.path = Path(workdir) / slug
+        canonical = canonical_spec_url(url)
+        slug = canonical.rsplit("/", 1)[-1]
+        # Slug alone collides across owners (a fork shares its upstream's name);
+        # verifying against the wrong cached clone produced a false "spec files
+        # missing" after a repo re-point (G21). Key the cache by the full URL.
+        digest8 = hashlib.sha1(canonical.encode()).hexdigest()[:8]
+        self.path = Path(workdir) / f"{slug}-{digest8}"
 
     def sync(self) -> None:
         if self.path.exists():
+            # Re-point every time: tokens rotate and projects get re-wired.
+            _run(
+                ["git", "remote", "set-url", "origin", authed_url(self.url, self.token)],
+                cwd=self.path,
+            )
             _run(["git", "fetch", "--depth", "1", "origin"], cwd=self.path)
             _run(["git", "reset", "--hard", "origin/HEAD"], cwd=self.path)
         else:
