@@ -149,6 +149,8 @@ Numbered for reference from commits/fixes. Status: `open` | `fixing` | `done`.
 | G18 | Chief trusted the finalize scout's "pushed" claim: gleaner's push 403'd (no org write access) yet intake went done and planning woke on an empty spec repo | B | high | done — finalize is verified against the actual repo (`spec_status`); failure reopens intake + files a todo naming the fix |
 | G19 | Directive filing raced GitHub's eventually-consistent list API: issue created but the immediate selected run refused ("select at least one open issue") | C | med | done — work item seeded from what was just filed; reconcile grants just-created items a 3-min grace before reading absence as an external close |
 | G20 | An intake retry starts cold: the fresh conversation re-asked material questions the user had already answered in the failed round (observed on gleaner's fork restart) | B | med | done — a new conversation carries the prior round's user answers; the scout's first prompt lists them as settled |
+| G21 | Chief's spec-clone cache keyed by repo *name*: a fork colliding with its upstream slug made finalize verification read the wrong clone — false "spec files missing" right after a successful push | B | high | done — cache path carries a hash of the canonical URL; sync re-points origin every time |
+| G22 | The planner queued work on backends that were installed but not usable (dead cursor subscription) — twice; each a stuck task needing an operator cancel | A | med | done — create_task validates against available resources on online runners; the error names what is usable |
 
 (Gaps found during the validation projects get appended here.)
 
