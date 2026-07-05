@@ -145,5 +145,8 @@ Numbered for reference from commits/fixes. Status: `open` | `fixing` | `done`.
 | G14 | Dispatch double-booked runners across projects (busy set was per-project): two tasks stacked on the laptop while the cloud server idled | all | high | done — running tasks count workspace-wide |
 | G15 | A result POST lost during a chief restart stranded the task as `running` forever (live runners are never orphan-failed) | all | high | done — runner retries result reporting with backoff (report_result) |
 | G16 | The 15-min autonomy tick cloned every budgeted project's spec repo before consulting any gate (incl. intake-stage projects) | all | med | done — envelope gates first, sync only inside the envelope |
+| G17 | CLI had no directive command despite "full web-API parity" | C | low | done — `hive ask <project> <text>` |
+| G18 | Chief trusted the finalize scout's "pushed" claim: gleaner's push 403'd (no org write access) yet intake went done and planning woke on an empty spec repo | B | high | done — finalize is verified against the actual repo (`spec_status`); failure reopens intake + files a todo naming the fix |
+| G19 | Directive filing raced GitHub's eventually-consistent list API: issue created but the immediate selected run refused ("select at least one open issue") | C | med | done — work item seeded from what was just filed; reconcile grants just-created items a 3-min grace before reading absence as an external close |
 
 (Gaps found during the validation projects get appended here.)

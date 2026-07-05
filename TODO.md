@@ -3,6 +3,16 @@
 Deferred gap-closing work (Phase 3). Captured, not yet started — see chat
 context for the full gap analysis these came from.
 
+## Scheduled scan: eligibility on big external backlogs
+The unattended issue scan advances the lowest-order queued issue — on a
+freshly adopted repo with a large pre-existing backlog that means hive
+auto-starts external issue #1 nobody asked it to work. Safe default worth
+building: auto-advance only hive-originated issues (bodies carrying
+`<!-- hive-` markers: directives, CI autofix, testing findings) or a `hive`
+label; the external backlog stays a deliberate human `hive scan`/issue-run.
+(Not urgent for the current three projects — kodo had exactly one open issue —
+but required before adopting a repo with a real backlog.)
+
 ## Dispatch: toolchain + warm-checkout awareness
 First-fit dispatch is toolchain-blind and checkout-blind: a Rust task can land
 on a machine without cargo (agent then installs or fails), and a machine with
