@@ -357,3 +357,65 @@ def test_checkout_of_empty_origin_supports_a_named_branch(monkeypatch, tmp_path)
         ["git", "symbolic-ref", "HEAD"], cwd=path, capture_output=True, text=True
     ).stdout.strip()
     assert head == "refs/heads/hive/ws-1"
+
+
+def test_report_result_retries_transient_chief_outage(monkeypatch):
+    """A finished task's result survives a chief restart window: transient
+    transport/5xx failures are retried (the chief records results
+    idempotently), while a 4xx means the chief decided about this task and
+    retrying is pointless."""
+    attempts = []
+
+    class FlakyClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def post(self, url, json):
+            attempts.append(url)
+            if len(attempts) < 3:
+                raise runner.httpx.ConnectError("chief restarting")
+
+            class Ok:
+                def raise_for_status(self):
+                    return None
+
+            return Ok()
+
+    monkeypatch.setattr(runner.httpx, "Client", FlakyClient)
+    monkeypatch.setattr(runner.time, "sleep", lambda s: None)
+
+    runner.report_result("t-1", {"text": "done"}, {}, None)
+
+    assert attempts == ["/api/tasks/t-1/result"] * 3
+
+
+def test_report_result_gives_up_on_client_error(monkeypatch):
+    attempts = []
+
+    class RejectingClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def post(self, url, json):
+            attempts.append(url)
+            request = runner.httpx.Request("POST", "http://chief" + url)
+            response = runner.httpx.Response(404, request=request)
+            raise runner.httpx.HTTPStatusError("gone", request=request, response=response)
+
+    monkeypatch.setattr(runner.httpx, "Client", RejectingClient)
+
+    runner.report_result("t-2", {"text": "done"}, {}, None)
+
+    assert attempts == ["/api/tasks/t-2/result"]

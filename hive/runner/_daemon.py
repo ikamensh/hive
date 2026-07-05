@@ -59,6 +59,10 @@ CHIEF_STATE_PATH = (
     Path(os.environ.get("HIVE_RUNNER_STATE_DIR", "~/.config/hive")).expanduser() / "chiefs.json"
 )
 RECONNECT_AFTER_FAILURES = 3  # consecutive errors before re-resolving across the roster
+# How long to keep retrying the report of a finished task's result. A live
+# runner is never orphan-failed, so a result lost to a transient chief outage
+# (a deploy restart, say) would leave the task 'running' forever.
+RESULT_REPORT_RETRY_S = 600.0
 # Self-update (set by install_mac_runner.sh for dedicated service clones, never
 # for dev checkouts or the VM, where push.sh owns the tree): between tasks the
 # daemon exits when origin/main is ahead; the service wrapper pulls + respawns.
@@ -643,6 +647,37 @@ def _upload_artifacts(task_id: str, project_dir: Path, headers: dict, auth) -> l
     return uploaded
 
 
+def report_result(task_id: str, result: dict, headers: dict, auth) -> None:
+    """Deliver a finished task's result, retrying transient failures hard.
+
+    The chief records results idempotently (a non-running task ignores late
+    posts), so retrying is always safe. Client errors mean the chief made a
+    decision about this task (cancelled/deleted) — no point retrying those.
+    """
+    deadline = time.monotonic() + RESULT_REPORT_RETRY_S
+    delay = 2.0
+    while True:
+        try:
+            with httpx.Client(base_url=HIVE_URL, headers=headers, timeout=30.0, auth=auth) as c:
+                c.post(f"/api/tasks/{task_id}/result", json=result).raise_for_status()
+            return
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code < 500:
+                log.error("chief rejected result for task %s: %s", task_id, exc)
+                return
+            failure: Exception = exc
+        except (httpx.HTTPError, OSError) as exc:
+            failure = exc
+        if time.monotonic() > deadline:
+            log.error("giving up reporting result for task %s: %s", task_id, failure)
+            return
+        log.warning(
+            "result report for task %s failed (%s) — retrying in %.0fs", task_id, failure, delay
+        )
+        time.sleep(delay)
+        delay = min(delay * 2, 30.0)
+
+
 def execute(task: dict, headers: dict, auth) -> dict:
     from kodo import log as kodo_log
     from kodo.agent import Agent
@@ -950,7 +985,7 @@ def main(argv: list[str] | None = None) -> None:
             log.info("executing %s task %s on %s", task["kind"], task["id"], task["repo"])
             result = execute(task, headers, auth)
             log.info("task %s done (error=%s)", task["id"], result.get("is_error"))
-            client.post(f"/api/tasks/{task['id']}/result", json=result)
+            report_result(task["id"], result, headers, auth)
         except (httpx.HTTPError, OSError) as exc:
             failures += 1
             log.warning("transient error: %s — retrying in 10s", exc)
