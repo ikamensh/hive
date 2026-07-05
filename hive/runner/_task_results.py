@@ -510,6 +510,8 @@ class TaskResultProcessor:
             if not body.is_error and not body.cancelled:
                 complete_intake_failure_todo(self.store, project)
             if conversation.status == ConversationStatus.done:
+                conversation = self._verify_finalized_spec(task, body, project, conversation)
+            if conversation.status == ConversationStatus.done:
                 project.state = ProjectState.idle
                 self.store.put(project)
                 self.supervisor.wake(
@@ -522,6 +524,44 @@ class TaskResultProcessor:
                 self.store.put(project)
             elif conversation.status == ConversationStatus.failed:
                 self._escalate_intake_failure(task, body, project)
+
+    def _verify_finalized_spec(
+        self, task: Task, body: TaskResult, project: Project, conversation: AgentConversation
+    ) -> AgentConversation:
+        """Trust but verify: a finalize turn only counts when the durable spec
+        files actually exist on the remote. Live regression (gleaner,
+        2026-07-05): the scout committed locally, the push 403'd, the turn
+        reported success — and planning woke on an empty spec repo."""
+        from hive._control.intake import spec_status
+
+        status = spec_status(self.config, project)
+        if status.ready:
+            return conversation
+        problem = status.error or f"missing files: {', '.join(status.missing_files)}"
+        note = (
+            f"Finalize reported success, but the spec repo does not verify: {problem}. "
+            "Intake stays open — fix the blocker (often push access) and approve again."
+        )
+
+        def reopen(conv: AgentConversation) -> None:
+            conv.status = ConversationStatus.open
+            conv.transcript.append({"role": "system", "text": note})
+
+        log.warning("intake finalize for %s did not land: %s", project.name, problem)
+        escalate(
+            self.store,
+            f"Intake finalize did not land for {project.name}",
+            instructions=(
+                f"The intake scout for **{project.name}** reported a successful finalize, "
+                f"but the spec repo does not verify: {problem}\n\n"
+                f"Scout report tail:\n\n```\n{body.text[-800:]}\n```\n\n"
+                "Usually this is missing push access for Hive's GitHub identity on the "
+                "spec repo. Fix that, then approve intake again."
+            ),
+            project_id=project.id,
+            workspace_id=project.workspace_id,
+        )
+        return self.store.update(AgentConversation, conversation.id, reopen) or conversation
 
     def _escalate_intake_failure(self, task: Task, body: TaskResult, project: Project) -> None:
         """Intake hit a wall. File an operator todo so the project isn't a silent

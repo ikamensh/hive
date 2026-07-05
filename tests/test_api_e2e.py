@@ -1596,3 +1596,45 @@ def test_project_payload_regression_work_verify_accept(harness):
     assert verify_task_payload["verdict"] == "accept"
     assert store.get(Task, verify["id"]).verdict == "accept"
 
+
+
+def test_finalize_that_did_not_land_reopens_intake_instead_of_waking_planning(harness, tmp_path):
+    """Trust but verify (G18): a finalize turn that *claims* success while the
+    spec repo has no durable files (e.g. the push 403'd) must not flip the
+    project to planning — intake reopens with an operator todo naming the fix."""
+    client, store, orch = harness
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()  # stays empty: the "push failed" repo state
+    project = client.post("/api/projects", json={"name": "pushless"}).json()
+    pid = project["id"]
+    _configure_project(client, pid, str(spec_dir))
+    rid = _register_usable_runner(client, backend="codex")
+
+    conversation = client.post(f"/api/projects/{pid}/intake/start").json()
+    _pump(client, store)
+    first = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    client.post(
+        f"/api/tasks/{first['id']}/result",
+        json={"text": "Brief. No questions."},
+        headers=RUNNER_HEADERS,
+    )
+    approved = client.post(
+        f"/api/conversations/{conversation['id']}/message", json={"action": "approve"}
+    ).json()
+    _pump(client, store)
+    finalize = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert finalize["id"] == approved["task"]["id"]
+    client.post(
+        f"/api/tasks/{finalize['id']}/result",
+        json={"text": "Committed locally. Push did not complete: 403 denied."},
+        headers=RUNNER_HEADERS,
+    )
+
+    conv = store.get(AgentConversation, conversation["id"])
+    assert conv.status == "open"
+    assert "does not verify" in conv.transcript[-1]["text"]
+    assert store.get(Project, pid).state == "intake"
+    _pump(client, store)
+    assert not any("Intake accepted and pushed" in e for batch in orch.invocations for e in batch)
+    todo = next(t for t in store.list(HumanTask) if "finalize did not land" in t.title)
+    assert "push access" in todo.instructions
