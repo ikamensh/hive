@@ -166,7 +166,7 @@ export interface Question {
   project_id: string;
   workstream_id: string;
   text: string;
-  status: "open" | "answered" | "dismissed";
+  status: "open" | "answered" | "dismissed" | "withdrawn";
   answer: string;
   created_at: number;
   answered_at: number;
@@ -508,6 +508,8 @@ export interface SubscriptionCandidate {
   evidence: string;
 }
 
+export type HumanTodoKind = "access" | "infra" | "repair" | "env" | "external";
+
 export interface HumanTodo {
   id: string;
   workspace_id?: string;
@@ -515,6 +517,10 @@ export interface HumanTodo {
   assignee_user_id?: string; // only this user can act; "" = any admin
   title: string;
   instructions: string;
+  kind: HumanTodoKind;
+  dedup_key: string; // stable condition identity ("" for hand-filed todos)
+  resolution: Record<string, string>; // non-empty = closes itself when the condition resolves
+  resolved_reason: string; // evidence recorded by an auto-close
   status: "open" | "done";
   created_at: number;
   done_at: number;

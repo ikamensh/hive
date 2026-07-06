@@ -23,7 +23,12 @@ from hive.runner._agent_results import (
 )
 from hive.runner._backends import REGISTRY
 from hive.config.settings import Config
-from hive._control.escalation import escalate, runner_machine_owner
+from hive._control.escalation import (
+    escalate,
+    resolve_open_todos,
+    resolve_todo,
+    runner_machine_owner,
+)
 from hive._control.limits import (
     apply_snapshot,
     cooldown_after_exhaustion,
@@ -51,7 +56,7 @@ from hive.models import (
     Finding,
     FindingStatus,
     HumanTask,
-    HumanTaskStatus,
+    HumanTaskKind,
     IssueRun,
     Project,
     ProjectState,
@@ -216,45 +221,6 @@ def sync_landing_failure_human_task(
             return
 
 
-def complete_resource_login_todos(store, resource: Resource) -> None:
-    """Close open "Fix <backend> login on <runner>" todos this resource
-    resolves: the one naming its own runner, and any naming a runner that no
-    longer exists — a rename (laptop-raven -> raven) otherwise leaves a zombie
-    todo no event can ever close."""
-    runner = store.get(Runner, resource.runner_id)
-    runner_name = runner.name if runner else resource.runner_id
-    prefix = f"Fix {resource.backend} login on "
-    live_names = {r.name for r in store.list(Runner, workspace_id=resource.workspace_id)}
-    for task in store.list(HumanTask, workspace_id=resource.workspace_id):
-        if (
-            task.status != HumanTaskStatus.open
-            or task.project_id != ""
-            or not task.title.startswith(prefix)
-        ):
-            continue
-        named = task.title.removeprefix(prefix)
-        if named == runner_name or named not in live_names:
-            task.status = HumanTaskStatus.done
-            task.done_at = time.time()
-            store.put(task)
-
-
-def complete_intake_failure_todo(store, project) -> None:
-    """A successful intake turn resolves any open "Intake scout failed for …"
-    todo for this project — otherwise the fixed condition leaves a zombie entry
-    in Needs-you that only the operator can clear."""
-    title = f"Intake scout failed for {project.name}"
-    for task in store.list(HumanTask, workspace_id=project.workspace_id):
-        if (
-            task.status == HumanTaskStatus.open
-            and task.title == title
-            and task.project_id in ("", project.id)
-        ):
-            task.status = HumanTaskStatus.done
-            task.done_at = time.time()
-            store.put(task)
-
-
 def _is_merge_conflict(exc: Exception) -> bool:
     return isinstance(exc, MergeConflictError) or "merge conflict" in str(exc).lower()
 
@@ -282,6 +248,15 @@ class TaskResultProcessor:
         self.close_issue = close_issue_func
 
     def handle(self, task_id: str, body: TaskResult, workspace_id: str) -> dict:
+        result = self._handle(task_id, body, workspace_id)
+        # A task result is exactly the kind of event that flips todo-resolution
+        # facts (a probe went usable, a story reached a verdict, a work item
+        # landed) — sweep now so the todo closes with the result instead of a
+        # supervisor tick later.
+        resolve_open_todos(self.store, workspace_id)
+        return result
+
+    def _handle(self, task_id: str, body: TaskResult, workspace_id: str) -> dict:
         existing = self.store.get(Task, task_id)
         if not existing or existing.workspace_id != workspace_id:
             raise LookupError(task_id)
@@ -481,10 +456,6 @@ class TaskResultProcessor:
         probe_resources: list[Resource],
         workspace_id: str,
     ) -> None:
-        if not body.cancelled and not body.is_error and not body.resource_exhausted:
-            for resource in probe_resources:
-                if resource.enabled:
-                    complete_resource_login_todos(self.store, resource)
         if (
             any(resource.enabled for resource in probe_resources)
             and body.is_error
@@ -512,6 +483,13 @@ class TaskResultProcessor:
             ),
             workspace_id=workspace_id,
             assignee_user_id=runner_machine_owner(self.store, runner),
+            kind=HumanTaskKind.access,
+            dedup_key=f"access:{task.backend}:{runner_name}",
+            resolution={
+                "check": "resource_usable",
+                "backend": task.backend,
+                "runner_name": runner_name,
+            },
         )
 
     def _handle_intake_result(self, task: Task, body: TaskResult) -> None:
@@ -540,7 +518,14 @@ class TaskResultProcessor:
         project = self.store.get(Project, task.project_id)
         if project and conversation:
             if not body.is_error and not body.cancelled:
-                complete_intake_failure_todo(self.store, project)
+                # A retry mints a new conversation, so no store fact ties the
+                # failed one to recovery — the successful turn is the event.
+                resolve_todo(
+                    self.store,
+                    project.workspace_id,
+                    f"repair:intake:{project.id}",
+                    "a later intake turn succeeded",
+                )
             if conversation.status == ConversationStatus.done:
                 conversation = self._verify_finalized_spec(task, body, project, conversation)
             if conversation.status == ConversationStatus.done:
@@ -592,14 +577,17 @@ class TaskResultProcessor:
             ),
             project_id=project.id,
             workspace_id=project.workspace_id,
+            kind=HumanTaskKind.repair,
+            dedup_key=f"repair:intake-finalize:{project.id}",
+            resolution={"check": "conversation_done", "conversation_id": conversation.id},
         )
         return self.store.update(AgentConversation, conversation.id, reopen) or conversation
 
     def _escalate_intake_failure(self, task: Task, body: TaskResult, project: Project) -> None:
         """Intake hit a wall. File an operator todo so the project isn't a silent
-        dead-end. An auth/policy block reuses the same "Fix <backend> login"
-        title as a failed probe, so a later successful re-probe auto-closes it
-        (see `complete_resource_login_todos`); other failures get a retry todo."""
+        dead-end. An auth/policy block shares the failed probe's dedup key, so a
+        later successful re-probe auto-closes it; other failures resolve when a
+        later intake turn succeeds."""
         runner = self.store.get(Runner, task.runner_id) if task.runner_id else None
         runner_name = runner.name if runner else (task.runner_id or "the runner")
         hint = REGISTRY[task.backend].login_hint if task.backend in REGISTRY else ""
@@ -613,6 +601,13 @@ class TaskResultProcessor:
                 "Hive marked that backend unusable and will re-check it on the next probe. "
                 "You can also retry intake with a different trusted scout from the project setup."
             )
+            kind = HumanTaskKind.access
+            dedup_key = f"access:{task.backend}:{runner_name}"
+            resolution = {
+                "check": "resource_usable",
+                "backend": task.backend,
+                "runner_name": runner_name,
+            }
         else:
             title = f"Intake scout failed for {project.name}"
             instructions = (
@@ -620,10 +615,16 @@ class TaskResultProcessor:
                 f"```\n{detail}\n```\n\n"
                 "Retry intake from the project setup (optionally with a different trusted scout)."
             )
+            kind = HumanTaskKind.repair
+            dedup_key = f"repair:intake:{project.id}"
+            resolution = {}  # closed by the next successful intake turn (event above)
         escalate(
             self.store,
             title,
             instructions=instructions,
+            kind=kind,
+            dedup_key=dedup_key,
+            resolution=resolution,
             project_id="" if body.auth_blocked else project.id,
             workspace_id=project.workspace_id,
             assignee_user_id=runner_machine_owner(self.store, runner) if body.auth_blocked else "",
@@ -784,6 +785,9 @@ class TaskResultProcessor:
                 ),
                 project_id=task.project_id,
                 workspace_id=task.workspace_id,
+                kind=HumanTaskKind.repair,
+                dedup_key=f"repair:land:{task.project_id}:{ws.issue_number}",
+                resolution={"check": "workstream_done", "workstream_id": ws.id},
             )
             _set_ws_status(self.store, ws.id, WorkstreamStatus.rejected, f"{LANDING_FAILED_PREFIX}: {exc}")
             self._refresh_run(task)
@@ -828,6 +832,9 @@ class TaskResultProcessor:
             ),
             project_id=task.project_id,
             workspace_id=task.workspace_id,
+            kind=HumanTaskKind.repair,
+            dedup_key=f"repair:land:{task.project_id}:{ws.issue_number}",
+            resolution={"check": "workstream_done", "workstream_id": ws.id},
         )
 
     def _agent_report(self, text: str) -> str:
@@ -939,6 +946,9 @@ class TaskResultProcessor:
             ),
             project_id=project.id,
             workspace_id=project.workspace_id,
+            kind=HumanTaskKind.env,
+            dedup_key=f"env:story:{story.id}",
+            resolution={"check": "story_verdict", "story_id": story.id},
         )
         if episode:
             refresh_episode_counts(self.store, project, episode)
@@ -974,6 +984,9 @@ class TaskResultProcessor:
             ),
             project_id=project.id,
             workspace_id=project.workspace_id,
+            kind=HumanTaskKind.env,
+            dedup_key=f"env:story:{story.id}",
+            resolution={"check": "story_verdict", "story_id": story.id},
         )
         if episode:
             refresh_episode_counts(self.store, project, episode)
@@ -1024,6 +1037,15 @@ class TaskResultProcessor:
                     ),
                     project_id=project.id,
                     workspace_id=project.workspace_id,
+                    kind=HumanTaskKind.repair,
+                    dedup_key=f"repair:test-refresh:{project.id}",
+                )
+            else:
+                resolve_todo(
+                    self.store,
+                    project.workspace_id,
+                    f"repair:test-refresh:{project.id}",
+                    "a later test-refresh finalized cleanly",
                 )
         except Exception as exc:
             log.exception("test refresh finalization failed for task %s", task.id)
@@ -1038,6 +1060,8 @@ class TaskResultProcessor:
                 ),
                 project_id=project.id,
                 workspace_id=project.workspace_id,
+                kind=HumanTaskKind.repair,
+                dedup_key=f"repair:test-refresh:{project.id}",
             )
 
     def _handle_test_sweep_result(self, task: Task, body: TaskResult) -> None:
@@ -1125,6 +1149,8 @@ class TaskResultProcessor:
                 ),
                 project_id=project.id,
                 workspace_id=project.workspace_id,
+                kind=HumanTaskKind.repair,
+                dedup_key=f"repair:close-issues:{story.id}",
             )
         else:
             story.open_issue_number = 0
@@ -1214,6 +1240,8 @@ class TaskResultProcessor:
                 ),
                 project_id=project.id,
                 workspace_id=project.workspace_id,
+                kind=HumanTaskKind.repair,
+                dedup_key=f"repair:file-issue:{story.id}",
             )
             return
         finding.issue_number = number
@@ -1259,6 +1287,9 @@ class TaskResultProcessor:
             ),
             project_id=project.id,
             workspace_id=project.workspace_id,
+            kind=HumanTaskKind.env,
+            dedup_key=f"env:finding:{finding.id}",
+            resolution={"check": "finding_decided", "finding_id": finding.id},
         )
         if episode:
             refresh_episode_counts(self.store, project, episode)

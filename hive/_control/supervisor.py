@@ -18,12 +18,13 @@ import time
 from collections import defaultdict
 from typing import Callable
 
-from hive._control.escalation import escalate
+from hive._control.escalation import escalate, resolve_open_todos
 from hive.models import (
     AgentConversation,
     ConversationStatus,
     DEFAULT_WORKSPACE_ID,
     HumanTask,
+    HumanTaskKind,
     HumanTaskStatus,
     Machine,
     OrchestratorRun,
@@ -131,6 +132,7 @@ class Supervisor:
     CI_CHECK_INTERVAL_S = 300.0  # how often a ci_autofix project's CI is polled per repo
     TESTING_CHECK_INTERVAL_S = 900.0  # how often a testing_auto project's backlog is re-judged
     ISSUE_SCAN_INTERVAL_S = 600.0  # how often new GitHub issues are ingested per project
+    TODO_TRIAGE_INTERVAL_S = 1800.0  # burst-guard on the LLM todo-board review
 
     def __init__(
         self,
@@ -141,6 +143,7 @@ class Supervisor:
         ci_check: Callable[[str], None] | None = None,
         testing_check: Callable[[str], None] | None = None,
         issue_scan: Callable[[str], None] | None = None,
+        todo_triage: Callable[[], None] | None = None,
     ) -> None:
         self.store = store
         self.orchestrate = orchestrate
@@ -154,6 +157,9 @@ class Supervisor:
         # Unattended issue ingestion (same shape): new issues — external, testing
         # findings, directives — enter the resolve pipeline without a human scan.
         self.issue_scan = issue_scan
+        # LLM second opinion on the open todo board (workspace-level, close-only;
+        # see _control/todo_triage.py). Runs only when the board changed.
+        self.todo_triage = todo_triage
         machine = machine_name or socket.gethostname()
         self.holder = f"{machine}:{os.getpid()}"
         self._events: dict[str, list[str]] = defaultdict(list)
@@ -166,6 +172,9 @@ class Supervisor:
         self._testing_busy: set[str] = set()  # projects with a testing check in flight
         self._last_issue_scan: dict[str, float] = {}
         self._issue_scan_busy: set[str] = set()  # projects with an issue scan in flight
+        self._last_todo_triage = 0.0
+        self._triaged_board: tuple[str, ...] = ()  # open-todo ids at the last triage
+        self._triage_busy = False
         self._dispatch_lock = threading.RLock()
 
     def wake(self, project_id: str, event: str) -> None:
@@ -336,32 +345,31 @@ class Supervisor:
                 "the required browser/Docker capability bundle.\n\n"
                 f"Blocked task(s):\n{needs}\n\n"
                 f"Available capacity right now: {available}\n\n"
-                "Install and probe the missing runner capability, or run a capable runner, then "
-                "mark this todo done so Hive can re-check dispatch."
+                "Install and probe the missing runner capability, or run a capable runner. "
+                "This todo closes itself when the project unblocks."
             ),
             project_id=project.id,
             workspace_id=self.workspace_id,
+            kind=HumanTaskKind.infra,
+            dedup_key=f"infra:capability:{project.id}",
+            resolution={
+                "check": "project_state_not",
+                "project_id": project.id,
+                "state": str(ProjectState.blocked_resources),
+            },
         )
 
     def check_dark_machines(self) -> None:
-        """File an operator todo for a machine that recently went dark, and
-        close it again the moment the machine heartbeats. Runs every step —
-        `escalate` is idempotent by title, so an outage yields one todo per
-        machine per offline episode."""
+        """File an operator todo for a machine that recently went dark. Runs
+        every step — `escalate` is idempotent by dedup_key, so an outage yields
+        one todo per machine per offline episode, and the todo's resolution
+        predicate (a heartbeat newer than the todo) closes it on reconnect via
+        the todo sweep."""
         now = time.time()
         for machine in self.store.list(Machine, workspace_id=self.workspace_id):
-            title = f"Bring machine {machine.name} back online"
             dark_for = now - machine.last_seen
             dark_after = MACHINE_DARK_AFTER_S.get(machine.device_kind, MACHINE_DARK_DEFAULT_S)
-            if dark_for < dark_after:
-                for task in self.store.list(
-                    HumanTask, workspace_id=self.workspace_id, title=title, project_id=""
-                ):
-                    if task.status == HumanTaskStatus.open:
-                        task.status = HumanTaskStatus.done
-                        task.done_at = now
-                        self.store.put(task)
-            elif dark_for < MACHINE_RETIRED_AFTER_S:
+            if dark_after <= dark_for < MACHINE_RETIRED_AFTER_S:
                 since = datetime.datetime.fromtimestamp(
                     machine.last_seen, datetime.UTC
                 ).strftime("%Y-%m-%d %H:%M UTC")
@@ -372,7 +380,7 @@ class Supervisor:
                 )
                 escalate(
                     self.store,
-                    title,
+                    f"Bring machine {machine.name} back online",
                     instructions=(
                         f"Machine `{machine.name}` ({machine.device_kind}, "
                         f"{machine.machine_type or machine.os or 'unknown type'}) last "
@@ -382,6 +390,9 @@ class Supervisor:
                     ),
                     workspace_id=self.workspace_id,
                     assignee_user_id=machine.owner_user_id,
+                    kind=HumanTaskKind.infra,
+                    dedup_key=f"infra:machine:{machine.name}",
+                    resolution={"check": "machine_online", "machine_name": machine.name},
                 )
 
     def dispatch(self, project: Project) -> int:
@@ -544,6 +555,40 @@ class Supervisor:
             self._issue_scan_busy.discard(project_id)
             self._wakeup.set()
 
+    def _open_todo_board(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                t.id
+                for t in self.store.list(
+                    HumanTask, workspace_id=self.workspace_id, status=HumanTaskStatus.open
+                )
+            )
+        )
+
+    def _todo_triage_due(self) -> bool:
+        """The board review costs an LLM call, so it runs only when the set of
+        open todos differs from what the last pass saw (and at most once per
+        interval). A static board never re-triages; facts-only changes are the
+        deterministic sweep's job."""
+        return (
+            self.todo_triage is not None
+            and not self._triage_busy
+            and time.time() - self._last_todo_triage > self.TODO_TRIAGE_INTERVAL_S
+            and self._open_todo_board() != self._triaged_board
+        )
+
+    async def _run_todo_triage(self) -> None:
+        try:
+            await asyncio.to_thread(self.todo_triage)
+        except Exception:
+            log.exception("todo triage failed")
+        finally:
+            # Record the post-close board so the pass's own closes don't
+            # immediately re-trigger it.
+            self._triaged_board = self._open_todo_board()
+            self._triage_busy = False
+            self._wakeup.set()
+
     def _testing_check_due(self, project: Project) -> bool:
         """A `testing_auto` project inside its budget envelope whose poll interval
         elapsed and which has no testing check already running. Pure gate so it is
@@ -569,6 +614,11 @@ class Supervisor:
     async def _step(self) -> None:
         self.fail_orphaned_tasks()
         self.check_dark_machines()
+        resolve_open_todos(self.store, self.workspace_id)
+        if self._todo_triage_due():
+            self._last_todo_triage = time.time()
+            self._triage_busy = True
+            asyncio.get_running_loop().create_task(self._run_todo_triage())
         avail = self.available_backends()
         for project in self.store.list(Project, workspace_id=self.workspace_id):
             if project.archived or project.paused or not project.spec_repo.strip():
@@ -667,8 +717,12 @@ class Supervisor:
                 f"Recent event(s):\n\n```\n{chr(10).join(events)[:1500]}\n```\n\n"
                 f"Error:\n\n```\n{detail[:1500]}\n```"
                 f"{hint}\n\n"
-                "Fix the orchestrator configuration, then mark this todo done so Hive re-evaluates the project."
+                "Fix the orchestrator configuration. This todo closes itself once the "
+                "planner completes an invocation again (mark it done to re-evaluate sooner)."
             ),
             project_id=project_id,
             workspace_id=self.workspace_id,
+            kind=HumanTaskKind.repair,
+            dedup_key=f"repair:orchestrator:{project_id}",
+            resolution={"check": "orchestrator_ran", "project_id": project_id},
         )

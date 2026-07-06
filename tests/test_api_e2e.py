@@ -1359,31 +1359,47 @@ def test_intake_auth_block_marks_backend_failed_escalates_and_retries(harness):
 def test_login_todo_for_renamed_runner_still_closes():
     """Regression (live fleet): a runner rename (laptop-raven -> raven) left a
     'Fix gemini-cli login on laptop-raven' todo no event could ever close,
-    because auto-close matched only the current runner name. Resolving the
-    backend's resource also sweeps its login todos naming runners that no
-    longer exist — while todos for other live runners stay open."""
-    from hive.models import HumanTask, Resource, Runner
-    from hive.runner._task_results import complete_resource_login_todos
+    because auto-close matched only the current runner name. The resolution
+    sweep closes login todos whose backend probed usable on the named runner
+    *and* todos naming runners that no longer exist — while todos for other
+    live runners stay open."""
+    from hive.models import HumanTask, Resource, ResourceUsability, Runner
+    from hive._control.escalation import resolve_open_todos
 
     store = MemoryStore()
     runner = store.put(Runner(name="raven", backends=["gemini-cli"]))
     store.put(Runner(name="hive-vm", backends=["gemini-cli"]))
-    resource = store.put(Resource(runner_id=runner.id, backend="gemini-cli"))
-    for title in (
-        "Fix gemini-cli login on raven",  # this runner: closes
-        "Fix gemini-cli login on laptop-raven",  # zombie runner name: swept
-        "Fix gemini-cli login on hive-vm",  # other live runner: stays open
-        "Fix claude login on laptop-raven",  # other backend: not this resource's call
-    ):
-        store.put(HumanTask(title=title, instructions="", project_id=""))
+    store.put(
+        Resource(
+            runner_id=runner.id,
+            backend="gemini-cli",
+            usability_status=ResourceUsability.usable,
+        )
+    )
 
-    complete_resource_login_todos(store, resource)
+    def login_todo(backend: str, name: str) -> None:
+        store.put(
+            HumanTask(
+                title=f"Fix {backend} login on {name}",
+                instructions="",
+                project_id="",
+                dedup_key=f"access:{backend}:{name}",
+                resolution={"check": "resource_usable", "backend": backend, "runner_name": name},
+            )
+        )
+
+    login_todo("gemini-cli", "raven")  # probed usable: closes
+    login_todo("gemini-cli", "laptop-raven")  # zombie runner name: swept as stale
+    login_todo("gemini-cli", "hive-vm")  # live runner without a usable resource: stays open
+    login_todo("claude", "raven")  # other backend, no resource row yet: stays open
+
+    resolve_open_todos(store)
 
     status = {t.title: t.status for t in store.list(HumanTask)}
     assert status["Fix gemini-cli login on raven"] == "done"
     assert status["Fix gemini-cli login on laptop-raven"] == "done"
     assert status["Fix gemini-cli login on hive-vm"] == "open"
-    assert status["Fix claude login on laptop-raven"] == "open"
+    assert status["Fix claude login on raven"] == "open"
 
 
 def test_intake_failed_conversation_is_restartable(harness):

@@ -3099,9 +3099,20 @@ textarea:focus {
 }
 .needs-kind-q { background: color-mix(in srgb, var(--accent-2) 18%, transparent); color: var(--accent-2); }
 .needs-kind-todo { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+/* Todo kinds: warm = only you can do it, cool = Hive is also on it. */
+.needs-kind-external { background: color-mix(in srgb, var(--warn, #d97706) 18%, transparent); color: var(--warn, #d97706); }
+.needs-kind-access { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.needs-kind-infra { background: color-mix(in srgb, var(--accent-2) 16%, transparent); color: var(--accent-2); }
+.needs-kind-repair { background: color-mix(in srgb, var(--ink-faint) 22%, transparent); color: var(--ink-faint); }
+.needs-kind-env { background: color-mix(in srgb, var(--ink-faint) 22%, transparent); color: var(--ink-faint); }
+.needs-selfclose { font-size: 0.75rem; font-style: italic; }
+.needs-resolved { font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 48ch; }
+.needs-done .answered-row { display: flex; align-items: baseline; gap: 14px; padding: 0.25rem 0; }
+.needs-done .answered-row .needs-resolved { margin-left: auto; }
 .needs-scope { font-size: 0.85rem; color: var(--ink); text-decoration: none; font-weight: 500; }
 a.needs-scope:hover { color: var(--accent); }
 .needs-card-head .muted { margin-left: auto; font-size: 0.8rem; }
+.needs-card-head .needs-selfclose { margin-left: 0; }
 .needs-card-title { margin: 0 0 0.35rem; font-size: 1rem; }
 .needs-card form { margin-top: 0.6rem; }
 .needs-card textarea { width: 100%; }

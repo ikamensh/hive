@@ -11,19 +11,23 @@ be lost at any time — every invocation also receives a full state snapshot.
 
 import json
 import logging
+import time
 from pathlib import Path
 
-from hive.runner._backends import BACKEND_NAMES
+from hive.runner._backends import BACKEND_NAMES, REGISTRY
+from hive._control.escalation import escalate
 from hive._workstreams.issues import ensure_iteration_workstream
 from hive.llm import LoopResult, ProviderUnavailable, ToolLoop, ToolSet, build_adapters
 from hive.models import (
     Autonomy,
     Feedback,
     HumanTask,
+    HumanTaskKind,
     HumanTaskStatus,
     OrchestratorRun,
     Project,
     Question,
+    QuestionStatus,
     Resource,
     Runner,
     Subscription,
@@ -80,7 +84,9 @@ class Tools:
         return [
             self.create_workstream,
             self.create_task,
+            self.cancel_task,
             self.ask_user,
+            self.withdraw_question,
             self.park_workstream,
             self.reactivate_workstream,
             self.complete_workstream,
@@ -229,6 +235,32 @@ class Tools:
                 streak = 0
         return streak
 
+    def cancel_task(self, task_id: str, reason: str) -> str:
+        """Cancel one of this project's own queued or running tasks — e.g. work
+        stuck pending on a backend that turned out unusable. A pending task
+        stops immediately; a running one is flagged and the runner stops it
+        cooperatively. Never ask the human to cancel a task: this tool is how
+        you do it yourself. Deterministic pipeline tasks (issue resolve/review,
+        testing) are owned by their workstreams and cannot be cancelled here."""
+        task = self.store.get(Task, task_id)
+        if not task or task.project_id != self.project.id:
+            return f"error: no task {task_id} in this project"
+        if task.kind not in (TaskKind.work, TaskKind.verify):
+            return f"error: {task.kind} tasks belong to their pipeline; cancel only work/verify tasks"
+        if task.status == TaskStatus.running and task.delivered:
+            task.cancel_requested = True
+            self.store.put(task)
+            self.actions.append(f"requested cancel of running task {task_id}: {reason}")
+            return "cancel requested; the runner will stop it and report the result"
+        if task.status in (TaskStatus.pending, TaskStatus.running):
+            task.status = TaskStatus.cancelled
+            task.result_text = f"Cancelled by the planner: {reason}"
+            task.finished_at = time.time()
+            self.store.put(task)
+            self.actions.append(f"cancelled task {task_id}: {reason}")
+            return "cancelled"
+        return f"error: task is already {task.status}; nothing to cancel"
+
     def ask_user(self, question_markdown: str, workstream_id: str = "") -> str:
         """Ask the human a clarification question (markdown: context, the
         gap/contradiction, options, your recommendation). If workstream_id is
@@ -249,6 +281,32 @@ class Tools:
             self.store.put(ws)
         self.actions.append(f"asked user question {q.id}")
         return f"question_id={q.id} (user will see it in the inbox)"
+
+    def withdraw_question(self, question_id: str, reason: str) -> str:
+        """Withdraw one of your own open questions that events made moot — newer
+        information answered it, or the decision no longer matters. The user
+        should never have to answer a stale question just so the project can
+        complete. Do not withdraw a question that still gates a real decision."""
+        q = self.store.get(Question, question_id)
+        if not q or q.project_id != self.project.id:
+            return f"error: no question {question_id} in this project"
+        if q.status != QuestionStatus.open:
+            return f"error: question is already {q.status}"
+        q.status = QuestionStatus.withdrawn
+        q.answer = f"(withdrawn by the planner: {reason})"
+        self.store.put(q)
+        self.actions.append(f"withdrew question {question_id}: {reason}")
+        parked = [
+            ws.id
+            for ws in self.store.list(Workstream, project_id=self.project.id)
+            if ws.status == WorkstreamStatus.parked and question_id in ws.parked_reason
+        ]
+        if parked:
+            return (
+                f"withdrawn; workstream(s) {', '.join(parked)} are still parked on it — "
+                "reactivate them if work should continue"
+            )
+        return "withdrawn"
 
     def park_workstream(self, workstream_id: str, reason: str) -> str:
         """Park a workstream (stop working on it) with a reason."""
@@ -300,23 +358,58 @@ class Tools:
         return f"committed {sha[:8]}"
 
     def create_human_task(
-        self, title: str, instructions_markdown: str, org_wide: bool = False
+        self,
+        title: str,
+        instructions_markdown: str,
+        kind: str = "external",
+        org_wide: bool = False,
+        backend: str = "",
+        machine: str = "",
     ) -> str:
         """File a todo for the human operator: an action only they can perform
-        outside the system — CLI logins on runner machines, DNS records, billing,
-        granting access. Give exact copy-pasteable commands/steps. Unlike
-        ask_user this requests an action, not an answer. Set org_wide=True when
-        the action helps all projects (runner/machine logins, org billing), not
-        just this one. Check OPEN HUMAN TODOS in the snapshot first to avoid
-        duplicates."""
-        t = self.store.put(
-            HumanTask(
-                workspace_id=self.project.workspace_id,
-                project_id="" if org_wide else self.project.id,
-                title=title,
-                instructions=instructions_markdown,
-            )
+        *outside Hive* — CLI logins on runner machines, DNS records, billing,
+        granting access. Never file one for something Hive can do itself
+        (cancel_task cancels tasks, withdraw_question retracts questions).
+        Unlike ask_user this requests an action, not an answer.
+
+        kind must be 'access' (a login/subscription fix — pass backend and
+        machine so the todo carries the exact login recipe and auto-closes when
+        the backend probes usable), 'infra' (a machine or capability is offline
+        — pass machine; auto-closes on reconnect), or 'external' (DNS, billing,
+        anything outside the fleet; the human closes it). Set org_wide=True when
+        the action helps all projects, not just this one. One open todo exists
+        per condition — a refile for the same condition is rejected."""
+        if kind not in (HumanTaskKind.access, HumanTaskKind.infra, HumanTaskKind.external):
+            return "error: kind must be one of access, infra, external"
+        dedup_key = ""
+        resolution: dict = {}
+        if kind == HumanTaskKind.access:
+            if not backend or not machine:
+                return "error: access todos need backend and machine so they can auto-close"
+            org_wide = True  # a login serves the whole fleet, not one project
+            dedup_key = f"access:{backend}:{machine}"
+            resolution = {"check": "resource_usable", "backend": backend, "runner_name": machine}
+            hint = REGISTRY[backend].login_hint if backend in REGISTRY else ""
+            if hint:
+                instructions_markdown = f"{instructions_markdown}\n\n{hint}"
+        elif kind == HumanTaskKind.infra and machine:
+            dedup_key = f"infra:machine:{machine}"
+            resolution = {"check": "machine_online", "machine_name": machine}
+        t = escalate(
+            self.store,
+            title,
+            instructions_markdown,
+            project_id="" if org_wide else self.project.id,
+            workspace_id=self.project.workspace_id,
+            kind=HumanTaskKind(kind),
+            dedup_key=dedup_key,
+            resolution=resolution,
         )
+        if t is None:
+            return (
+                "error: an open todo already covers this condition (see OPEN HUMAN "
+                "TODOS in the snapshot); not refiled"
+            )
         self.actions.append(f"filed human todo {t.id} '{title}'")
         return f"human_task_id={t.id} (user will see it on the resources page)"
 
@@ -429,7 +522,8 @@ class Tools:
                 f"available={available}{cooldown}{discovery}"
             )
         todo_lines = [
-            f"- {t.id} [{'org-wide' if not t.project_id else 'this project'}]: {t.title}"
+            f"- {t.id} [{'org-wide' if not t.project_id else 'this project'}] ({t.kind}): {t.title}"
+            f"{' — closes itself when resolved' if t.resolution else ''}"
             for t in self.store.list(
                 HumanTask, workspace_id=self.project.workspace_id, status=HumanTaskStatus.open
             )

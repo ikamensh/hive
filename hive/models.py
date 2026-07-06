@@ -417,6 +417,7 @@ class QuestionStatus(StrEnum):
     open = "open"
     answered = "answered"
     dismissed = "dismissed"  # operator discarded it without answering
+    withdrawn = "withdrawn"  # the planner retracted its own question as moot
 
 
 class Question(BaseModel):
@@ -589,9 +590,29 @@ class HumanTaskStatus(StrEnum):
     done = "done"
 
 
+class HumanTaskKind(StrEnum):
+    """What class of condition a todo describes — each kind has its own
+    resolution logic (see `hive._control.escalation`)."""
+
+    access = "access"  # login / subscription / permission only the operator can grant
+    infra = "infra"  # a machine is offline or a capability is missing from the fleet
+    repair = "repair"  # a Hive-side operation failed and needs repair or verification
+    env = "env"  # a task environment could not exercise the product (toolchain, display)
+    external = "external"  # genuinely outside the system (DNS records, payments)
+
+
 class HumanTask(BaseModel):
     """A todo for the human operator (auth refresh, infra unblock, ...) with
-    concrete instructions. Surfaced in the web UI next to questions."""
+    concrete instructions. Surfaced in the web UI next to questions.
+
+    A todo names an *action*; an information request is a `Question`.
+    `dedup_key` is the condition's stable identity (e.g. `access:codex:hive-vm`)
+    shared by every producer, so system code and the planner cannot fan one
+    root cause out into differently-worded todos. `resolution` names the store
+    fact that proves the condition is gone (`{"check": ..., **facts}`); the
+    supervisor sweeps open todos and closes those whose predicate holds —
+    closure is evidence-based, a manual "done" is the fallback for `external`
+    todos and human judgment."""
 
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
@@ -601,7 +622,11 @@ class HumanTask(BaseModel):
     assignee_user_id: str = ""
     title: str
     instructions: str  # markdown, copy-pasteable commands
+    kind: HumanTaskKind = HumanTaskKind.external
+    dedup_key: str = ""  # stable condition identity; empty falls back to (title, project)
+    resolution: dict = {}  # predicate facts; empty = manual close only
     status: HumanTaskStatus = HumanTaskStatus.open
+    resolved_reason: str = ""  # evidence recorded when the sweep auto-closes it
     created_at: float = Field(default_factory=now)
     done_at: float = 0.0
 

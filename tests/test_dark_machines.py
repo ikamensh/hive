@@ -1,6 +1,6 @@
 """Dark-machine escalation: the chief is the only party that knows a runner's
-machine went silent, so it files the operator todo — and withdraws it on
-reconnect.
+machine went silent, so it files the operator todo — and the todo-resolution
+sweep withdraws it on reconnect.
 
 Regression origin: a laptop runner died (stale checkout crashed, launchd
 couldn't respawn it) and stayed dark for 9 days with zero signal anywhere.
@@ -8,7 +8,7 @@ couldn't respawn it) and stayed dark for 9 days with zero signal anywhere.
 Properties verified:
 - a recently-alive machine that crosses its dark threshold produces exactly
   one open todo, no matter how many supervisor steps observe the outage;
-- the todo closes itself when the machine heartbeats again;
+- the todo closes itself (via the sweep) when the machine heartbeats again;
 - a machine silent past the retirement window produces nothing (graveyard
   rows must not nag forever);
 - a fresh offline episode after a recovery produces a fresh todo;
@@ -19,6 +19,7 @@ import time
 
 from hive.models import HumanTask, HumanTaskStatus, Machine
 from hive.persistence.store import MemoryStore
+from hive._control.escalation import resolve_open_todos
 from hive._control.supervisor import (
     MACHINE_DARK_AFTER_S,
     MACHINE_RETIRED_AFTER_S,
@@ -65,11 +66,12 @@ def test_todo_closes_when_machine_returns():
 
     machine.last_seen = time.time()  # heartbeat: machine is back
     store.put(machine)
-    supervisor.check_dark_machines()
+    resolve_open_todos(store)
 
     assert open_todos(store) == []
     done = store.list(HumanTask)[0]
     assert done.status == HumanTaskStatus.done and done.done_at > 0
+    assert "heartbeated" in done.resolved_reason
 
 
 def test_retired_machine_stays_silent():
@@ -89,7 +91,7 @@ def test_new_offline_episode_files_new_todo():
     supervisor.check_dark_machines()
     machine.last_seen = time.time()
     store.put(machine)
-    supervisor.check_dark_machines()  # recovery closes the first todo
+    resolve_open_todos(store)  # recovery closes the first todo
 
     machine.last_seen = time.time() - (MACHINE_DARK_AFTER_S["laptop"] + HOUR)
     store.put(machine)
