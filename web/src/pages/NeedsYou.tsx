@@ -89,6 +89,11 @@ function TodoItem({ todo, scope, onDone }: { todo: HumanTodo; scope: string; onD
       <h3 className="needs-card-title">{todo.title}</h3>
       <Markdown text={todo.instructions} />
       <div className="needs-card-actions">
+        {(kind === "access" || kind === "infra") && (
+          <Link to="/machines" className="ghost-link">
+            machines & subscriptions →
+          </Link>
+        )}
         {todo.project_id && (
           <Link to={`/p/${todo.project_id}`} className="ghost-link">
             open project →
