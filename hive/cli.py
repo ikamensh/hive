@@ -483,6 +483,15 @@ def _local_stamp(epoch: float) -> str:
     return time.strftime("%a %H:%M", time.localtime(epoch))
 
 
+def _reset_stamp(epoch: float) -> str:
+    """A future reset moment, unambiguous across weeks: weekly windows reset
+    up to 7 days out, where a bare weekday name reads as today."""
+    delta = epoch - time.time()
+    form = "%d %b %H:%M" if delta > 6 * 86400 else "%a %H:%M"
+    stamp = time.strftime(form, time.localtime(epoch))
+    return f"{stamp} (in {_human_duration(delta)})" if delta > 0 else stamp
+
+
 def _fmt_limits(rows: list[dict]) -> list[str]:
     out = ["LIMITS — what each license knows about its own usage windows"]
     for r in rows:
@@ -495,7 +504,7 @@ def _fmt_limits(rows: list[dict]) -> list[str]:
         age = f", snapshot {_human_duration(r['snapshot_age_s'])} old" if r["captured_at"] else ""
         out.append(f"  {r['backend']:<11} @ {r['machine']}{plan} (via {r['source']}{age})")
         for w in r["windows"]:
-            resets = _local_stamp(w["resets_at"]) if w["resets_at"] else "?"
+            resets = _reset_stamp(w["resets_at"]) if w["resets_at"] else "?"
             extra = ""
             if w.get("hive_tokens_in_window"):
                 extra += f" — hive spent ~{w['hive_tokens_in_window']:,} tok"
@@ -505,7 +514,7 @@ def _fmt_limits(rows: list[dict]) -> list[str]:
                 f"      {w['kind']:<14} {w['used_percent']:>3.0f}% used, resets {resets}{extra}"
             )
         if r["cooldown_until"]:
-            out.append(f"      cooling down until {_local_stamp(r['cooldown_until'])}")
+            out.append(f"      cooling down until {_reset_stamp(r['cooldown_until'])}")
         if r["last_exhaustion"]:
             e = r["last_exhaustion"]
             hint = f" (message said resets {_local_stamp(e['reset_at_hint'])})" if e["reset_at_hint"] else ""
