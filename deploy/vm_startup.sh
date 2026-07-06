@@ -60,6 +60,8 @@ HIVE_GCP_PROJECT=hive-ikamen
 HIVE_GCS_BUCKET=hive-ikamen-blobs
 HIVE_ORCH_PROVIDER=auto
 HIVE_ADVERTISED_URLS=https://hive.tachyon-ai.eu,https://hive.34-62-218-54.sslip.io
+# First login is the dev-mode identity — keep ikamensh first.
+HIVE_ALLOWED_GITHUB_USERS=ikamensh,eidemiurge
 GEMINI_API_KEY=$(secret_optional hive-gemini-api-key)
 OPENAI_API_KEY=$(secret_optional hive-openai-api-key)
 CLAUDE_CODE_OAUTH_TOKEN=$(secret_optional hive-claude-oauth-token)

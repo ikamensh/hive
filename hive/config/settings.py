@@ -33,7 +33,8 @@ class Config:
     test_confirm_backend: str = "codex"
     test_confirm_model: str = ""
     auth_mode: str = "dev"  # dev | github
-    allowed_github_users: str = "ikamensh"
+    # Order matters: the first login is the dev-mode identity.
+    allowed_github_users: str = "ikamensh,eidemiurge"
     github_client_id: str = ""
     github_client_secret: str = ""
     public_url: str = "http://localhost:8000"
@@ -80,7 +81,9 @@ class Config:
             test_confirm_backend=os.environ.get("HIVE_TEST_CONFIRM_BACKEND", "codex"),
             test_confirm_model=os.environ.get("HIVE_TEST_CONFIRM_MODEL", ""),
             auth_mode=os.environ.get("HIVE_AUTH_MODE", "dev"),
-            allowed_github_users=os.environ.get("HIVE_ALLOWED_GITHUB_USERS", "ikamensh"),
+            allowed_github_users=os.environ.get(
+                "HIVE_ALLOWED_GITHUB_USERS", "ikamensh,eidemiurge"
+            ),
             github_client_id=os.environ.get("HIVE_GITHUB_CLIENT_ID", ""),
             github_client_secret=os.environ.get("HIVE_GITHUB_CLIENT_SECRET", ""),
             public_url=os.environ.get("HIVE_PUBLIC_URL", "http://localhost:8000"),

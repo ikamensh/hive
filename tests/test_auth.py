@@ -58,6 +58,21 @@ def test_dev_auth_bootstraps_user_and_workspace():
     assert "hive_session" in response.headers["set-cookie"]
 
 
+def test_dev_identity_is_the_first_allowed_login_not_set_order():
+    """Adding members to the allow-list must never re-attribute a dev-mode
+    install: the dev identity is the *first* configured login. (The old code
+    took `next(iter(set))` — per-process-random with >1 entry, which would
+    have flipped the live chief's identity between restarts.)"""
+    store = MemoryStore()
+    client, _config = make_client(
+        store, allowed_github_users="ikamensh,eidemiurge,zoe"
+    )
+
+    logins = {client.get("/api/auth/me").json()["user"]["github_login"] for _ in range(5)}
+
+    assert logins == {"ikamensh"}
+
+
 def test_chief_does_not_register_itself_as_a_machine():
     # Machines are runner hosts the user recognizes. A chief is a process, not a
     # durable machine — persisting one left a permanent offline card per chief

@@ -121,11 +121,16 @@ class AuthManager:
         self.store = store
         self.config = config
         self.workspace = ensure_workspace(store, config)
-        self.allowed_github = {
-            login.strip().lower()
-            for login in config.allowed_github_users.split(",")
-            if login.strip()
-        }
+        # Config order is meaningful: the first login is the dev-mode identity,
+        # so adding members must never re-attribute a dev-mode install.
+        self.allowed_github_order = list(
+            dict.fromkeys(
+                login.strip().lower()
+                for login in config.allowed_github_users.split(",")
+                if login.strip()
+            )
+        )
+        self.allowed_github = set(self.allowed_github_order)
 
     def validate_config(self) -> None:
         if self.config.auth_mode == "github":
@@ -209,7 +214,7 @@ class AuthManager:
         return user, membership
 
     def dev_context(self) -> AuthContext:
-        login = next(iter(self.allowed_github), "dev")
+        login = self.allowed_github_order[0] if self.allowed_github_order else "dev"
         user, membership = self._ensure_user(login, login)
         return AuthContext(user=user, workspace=self.workspace, role=membership.role)
 
