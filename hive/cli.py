@@ -356,6 +356,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("machine_id")
     p.add_argument("user_id", nargs="?", default="", help="empty = release")
 
+    p = sub.add_parser(
+        "enroll",
+        help="onboard THIS machine as a runner owned by you (token from the web machines page)",
+    )
+    p.add_argument("--url", required=True, help="chief URL, e.g. https://hive.example.com")
+    p.add_argument("--token", required=True, help="enrollment token from the machines page")
+    p.add_argument("--name", default="", help="runner name (default: short hostname)")
+
     return parser
 
 
@@ -1079,12 +1087,91 @@ def run(args: argparse.Namespace, client) -> dict | list:
     return r.json()
 
 
+def _run_enroll(args: argparse.Namespace) -> None:
+    """Onboard this machine as a runner: exchange the enrollment token for
+    runner credentials, then install the service (macOS launchd via
+    `deploy/install_mac_runner.sh`; elsewhere just materialize runner.env).
+    The chief claims the machine for the token's minting user on first
+    register, so their login todos route correctly from day one."""
+    import socket
+
+    import httpx
+
+    url = args.url.rstrip("/")
+    basic = os.environ.get("HIVE_BASIC_AUTH", "") or load_stored_config().get("HIVE_BASIC_AUTH", "")
+    auth = tuple(basic.split(":", 1)) if basic else None
+    name = args.name.strip() or socket.gethostname().split(".")[0]
+
+    response = httpx.post(f"{url}/api/enroll", json={"token": args.token}, auth=auth, timeout=30.0)
+    if response.status_code in (401, 403):
+        # The chief answers JSON; a bare body means the Caddy perimeter, i.e.
+        # the request never reached hive.
+        if "application/json" not in response.headers.get("content-type", ""):
+            raise SystemExit(
+                "the chief's perimeter refused the request (basic auth). Set "
+                "HIVE_BASIC_AUTH=user:pass (the site password you use in the browser) and retry."
+            )
+        detail = response.json().get("detail", response.text[:300])
+        raise SystemExit(
+            f"enrollment refused: {detail}\n"
+            "Tokens expire after an hour — mint a fresh one from the machines page."
+        )
+    response.raise_for_status()
+    creds = response.json()
+    if not creds["gh_token"]:
+        # Without it the mac installer would fall back to its gcloud path,
+        # which a non-admin laptop has no access to.
+        raise SystemExit(
+            "the chief has no GitHub token configured (HIVE_GH_TOKEN); "
+            "ask the admin to set it, then enroll again."
+        )
+
+    env = {
+        **os.environ,
+        "HIVE_URL": url,
+        "HIVE_RUNNER_TOKEN": creds["runner_token"],
+        "HIVE_GH_TOKEN": creds["gh_token"],
+        "HIVE_BASIC_AUTH": basic,
+        "HIVE_RUNNER_NAME": name,
+        "HIVE_RUNNER_OWNER": creds["owner_user_id"],
+    }
+    if sys.platform == "darwin":
+        script = _repo_root() / "deploy" / "install_mac_runner.sh"
+        if not script.is_file():
+            raise SystemExit(f"installer not found at {script} — run from a hive checkout")
+        subprocess.run(["bash", str(script)], env=env, check=True)
+        print(f"\nenrolled: this laptop serves Hive as runner '{name}', claimed for you.")
+        print("It appears on the machines page within a minute; agent logins are probed automatically.")
+        return
+
+    state_dir = Path(os.environ.get("HIVE_RUNNER_STATE_DIR", "~/.config/hive")).expanduser()
+    env_file = state_dir / "runner.env"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        f"HIVE_URL={url}",
+        f"HIVE_RUNNER_TOKEN={creds['runner_token']}",
+        f"HIVE_RUNNER_NAME={name}",
+        f"HIVE_GH_TOKEN={creds['gh_token']}",
+        f"HIVE_RUNNER_OWNER={creds['owner_user_id']}",
+    ]
+    if basic:
+        lines.append(f"HIVE_BASIC_AUTH={basic}")
+    env_file.write_text("\n".join(lines) + "\n")
+    env_file.chmod(0o600)
+    print(f"wrote {env_file} (chmod 600)")
+    print("start the runner with:")
+    print(f"  set -a; source {env_file}; set +a; python -m hive.runner")
+
+
 def main(argv: list[str] | None = None) -> None:
     import httpx
 
     args = build_parser().parse_args(argv)
     if args.command == "run":
         _run_chief(args)
+        return
+    if args.command == "enroll":
+        _run_enroll(args)
         return
     if args.command == "config":
         _run_config(args)

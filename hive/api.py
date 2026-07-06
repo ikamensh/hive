@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from hive._integrations.auth import (
+    ENROLL_TTL_S,
     SESSION_COOKIE,
     SESSION_TTL_S,
     AuthContext,
@@ -279,6 +280,10 @@ class MachinePatch(BaseModel):
 
 class UserRolePatch(BaseModel):
     role: str
+
+
+class EnrollExchange(BaseModel):
+    token: str  # signed enrollment token minted by /api/enroll-tokens
 
 
 def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_runner=None) -> FastAPI:
@@ -1693,6 +1698,39 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             for project in store.list(Project, workspace_id=ctx.workspace_id):
                 supervisor.wake(project.id, note)
         return task.model_dump()
+
+    # ---- machine enrollment ---------------------------------------------------
+
+    @app.post("/api/enroll-tokens")
+    def create_enroll_token(ctx: AuthContext = Depends(current)):
+        """Mint a short-lived enrollment token so any member — including a
+        resource provider — can onboard their own laptop with one `hive enroll`
+        command. The machine it enrolls is claimed for them automatically."""
+        chief_url = config.public_url.rstrip("/")
+        token = auth.enroll_token(ctx.user)
+        return {
+            "token": token,
+            "expires_in_s": ENROLL_TTL_S,
+            "command": f"uv run hive enroll --url {chief_url} --token {token}",
+        }
+
+    @app.post("/api/enroll")
+    def enroll(body: EnrollExchange):
+        """Exchange an enrollment token for runner credentials. The signed
+        token is the credential (no session on the laptop yet); it names the
+        member the enrolled machine will belong to."""
+        user_id = auth.verify_enroll(body.token)
+        if not store.list(
+            WorkspaceMembership, workspace_id=config.workspace_id, user_id=user_id
+        ):
+            raise HTTPException(403, "not a workspace member")
+        return {
+            "chief_urls": parse_urls(config.advertised_urls) or [config.public_url.rstrip("/")],
+            "runner_token": config.runner_token,
+            "gh_token": config.gh_token,
+            "workspace_id": config.workspace_id,
+            "owner_user_id": user_id,
+        }
 
     # ---- users ---------------------------------------------------------------
 

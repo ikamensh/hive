@@ -32,9 +32,12 @@ echo "-> runner name:  $RUNNER_NAME  (stable name => stable machine id on the ch
 echo "-> chief seed:   $HIVE_URL  (more candidates learned from the chief itself)"
 
 # --- credentials, materialized once (no gcloud dependency at runtime) ---------
+# Two sources: env vars (the `hive enroll` path — any member, no GCP access
+# needed) or GCP Secret Manager (the admin path). Basic auth is optional; a
+# chief without a Caddy perimeter has none.
 mkdir -p "$(dirname "$ENV_FILE")" "$LOG_DIR"
-if [ -n "${HIVE_RUNNER_TOKEN:-}" ] && [ -n "${HIVE_BASIC_AUTH:-}" ] && [ -n "${HIVE_GH_TOKEN:-}" ]; then
-  TOKEN="$HIVE_RUNNER_TOKEN"; BASIC_AUTH="$HIVE_BASIC_AUTH"; GH_TOKEN="$HIVE_GH_TOKEN"
+if [ -n "${HIVE_RUNNER_TOKEN:-}" ] && [ -n "${HIVE_GH_TOKEN:-}" ]; then
+  TOKEN="$HIVE_RUNNER_TOKEN"; BASIC_AUTH="${HIVE_BASIC_AUTH:-}"; GH_TOKEN="$HIVE_GH_TOKEN"
 else
   echo "-> fetching runner + gh tokens and web password from GCP Secret Manager ($PROJECT)"
   TOKEN="$(gcloud secrets versions access latest --secret=hive-runner-token --project="$PROJECT" --account="$ACCOUNT")"
@@ -46,11 +49,19 @@ fi
 umask 177
 cat > "$ENV_FILE" <<EOF
 HIVE_URL=$HIVE_URL
-HIVE_BASIC_AUTH=$BASIC_AUTH
 HIVE_RUNNER_TOKEN=$TOKEN
 HIVE_RUNNER_NAME=$RUNNER_NAME
+HIVE_GH_TOKEN=$GH_TOKEN
 HIVE_RUNNER_SELF_UPDATE=1
 EOF
+if [ -n "$BASIC_AUTH" ]; then
+  echo "HIVE_BASIC_AUTH=$BASIC_AUTH" >> "$ENV_FILE"
+fi
+if [ -n "${HIVE_RUNNER_OWNER:-}" ]; then
+  # The member this machine belongs to (set by `hive enroll`); the chief
+  # claims the machine for them on first register.
+  echo "HIVE_RUNNER_OWNER=$HIVE_RUNNER_OWNER" >> "$ENV_FILE"
+fi
 umask 022
 echo "-> wrote $ENV_FILE (chmod 600)"
 

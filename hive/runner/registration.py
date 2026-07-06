@@ -70,6 +70,10 @@ class RunnerRegister(BaseModel):
     machine_arch: str = ""
     machine_kind: str = ""
     boot: bool = False  # true on daemon startup (vs periodic heartbeat)
+    # Set on machines onboarded via `hive enroll`: the member whose enrollment
+    # token installed this runner. Claims the machine for them on first
+    # register; never steals a machine someone already owns.
+    owner_user_id: str = ""
     discoveries: list[BackendDiscoveryInput] = []
     capabilities: list[str] = []
     auto_probe: bool = False
@@ -176,6 +180,9 @@ def register(store, body: RunnerRegister, workspace_id: str) -> dict:
         machine_arch=body.machine_arch,
         device_kind=body.machine_kind,
     )
+    if body.owner_user_id and not machine.owner_user_id:
+        machine.owner_user_id = body.owner_user_id
+        machine = store.put(machine)
     existing = next(
         (r for r in store.list(Runner, workspace_id=workspace_id) if r.name == body.name),
         None,

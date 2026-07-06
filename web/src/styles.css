@@ -3286,3 +3286,10 @@ a.needs-scope:hover { color: var(--accent); }
 .users-hint { margin-top: 1.2rem; }
 .machine-owner { font-size: 12px; padding: 2px 6px; }
 .machine-meta .chip .ghost.quiet { margin-left: 0.4rem; padding: 0 0.3rem; }
+
+/* --- add-a-laptop enrollment --- */
+.enroll-cta { margin: 0.3rem 0 0.8rem; display: flex; align-items: center; gap: 0.6rem; }
+.enroll-panel { margin: 0.5rem 0 1.4rem; padding: 1rem 1.2rem; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel-2); }
+.enroll-command { overflow-x: auto; padding: 0.7rem 0.9rem; border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--bg-raise); }
+.enroll-command code { font-family: var(--mono); font-size: 12px; white-space: pre; }
+.enroll-actions { display: flex; gap: 0.6rem; margin: 0.6rem 0; }

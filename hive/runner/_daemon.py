@@ -50,6 +50,7 @@ MACHINE_OS = MACHINE_METADATA["machine_os"]
 MACHINE_ARCH = MACHINE_METADATA["machine_arch"]
 MACHINE_KIND = MACHINE_METADATA["machine_kind"]
 RUNNER_NAME = os.environ.get("HIVE_RUNNER_NAME", socket.gethostname())
+RUNNER_OWNER = os.environ.get("HIVE_RUNNER_OWNER", "")  # set by `hive enroll`; claims the machine
 WORKDIR = Path(os.environ.get("HIVE_RUNNER_WORKDIR", "~/hive-work")).expanduser()
 TASK_TIMEOUT_S = float(os.environ.get("HIVE_TASK_TIMEOUT_S", "3600"))
 CANCEL_POLL_S = 5.0  # how often a running task checks for an operator cancel request
@@ -874,6 +875,7 @@ def main(argv: list[str] | None = None) -> None:
                 "machine_arch": MACHINE_ARCH,
                 "machine_kind": MACHINE_KIND,
                 "boot": boot,
+                "owner_user_id": RUNNER_OWNER,
                 "discoveries": discoveries,
                 "capabilities": capabilities,
                 "auto_probe": True,

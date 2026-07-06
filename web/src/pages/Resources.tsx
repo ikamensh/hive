@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ago, api, countdown, money, usePoll } from "../api";
 import type {
+  EnrollToken,
   LicensingMode,
   LocalRunnerInfo,
   MachineGroup,
@@ -211,6 +212,71 @@ function Subscriptions({
   );
 }
 
+function AddLaptop() {
+  const [enroll, setEnroll] = useState<EnrollToken | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState(false);
+
+  const mint = async () => {
+    setBusy(true);
+    setError(false);
+    try {
+      setEnroll(await api.createEnrollToken());
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copy = async () => {
+    if (!enroll) return;
+    await navigator.clipboard.writeText(enroll.command);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  if (!enroll) {
+    return (
+      <div className="enroll-cta">
+        <button
+          className="ghost"
+          onClick={mint}
+          disabled={busy}
+          title="Get a one-hour command that installs the runner on another machine and claims it for you."
+        >
+          {busy ? "minting…" : "add a laptop"}
+        </button>
+        {error && <span className="form-error">could not mint a token</span>}
+      </div>
+    );
+  }
+  return (
+    <section className="enroll-panel">
+      <h2 className="col-title">add a laptop</h2>
+      <p className="muted">
+        On the laptop, from a hive checkout (<code>git clone</code> the repo first), run:
+      </p>
+      <pre className="enroll-command">
+        <code>{enroll.command}</code>
+      </pre>
+      <div className="enroll-actions">
+        <button onClick={copy}>{copied ? "copied" : "copy command"}</button>
+        <button className="ghost quiet" onClick={() => setEnroll(null)}>
+          dismiss
+        </button>
+      </div>
+      <p className="muted">
+        The token is valid for {Math.round(enroll.expires_in_s / 60)} minutes and enrolls the
+        machine as <b>yours</b> — its login todos will land in your inbox. If the chief sits
+        behind the site password, prefix the command with{" "}
+        <code>HIVE_BASIC_AUTH=user:password</code>.
+      </p>
+    </section>
+  );
+}
+
 function OrgContext() {
   const [text, setText] = useState<string | null>(null);
   const [saved, setSaved] = useState(true);
@@ -369,6 +435,7 @@ export default function Resources() {
           />
         )}
       </div>
+      <AddLaptop />
       {!data && <p className="muted">{failed ? "unreachable" : "loading…"}</p>}
 
       {data && (

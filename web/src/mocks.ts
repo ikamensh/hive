@@ -1701,6 +1701,12 @@ export const api = {
     );
   },
 
+  createEnrollToken: async () => ({
+    token: "mock-enroll-token",
+    expires_in_s: 3600,
+    command: "uv run hive enroll --url https://hive.example.com --token mock-enroll-token",
+  }),
+
   setMachineOwner: async (id: string, owner_user_id: string) => {
     const machine = (resourcesPayload.machines ?? []).find((m) => m.id === id);
     if (machine) machine.owner_user_id = owner_user_id;

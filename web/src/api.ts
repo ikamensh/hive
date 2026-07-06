@@ -4,6 +4,7 @@ import type {
   AgentConversation,
   CiCheckResult,
   Directive,
+  EnrollToken,
   HumanTodo,
   GithubRepo,
   IntakeMessage,
@@ -199,6 +200,7 @@ const realApi = {
   },
   setMachineOwner: (id: string, owner_user_id: string) =>
     http(`/api/machines/${id}`, { method: "PATCH", body: JSON.stringify({ owner_user_id }) }),
+  createEnrollToken: () => http<EnrollToken>("/api/enroll-tokens", { method: "POST" }),
   users: () => http<WorkspaceMember[]>("/api/users"),
   setUserRole: (userId: string, role: WorkspaceRole) =>
     http(`/api/users/${userId}`, { method: "PATCH", body: JSON.stringify({ role }) }),

@@ -360,6 +360,14 @@ export interface AuthInfo {
   version?: VersionInfo;
 }
 
+/** A short-lived token + ready-to-paste command to onboard a laptop as a
+ *  runner claimed for the minting user (POST /api/enroll-tokens). */
+export interface EnrollToken {
+  token: string;
+  expires_in_s: number;
+  command: string;
+}
+
 /** One workspace member with what they bring (GET /api/users). */
 export interface WorkspaceMember {
   user: HiveUser;

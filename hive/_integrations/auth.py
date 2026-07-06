@@ -31,6 +31,10 @@ from hive.models import (
 SESSION_COOKIE = "hive_session"
 SESSION_TTL_S = 30 * 24 * 3600
 STATE_TTL_S = 10 * 60
+# Enrollment tokens onboard a runner machine: minted from a member's session,
+# pasted into `hive enroll` on the laptop. Short-lived — it hands out the
+# runner token, and the machine it enrolls is claimed for the minting user.
+ENROLL_TTL_S = 60 * 60
 
 
 @dataclass(frozen=True)
@@ -244,6 +248,18 @@ class AuthManager:
         user.last_seen = time.time()
         self.store.put(user)
         return AuthContext(user=user, workspace=self.workspace, role=memberships[0].role)
+
+    def enroll_token(self, user: User) -> str:
+        return self._sign(
+            {"typ": "enroll", "sub": user.id, "exp": time.time() + ENROLL_TTL_S}
+        )
+
+    def verify_enroll(self, token: str) -> str:
+        """The user id an enrollment token was minted for; 401 on anything off."""
+        payload = self._verify(token)
+        if payload.get("typ") != "enroll":
+            raise HTTPException(401, "bad enrollment token")
+        return payload.get("sub", "")
 
     def state_token(self) -> str:
         return self._sign({"typ": "oauth_state", "exp": time.time() + STATE_TTL_S})
