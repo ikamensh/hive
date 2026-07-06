@@ -324,7 +324,13 @@ class Tools:
         """Declare the iteration goal fully built and verified. Only valid once
         every workstream is done/parked, no tasks are queued or running, and no
         questions are open. The project goes idle until the human sets the next
-        goal."""
+        goal.
+
+        The summary is the completion note the human reads: it must contain a
+        'Try it:' line with the exact command(s) to see the result working
+        (e.g. `git clone … && cargo run`), plus the verification evidence
+        (test counts, verify verdicts) — a claim without a way to check it is
+        not a completion note."""
         unfinished = [
             t
             for t in self.store.list(Task, project_id=self.project.id)
