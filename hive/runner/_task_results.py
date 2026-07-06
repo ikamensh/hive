@@ -24,6 +24,12 @@ from hive.runner._agent_results import (
 from hive.runner._backends import REGISTRY
 from hive.config.settings import Config
 from hive._control.escalation import escalate, runner_machine_owner
+from hive._control.limits import (
+    apply_snapshot,
+    cooldown_after_exhaustion,
+    record_exhaustion,
+    record_snapshot,
+)
 from hive._workstreams.issues import (
     LANDING_FAILED_PREFIX,
     MergeConflictError,
@@ -90,7 +96,6 @@ from hive._workstreams.testing import (
 
 log = logging.getLogger("hive.runner._task_results")
 
-RATE_LIMIT_COOLDOWN_S = 3600.0
 HUMAN_FIX_PATTERNS = re.compile(
     r"auth|login|credential|api.?key|not authenticated|forbidden|permission|subscription|billing",
     re.IGNORECASE,
@@ -121,6 +126,8 @@ class TaskResult(BaseModel):
     auth_blocked: bool = False  # login/policy block detected by runner (needs a human)
     cancelled: bool = False  # runner stopped the task on an operator cancel request
     session_handle: str = ""  # backend session id/chat id for conversation continuation
+    reset_at_hint: float = 0.0  # limit-reset epoch the runner parsed from the error message
+    usage_snapshot: dict = Field(default_factory=dict)  # provider usage windows after the task
 
 
 def _structured_or_legacy_verdict(
@@ -394,10 +401,15 @@ class TaskResultProcessor:
         body: TaskResult,
     ) -> list[Resource]:
         probe_resources: list[Resource] = []
+        # Set inside the store.update mutation, read after it: whether the
+        # snapshot moved usage materially (worth a history event).
+        snapshot_moved = False
 
         def account(resource: Resource) -> None:
+            nonlocal snapshot_moved
             resource.total_tasks += 1
             resource.total_cost_usd += body.cost_usd
+            snapshot_moved = apply_snapshot(resource, body.usage_snapshot)
             if task.kind == TaskKind.probe and resource.last_probe_task_id == task.id:
                 resource.last_probe_at = task.finished_at
                 resource.last_probe_text = body.text[:2000]
@@ -426,7 +438,11 @@ class TaskResultProcessor:
                 resource.last_probe_text = body.text[:2000]
             if body.resource_exhausted:
                 resource.mark_exhausted(
-                    until=time.time() + RATE_LIMIT_COOLDOWN_S,
+                    until=cooldown_after_exhaustion(
+                        resource,
+                        reset_at_hint=body.reset_at_hint,
+                        snapshot=body.usage_snapshot,
+                    ),
                     at=task.finished_at,
                     text=body.text,
                     task_id=task.id,
@@ -439,7 +455,22 @@ class TaskResultProcessor:
             backend=task.backend,
         ):
             updated = self.store.update(Resource, resource.id, account)
-            if updated and task.kind == TaskKind.probe and updated.last_probe_task_id == task.id:
+            if updated is None:
+                continue
+            # History rows are written outside the update mutation: FirestoreStore
+            # runs `account` inside a transaction, which must stay write-free.
+            if snapshot_moved:
+                record_snapshot(self.store, updated, body.usage_snapshot, task_id=task.id)
+            if body.resource_exhausted:
+                record_exhaustion(
+                    self.store,
+                    updated,
+                    at=task.finished_at,
+                    text=body.text,
+                    reset_at_hint=body.reset_at_hint,
+                    task_id=task.id,
+                )
+            if task.kind == TaskKind.probe and updated.last_probe_task_id == task.id:
                 probe_resources.append(updated)
         return probe_resources
 

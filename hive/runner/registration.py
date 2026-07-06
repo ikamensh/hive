@@ -21,6 +21,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 
 from hive._integrations.auth import ensure_machine
+from hive._control.limits import apply_snapshot, record_snapshot
 from hive.runner._backends import probe_instructions
 from hive.models import (
     Checkout,
@@ -78,6 +79,9 @@ class RunnerRegister(BaseModel):
     capabilities: list[str] = []
     auto_probe: bool = False
     checkouts: list[CheckoutReport] = []  # git facts per repo this runner has checked out
+    # backend -> usage snapshot (hive/runner/_limits.py); refreshed by the
+    # heartbeat so limit state stays current even when no tasks run.
+    usage_snapshots: dict[str, dict] = {}
 
 
 def active_probe_task(store, resource: Resource) -> Task | None:
@@ -245,6 +249,9 @@ def register(store, body: RunnerRegister, workspace_id: str) -> dict:
         if discovery := discovery_by_name.get(backend):
             apply_discovery(resource, discovery)
         apply_capabilities(resource)
+        snapshot = body.usage_snapshots.get(backend) or {}
+        if apply_snapshot(resource, snapshot):
+            record_snapshot(store, resource, snapshot)
         store.put(resource)
         resources_by_pair[(machine.id, backend)] = resource
         if should_auto_probe(

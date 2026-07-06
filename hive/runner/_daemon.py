@@ -34,6 +34,7 @@ from hive.runner._backends import (
 )
 from hive.runner._agent_results import call_agent, result_spec_for_task
 from hive.runner._chief_roster import ChiefRoster, parse_urls
+from hive.runner._limits import collect_usage, parse_reset_hint
 from hive.runner._machine import machine_metadata
 from hive.models import DEFAULT_WORKSPACE_ID
 from hive.version import get_version
@@ -116,6 +117,35 @@ def _filter_backend_discoveries(discoveries):
         )
     allowed = set(requested)
     return [discovery for discovery in discoveries if discovery.name in allowed]
+
+
+USAGE_REFRESH_S = 900.0  # collectors are cheap but not free (one HTTPS GET / rollout scan)
+_usage_cache: dict[str, tuple[float, dict]] = {}
+_usage_lock = threading.Lock()
+
+
+def refresh_usage(backend: str) -> dict | None:
+    """Collect a fresh usage snapshot for `backend` (after a task ran there)
+    and remember it for the register heartbeat."""
+    snapshot = collect_usage(backend)
+    with _usage_lock:
+        _usage_cache[backend] = (time.time(), snapshot or {})
+    return snapshot
+
+
+def usage_snapshots(backends: list[str]) -> dict[str, dict]:
+    """Per-backend usage snapshots for the register payload, refreshed at most
+    every USAGE_REFRESH_S — the account gauges move slowly between tasks while
+    the heartbeat fires every 30s."""
+    out: dict[str, dict] = {}
+    for backend in backends:
+        with _usage_lock:
+            collected_at, snapshot = _usage_cache.get(backend, (0.0, {}))
+        if time.time() - collected_at > USAGE_REFRESH_S:
+            snapshot = refresh_usage(backend) or {}
+        if snapshot:
+            out[backend] = snapshot
+    return out
 
 
 def detect_capabilities() -> list[str]:
@@ -778,6 +808,10 @@ def execute(task: dict, headers: dict, auth) -> dict:
         "resource_exhausted": failure == "exhausted",
         "auth_blocked": failure == "auth",
         "session_handle": session_handle,
+        # Parsed on the runner because clock-time messages are rendered in
+        # this machine's timezone; 0.0 = the message named no reset time.
+        "reset_at_hint": parse_reset_hint(text) if failure == "exhausted" else 0.0,
+        "usage_snapshot": refresh_usage(task["backend"]) or {},
     }
 
 
@@ -880,6 +914,7 @@ def main(argv: list[str] | None = None) -> None:
                 "capabilities": capabilities,
                 "auto_probe": True,
                 "checkouts": collect_checkouts(),
+                "usage_snapshots": usage_snapshots(backends),
             },
         ).raise_for_status().json()
         roster.merge_advertised(data.get("chief_urls", []))

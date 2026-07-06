@@ -219,7 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "part",
         nargs="?",
-        choices=["machines", "agents", "subscriptions", "autonomy"],
+        choices=["machines", "agents", "subscriptions", "limits", "autonomy"],
         help="one subsystem (default: all)",
     )
     p.add_argument("--json", action="store_true", help="raw payload instead of the readable summary")
@@ -479,6 +479,44 @@ def _fmt_subscriptions(data: dict) -> list[str]:
     return out
 
 
+def _local_stamp(epoch: float) -> str:
+    return time.strftime("%a %H:%M", time.localtime(epoch))
+
+
+def _fmt_limits(rows: list[dict]) -> list[str]:
+    out = ["LIMITS — what each license knows about its own usage windows"]
+    for r in rows:
+        if not r["windows"] and not r["exhaustions_seen"]:
+            out.append(
+                f"  {r['backend']:<11} @ {r['machine']:<12} no usage gauge — empirical only, no limit hit yet"
+            )
+            continue
+        plan = f" [{r['plan']}]" if r["plan"] else ""
+        age = f", snapshot {_human_duration(r['snapshot_age_s'])} old" if r["captured_at"] else ""
+        out.append(f"  {r['backend']:<11} @ {r['machine']}{plan} (via {r['source']}{age})")
+        for w in r["windows"]:
+            resets = _local_stamp(w["resets_at"]) if w["resets_at"] else "?"
+            extra = ""
+            if w.get("hive_tokens_in_window"):
+                extra += f" — hive spent ~{w['hive_tokens_in_window']:,} tok"
+            if w.get("estimated_tokens_left"):
+                extra += f", est ~{w['estimated_tokens_left']:,} tok left"
+            out.append(
+                f"      {w['kind']:<14} {w['used_percent']:>3.0f}% used, resets {resets}{extra}"
+            )
+        if r["cooldown_until"]:
+            out.append(f"      cooling down until {_local_stamp(r['cooldown_until'])}")
+        if r["last_exhaustion"]:
+            e = r["last_exhaustion"]
+            hint = f" (message said resets {_local_stamp(e['reset_at_hint'])})" if e["reset_at_hint"] else ""
+            out.append(
+                f"      hit limit {r['exhaustions_seen']}x, last {_local_stamp(e['at'])}: {e['text']}{hint}"
+            )
+    if not rows:
+        out.append("  (no agents discovered)")
+    return out
+
+
 def _fmt_autonomy(rows: list[dict]) -> list[str]:
     out = ["AUTONOMY"]
     for j in rows:
@@ -503,6 +541,8 @@ def format_show(payload, part: str | None) -> str:
         return "\n".join(_fmt_agents(payload))
     if part == "subscriptions":
         return "\n".join(_fmt_subscriptions(payload))
+    if part == "limits":
+        return "\n".join(_fmt_limits(payload))
     if part == "autonomy":
         return "\n".join(_fmt_autonomy(payload))
     return "\n".join(
@@ -511,6 +551,8 @@ def format_show(payload, part: str | None) -> str:
         + _fmt_agents(payload["agents"])
         + [""]
         + _fmt_subscriptions(payload["subscriptions"])
+        + [""]
+        + _fmt_limits(payload["limits"])
         + [""]
         + _fmt_autonomy(payload["autonomy"])
     )

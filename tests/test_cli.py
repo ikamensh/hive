@@ -114,7 +114,7 @@ def test_cli_drives_full_loop(harness, tmp_path):
     # `hive show` is the subsystem introspection view; a part argument selects
     # one section, no argument returns all of them.
     full = cli(client, "show")
-    assert set(full) == {"machines", "agents", "subscriptions", "autonomy"}
+    assert set(full) == {"machines", "agents", "subscriptions", "limits", "autonomy"}
     assert cli(client, "show", "agents") == full["agents"]
     assert full["agents"]["launchable_now"] >= 1  # the registered fake runners
     assert any(j["job"] == "dark_machine_watch" for j in full["autonomy"])
@@ -176,6 +176,21 @@ def test_format_show_renders_readable_summary():
             "unregistered": [{"provider": "codex", "evidence": "usable on hive-vm"}],
             "unowned": ["gemini-cli"],
         },
+        "limits": [
+            {"backend": "claude", "machine": "hive-vm", "machine_id": "m1", "resource_id": "r1",
+             "plan": "default_claude_max_5x", "source": "oauth", "captured_at": 100.0,
+             "snapshot_age_s": 120.0, "cooldown_until": 0.0, "exhaustions_seen": 2,
+             "windows": [
+                 {"kind": "session", "used_percent": 42.0, "window_minutes": 300,
+                  "resets_at": 2000.0, "severity": "normal",
+                  "hive_tokens_in_window": 123456, "estimated_budget_tokens": 0},
+             ],
+             "last_exhaustion": {"at": 50.0, "text": "usage limit reached", "reset_at_hint": 0.0}},
+            {"backend": "cursor", "machine": "raven", "machine_id": "m2", "resource_id": "r2",
+             "plan": "", "source": "", "captured_at": 0.0, "snapshot_age_s": 0.0,
+             "cooldown_until": 0.0, "exhaustions_seen": 0, "windows": [],
+             "last_exhaustion": None},
+        ],
         "autonomy": [
             {"job": "ci_check", "project_id": "p1", "project_name": "hive", "interval_s": 300.0,
              "action_now": "poll CI", "reason": "", "backends": ["codex"], "machines": ["hive-vm"]},
@@ -186,8 +201,12 @@ def test_format_show_renders_readable_summary():
 
     text = format_show(payload, None)
     for fact in (
-        "MACHINES", "AGENTS — 1 of 2 launchable now", "SUBSCRIPTIONS", "AUTONOMY",
+        "MACHINES", "AGENTS — 1 of 2 launchable now", "SUBSCRIPTIONS", "LIMITS", "AUTONOMY",
         "[chief]", "DARK",
+        "42% used",  # provider gauge rendered readable, with reset time
+        "hive spent ~123,456 tok",
+        "hit limit 2x",
+        "no usage gauge — empirical only",  # cursor exposes nothing natively
         "Not logged in · Please run /login",
         "serving: NOWHERE",  # claude sub with no machine able to serve it
         "hive login claude --machine hive-vm",  # machine_bound gap -> the one-command fix

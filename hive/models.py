@@ -453,6 +453,42 @@ class ResourceUsability(StrEnum):
     failed = "failed"
 
 
+class UsageWindow(BaseModel):
+    """One rate-limit window of a subscription as the provider reports it.
+
+    Subscription CLIs meter usage in rolling windows (a ~5h session window and
+    a weekly one); `used_percent` is the provider's own gauge, `resets_at` the
+    epoch second the window rolls over. Account-wide truth: it includes usage
+    outside Hive (the human coding by hand on the same login)."""
+
+    kind: str  # "session" | "weekly" | "weekly_<model>" (provider-scoped)
+    used_percent: float = 0.0
+    window_minutes: int = 0  # 0 = provider did not say
+    resets_at: float = 0.0  # epoch seconds; 0 = unknown
+    severity: str = ""  # provider's own alarm level, when reported
+
+
+class LimitEvent(BaseModel):
+    """One observation about a license's limits: a usage snapshot or a hit
+    limit. The append-only history behind empirical limit estimation — what
+    the windows looked like over time and where exhaustion actually struck."""
+
+    id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    machine_id: str = ""
+    runner_id: str = ""
+    backend: str = ""
+    kind: str = "snapshot"  # "snapshot" | "exhausted"
+    at: float = Field(default_factory=now)  # when the observation was true
+    plan: str = ""
+    source: str = ""  # "oauth" | "rollout" | "error_text"
+    windows: list[UsageWindow] = []
+    text: str = ""  # exhausted: the raw error message
+    reset_at_hint: float = 0.0  # exhausted: reset time parsed from the message
+    task_id: str = ""
+    created_at: float = Field(default_factory=now)
+
+
 class Resource(BaseModel):
     """One (runner, backend) capacity unit with observed-usage accounting."""
 
@@ -480,6 +516,12 @@ class Resource(BaseModel):
     last_exhaustion_at: float = 0.0
     last_exhaustion_text: str = ""  # runner-reported quota/rate-limit message
     last_exhaustion_task_id: str = ""
+    # Latest provider-reported usage snapshot (see UsageWindow). Account-wide:
+    # the same login on another machine converges to the same numbers.
+    usage_plan: str = ""  # e.g. "max_5x", "plus"
+    usage_source: str = ""  # "oauth" | "rollout"
+    usage_captured_at: float = 0.0  # when the snapshot was true
+    usage_windows: list[UsageWindow] = []
     total_cost_usd: float = 0.0
     total_tasks: int = 0
     enabled: bool = True

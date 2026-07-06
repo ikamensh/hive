@@ -7,6 +7,8 @@ gets its own directly inspectable view:
   OS), and whether a runner is heartbeating there right now.
 - agents: every agent Hive could launch — (backend, machine) pairs with their
   dispatchability — plus the licenses (subscriptions) backing that capacity.
+- limits: what each license knows about its own usage windows (provider
+  gauges, reset times, empirical token estimates) — see `_control/limits.py`.
 - autonomy: the recurring jobs the supervisor fires, at what period, and what
   each would do — on which agents/machines — if it resolved right now.
 
@@ -26,6 +28,7 @@ from hive._control.capacity import (
     resource_available,
     subscription_candidates,
 )
+from hive._control.limits import limits_view
 from hive._control.supervisor import (
     MACHINE_DARK_AFTER_S,
     MACHINE_DARK_DEFAULT_S,
@@ -337,5 +340,6 @@ def build_show(
         "subscriptions": subscriptions_view(
             groups, store.list(Subscription, workspace_id=workspace_id)
         ),
+        "limits": limits_view(store, workspace_id, groups),
         "autonomy": autonomy_view(store, workspace_id, groups, spend_today, config),
     }
