@@ -94,9 +94,14 @@ from hive.models import (
     ProjectState,
     Question,
     Resource,
+    ROLE_ADMIN,
+    ROLE_RESOURCE_PROVIDER,
+    ROLES,
     Runner,
     Story,
     Subscription,
+    User,
+    WorkspaceMembership,
     Task,
     TaskKind,
     TaskStatus,
@@ -268,6 +273,14 @@ class LocalRunnerPatch(BaseModel):
     autostart: bool
 
 
+class MachinePatch(BaseModel):
+    owner_user_id: str  # "" releases the machine back to unclaimed
+
+
+class UserRolePatch(BaseModel):
+    role: str
+
+
 def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_runner=None) -> FastAPI:
     app = FastAPI(title=f"hive {get_version()}")
     auth = AuthManager(store, config)
@@ -275,6 +288,15 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     def current(request: Request) -> AuthContext:
         return auth.require(request)
+
+    def editor(request: Request) -> AuthContext:
+        """Auth for routes that edit projects and work. Resource providers are
+        read-only members: they manage only their own machines, licenses, and
+        assigned todos (enforced inline on those routes)."""
+        ctx = auth.require(request)
+        if not ctx.is_admin:
+            raise HTTPException(403, "admins only — your role is resource provider")
+        return ctx
 
     def runner_auth(
         x_hive_token: str = Header(default=""),
@@ -516,6 +538,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return {
             "user": ctx.user.model_dump(exclude={"github_access_token"}),
             "workspace": ctx.workspace.model_dump(),
+            "role": ROLE_ADMIN if ctx.is_admin else ROLE_RESOURCE_PROVIDER,
             "auth_mode": config.auth_mode,
             "storage": _storage_payload(),
             "version": version_payload(),
@@ -590,7 +613,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return [p.model_dump() for p in projects]
 
     @app.post("/api/projects")
-    def create_project(body: ProjectCreate, ctx: AuthContext = Depends(current)):
+    def create_project(body: ProjectCreate, ctx: AuthContext = Depends(editor)):
         project = store.put(
             Project(
                 workspace_id=ctx.workspace_id,
@@ -602,7 +625,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @app.post("/api/projects/{project_id}/start")
     def start_project(
-        project_id: str, body: ProjectStart, ctx: AuthContext = Depends(current)
+        project_id: str, body: ProjectStart, ctx: AuthContext = Depends(editor)
     ):
         project = require_project(project_id, ctx)
         if not project.spec_repo.strip():
@@ -619,7 +642,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def start_intake(
         project_id: str,
         body: IntakeStart = IntakeStart(),
-        ctx: AuthContext = Depends(current),
+        ctx: AuthContext = Depends(editor),
     ):
         project = require_project(project_id, ctx)
         if not project.spec_repo.strip():
@@ -643,7 +666,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def write_mission(
         project_id: str,
         body: IntakeStart = IntakeStart(),
-        ctx: AuthContext = Depends(current),
+        ctx: AuthContext = Depends(editor),
     ):
         project = require_project(project_id, ctx)
         if project.autonomy != Autonomy.direct_push:
@@ -658,7 +681,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         }
 
     @app.post("/api/projects/{project_id}/intake/finalize")
-    def finalize_intake(project_id: str, ctx: AuthContext = Depends(current)):
+    def finalize_intake(project_id: str, ctx: AuthContext = Depends(editor)):
         project = require_project(project_id, ctx)
         conversation = (
             store.get(AgentConversation, project.intake_conversation_id)
@@ -672,7 +695,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def create_project_repo(
         project_id: str,
         body: ProjectRepoCreate,
-        ctx: AuthContext = Depends(current),
+        ctx: AuthContext = Depends(editor),
     ):
         project = require_project(project_id, ctx)
         if project.spec_repo.strip():
@@ -708,7 +731,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def conversation_message(
         conversation_id: str,
         body: IntakeMessage,
-        ctx: AuthContext = Depends(current),
+        ctx: AuthContext = Depends(editor),
     ):
         conversation = store.get(AgentConversation, conversation_id)
         if not conversation or conversation.workspace_id != ctx.workspace_id:
@@ -745,7 +768,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return {"conversation": store.get(AgentConversation, conversation.id).model_dump(), "task": task.model_dump()}
 
     @app.post("/api/projects/{project_id}/scan-issues")
-    def scan_issues(project_id: str, ctx: AuthContext = Depends(current)):
+    def scan_issues(project_id: str, ctx: AuthContext = Depends(editor)):
         """Compatibility wrapper: run all currently open issues on the default
         GitHub-issues workstream."""
         project = require_project(project_id, ctx)
@@ -771,7 +794,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         }
 
     @app.post("/api/projects/{project_id}/issues-preflight")
-    def issues_preflight(project_id: str, ctx: AuthContext = Depends(current)):
+    def issues_preflight(project_id: str, ctx: AuthContext = Depends(editor)):
         """Compatibility wrapper for the default GitHub-issues workstream."""
         project = require_project(project_id, ctx)
         if not project.spec_repo.strip():
@@ -783,7 +806,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def create_project_workstream(
         project_id: str,
         body: ProjectWorkstreamCreate,
-        ctx: AuthContext = Depends(current),
+        ctx: AuthContext = Depends(editor),
     ):
         project = require_project(project_id, ctx)
         repo = body.repo.strip() or project.spec_repo
@@ -800,7 +823,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         project_id: str,
         workstream_id: str,
         body: ProjectWorkstreamPatch,
-        ctx: AuthContext = Depends(current),
+        ctx: AuthContext = Depends(editor),
     ):
         project = require_project(project_id, ctx)
         workstream = require_project_workstream(project, workstream_id, ctx)
@@ -829,7 +852,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def issue_workstream_preflight(
         project_id: str,
         workstream_id: str,
-        ctx: AuthContext = Depends(current),
+        ctx: AuthContext = Depends(editor),
     ):
         project = require_project(project_id, ctx)
         workstream = require_project_workstream(project, workstream_id, ctx)
@@ -855,7 +878,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def sync_workstream_issues(
         project_id: str,
         workstream_id: str,
-        ctx: AuthContext = Depends(current),
+        ctx: AuthContext = Depends(editor),
     ):
         project = require_project(project_id, ctx)
         workstream = require_project_workstream(project, workstream_id, ctx)
@@ -873,7 +896,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         project_id: str,
         workstream_id: str,
         body: IssueRunCreate,
-        ctx: AuthContext = Depends(current),
+        ctx: AuthContext = Depends(editor),
     ):
         project = require_project(project_id, ctx)
         workstream = require_project_workstream(project, workstream_id, ctx)
@@ -916,7 +939,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return False
 
     @app.post("/api/issue-runs/{run_id}/cancel")
-    def cancel_issue_run(run_id: str, ctx: AuthContext = Depends(current)):
+    def cancel_issue_run(run_id: str, ctx: AuthContext = Depends(editor)):
         run = store.get(IssueRun, run_id)
         if not run or run.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
@@ -949,7 +972,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def check_workstream_ci(
         project_id: str,
         workstream_id: str,
-        ctx: AuthContext = Depends(current),
+        ctx: AuthContext = Depends(editor),
     ):
         """Check this repo's default-branch CI; if red, file a GitHub issue and
         hand it to the issue-solving pipeline (the same resolve→review→land path
@@ -1033,7 +1056,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         project_id: str,
         workstream_id: str,
         body: TestRefreshCreate = TestRefreshCreate(),
-        ctx: AuthContext = Depends(current),
+        ctx: AuthContext = Depends(editor),
     ):
         project = require_project(project_id, ctx)
         workstream = require_project_workstream(project, workstream_id, ctx)
@@ -1054,7 +1077,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         project_id: str,
         workstream_id: str,
         body: TestEpisodeCreate,
-        ctx: AuthContext = Depends(current),
+        ctx: AuthContext = Depends(editor),
     ):
         project = require_project(project_id, ctx)
         workstream = require_project_workstream(project, workstream_id, ctx)
@@ -1080,7 +1103,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return {"episode": episode.model_dump(), "refresh_task": task.model_dump()}
 
     @app.post("/api/test-episodes/{episode_id}/cancel")
-    def cancel_test_episode(episode_id: str, ctx: AuthContext = Depends(current)):
+    def cancel_test_episode(episode_id: str, ctx: AuthContext = Depends(editor)):
         episode = store.get(TestEpisode, episode_id)
         if not episode or episode.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
@@ -1210,7 +1233,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @app.post("/api/projects/{project_id}/directives")
     def create_directive(
-        project_id: str, body: DirectiveCreate, ctx: AuthContext = Depends(current)
+        project_id: str, body: DirectiveCreate, ctx: AuthContext = Depends(editor)
     ):
         """File the ask as a GitHub issue on the project repo and hand it to the
         issue pipeline (resolve → review → merge), scoped to just that issue.
@@ -1270,7 +1293,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return directive.model_dump()
 
     @app.patch("/api/projects/{project_id}")
-    def patch_project(project_id: str, body: ProjectPatch, ctx: AuthContext = Depends(current)):
+    def patch_project(project_id: str, body: ProjectPatch, ctx: AuthContext = Depends(editor)):
         project = require_project(project_id, ctx)
         updates = body.model_dump(exclude_none=True)
         note = updates.pop("new_iteration_note", None)
@@ -1299,7 +1322,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @app.post("/api/questions/{question_id}/answer")
     def answer_question(
-        question_id: str, body: AnswerBody, ctx: AuthContext = Depends(current)
+        question_id: str, body: AnswerBody, ctx: AuthContext = Depends(editor)
     ):
         question = store.get(Question, question_id)
         if not question or question.workspace_id != ctx.workspace_id:
@@ -1311,14 +1334,14 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return answered.model_dump()
 
     @app.post("/api/questions/{question_id}/dismiss")
-    def dismiss_question(question_id: str, ctx: AuthContext = Depends(current)):
+    def dismiss_question(question_id: str, ctx: AuthContext = Depends(editor)):
         question = store.get(Question, question_id)
         if not question or question.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
         return clarifications.dismiss(store, supervisor, question).model_dump()
 
     @app.post("/api/feedback")
-    def add_feedback(body: FeedbackBody, ctx: AuthContext = Depends(current)):
+    def add_feedback(body: FeedbackBody, ctx: AuthContext = Depends(editor)):
         require_project(body.project_id, ctx)
         return store.put(Feedback(workspace_id=ctx.workspace_id, **body.model_dump())).model_dump()
 
@@ -1330,7 +1353,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return task.model_dump()
 
     @app.post("/api/tasks/{task_id}/cancel")
-    def cancel_task(task_id: str, ctx: AuthContext = Depends(current)):
+    def cancel_task(task_id: str, ctx: AuthContext = Depends(editor)):
         task = store.get(Task, task_id)
         if not task or task.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
@@ -1445,14 +1468,76 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             "local_runner": local_runner_payload(ctx.workspace_id),
         }
 
+    def require_machine(machine_id: str, ctx: AuthContext) -> Machine:
+        machine = store.get(Machine, machine_id)
+        if not machine or machine.workspace_id != ctx.workspace_id:
+            raise HTTPException(404)
+        return machine
+
+    def require_machine_control(machine_id: str, ctx: AuthContext) -> Machine:
+        """Admins control every machine; resource providers only their own."""
+        machine = require_machine(machine_id, ctx)
+        if not ctx.is_admin and machine.owner_user_id != ctx.user.id:
+            raise HTTPException(403, "this machine belongs to another user")
+        return machine
+
+    def require_resource_control(resource: Resource, ctx: AuthContext) -> None:
+        """A resource is controlled through its machine: admins always, a
+        resource provider only when the machine is theirs."""
+        if ctx.is_admin:
+            return
+        if not resource.machine_id:
+            raise HTTPException(403, "this agent is not linked to one of your machines")
+        require_machine_control(resource.machine_id, ctx)
+
+    @app.patch("/api/machines/{machine_id}")
+    def set_machine_owner(
+        machine_id: str, body: MachinePatch, ctx: AuthContext = Depends(current)
+    ):
+        """Claim, release, or (as admin) assign a machine to a user. Ownership
+        routes that machine's auth todos (CLI logins, restart-me) to the one
+        person who can act on them."""
+        machine = require_machine(machine_id, ctx)
+        new_owner = body.owner_user_id.strip()
+        if new_owner and not store.list(
+            WorkspaceMembership, workspace_id=ctx.workspace_id, user_id=new_owner
+        ):
+            raise HTTPException(400, "owner must be a workspace member")
+        if not ctx.is_admin and not (
+            machine.owner_user_id in ("", ctx.user.id) and new_owner in ("", ctx.user.id)
+        ):
+            raise HTTPException(403, "you can only claim or release your own machines")
+        machine.owner_user_id = new_owner
+        store.put(machine)
+        # Re-point this machine's open todos so they land in the right inbox
+        # immediately, not on the next escalation tick.
+        for runner in store.list(Runner, workspace_id=ctx.workspace_id):
+            if runner.machine_id != machine_id:
+                continue
+            for todo in store.list(HumanTask, workspace_id=ctx.workspace_id):
+                if (
+                    todo.status == HumanTaskStatus.open
+                    and todo.title.endswith(f" login on {runner.name}")
+                    and todo.assignee_user_id != new_owner
+                ):
+                    todo.assignee_user_id = new_owner
+                    store.put(todo)
+        for todo in store.list(HumanTask, workspace_id=ctx.workspace_id):
+            if (
+                todo.status == HumanTaskStatus.open
+                and todo.title == f"Bring machine {machine.name} back online"
+                and todo.assignee_user_id != new_owner
+            ):
+                todo.assignee_user_id = new_owner
+                store.put(todo)
+        return machine.model_dump()
+
     @app.delete("/api/machines/{machine_id}")
     def forget_machine(machine_id: str, ctx: AuthContext = Depends(current)):
         """Remove a machine the user no longer recognizes, with its runners,
         resources, and checkouts. A live runner re-registers and reappears; this
         is for pruning hosts that are gone for good (old chiefs, retired laptops)."""
-        machine = store.get(Machine, machine_id)
-        if not machine or machine.workspace_id != ctx.workspace_id:
-            raise HTTPException(404)
+        require_machine_control(machine_id, ctx)
         runner_ids = {
             r.id
             for r in store.list(Runner, workspace_id=ctx.workspace_id)
@@ -1469,7 +1554,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return {"ok": True, "forgotten": machine_id}
 
     @app.patch("/api/local-runner")
-    def update_local_runner(body: LocalRunnerPatch, ctx: AuthContext = Depends(current)):
+    def update_local_runner(body: LocalRunnerPatch, ctx: AuthContext = Depends(editor)):
         if local_runner is None:
             raise HTTPException(404, "local runner management is unavailable")
         status = local_runner.set_autostart(body.autostart)
@@ -1478,7 +1563,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return local_runner_payload(ctx.workspace_id, status)
 
     @app.post("/api/local-runner/start")
-    def start_local_runner(ctx: AuthContext = Depends(current)):
+    def start_local_runner(ctx: AuthContext = Depends(editor)):
         if local_runner is None:
             raise HTTPException(404, "local runner management is unavailable")
         for runner in store.list(Runner, workspace_id=ctx.workspace_id):
@@ -1493,6 +1578,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         resource = store.get(Resource, resource_id)
         if not resource or resource.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
+        require_resource_control(resource, ctx)
         runner = store.get(Runner, resource.runner_id)
         if not runner or runner.workspace_id != ctx.workspace_id or not runner.online():
             raise HTTPException(409, "runner is offline")
@@ -1508,6 +1594,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         resource = store.get(Resource, resource_id)
         if not resource or resource.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
+        require_resource_control(resource, ctx)
 
         def mutate(resource: Resource) -> None:
             if body.enabled is not None:
@@ -1533,6 +1620,9 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @app.post("/api/subscriptions")
     def create_subscription(body: dict, ctx: AuthContext = Depends(current)):
+        # A license belongs to whoever records it; an admin may record one on
+        # another member's behalf.
+        owner = body.get("owner_user_id", "").strip() if ctx.is_admin else ""
         return store.put(
             Subscription(
                 workspace_id=ctx.workspace_id,
@@ -1540,6 +1630,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 plan=body.get("plan", ""),
                 licensing_mode=LicensingMode(body.get("licensing_mode", "unknown")),
                 notes=body.get("notes", ""),
+                owner_user_id=owner or ctx.user.id,
             )
         ).model_dump()
 
@@ -1548,6 +1639,8 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         sub = store.get(Subscription, sub_id)
         if not sub or sub.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
+        if not ctx.is_admin and sub.owner_user_id != ctx.user.id:
+            raise HTTPException(403, "this license belongs to another user")
         store.delete(Subscription, sub_id)
         return {"ok": True}
 
@@ -1556,14 +1649,20 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return [t.model_dump() for t in store.list(HumanTask, workspace_id=ctx.workspace_id)]
 
     @app.post("/api/human-todos")
-    def create_human_todo(body: dict, ctx: AuthContext = Depends(current)):
+    def create_human_todo(body: dict, ctx: AuthContext = Depends(editor)):
         project_id = body.get("project_id", "")
         if project_id:
             require_project(project_id, ctx)
+        assignee = body.get("assignee_user_id", "").strip()
+        if assignee and not store.list(
+            WorkspaceMembership, workspace_id=ctx.workspace_id, user_id=assignee
+        ):
+            raise HTTPException(400, "assignee must be a workspace member")
         return store.put(
             HumanTask(
                 workspace_id=ctx.workspace_id,
                 project_id=project_id,
+                assignee_user_id=assignee,
                 title=body["title"],
                 instructions=body.get("instructions", ""),
             )
@@ -1574,6 +1673,8 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         task = store.get(HumanTask, todo_id)
         if not task or task.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
+        if not ctx.is_admin and task.assignee_user_id != ctx.user.id:
+            raise HTTPException(403, "this todo is assigned to another user")
         task.status = HumanTaskStatus.done
         task.done_at = time.time()
         store.put(task)
@@ -1593,12 +1694,77 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 supervisor.wake(project.id, note)
         return task.model_dump()
 
+    # ---- users ---------------------------------------------------------------
+
+    @app.get("/api/users")
+    def list_users(ctx: AuthContext = Depends(current)):
+        """Workspace members with what each one brings: their machines, their
+        licenses, and the open todos waiting on them."""
+        users = {u.id: u for u in store.list(User)}
+        machines = store.list(Machine, workspace_id=ctx.workspace_id)
+        subs = store.list(Subscription, workspace_id=ctx.workspace_id)
+        open_todos = [
+            t
+            for t in store.list(HumanTask, workspace_id=ctx.workspace_id)
+            if t.status == HumanTaskStatus.open
+        ]
+        members = []
+        for membership in store.list(WorkspaceMembership, workspace_id=ctx.workspace_id):
+            user = users.get(membership.user_id)
+            if user is None:
+                continue
+            members.append(
+                {
+                    "user": user.model_dump(exclude={"github_access_token"}),
+                    "role": (
+                        membership.role
+                        if membership.role == ROLE_RESOURCE_PROVIDER
+                        else ROLE_ADMIN
+                    ),
+                    "is_you": user.id == ctx.user.id,
+                    "machines": [
+                        {"id": m.id, "name": m.name, "device_kind": m.device_kind}
+                        for m in machines
+                        if m.owner_user_id == user.id
+                    ],
+                    "subscriptions": [
+                        {"id": s.id, "provider": s.provider, "plan": s.plan}
+                        for s in subs
+                        if s.owner_user_id == user.id
+                    ],
+                    "open_todos": sum(
+                        1 for t in open_todos if t.assignee_user_id == user.id
+                    ),
+                }
+            )
+        members.sort(key=lambda m: m["user"]["github_login"])
+        return members
+
+    @app.patch("/api/users/{user_id}")
+    def set_user_role(
+        user_id: str, body: UserRolePatch, ctx: AuthContext = Depends(editor)
+    ):
+        if body.role not in ROLES:
+            raise HTTPException(400, f"role must be one of {', '.join(ROLES)}")
+        memberships = store.list(WorkspaceMembership, workspace_id=ctx.workspace_id)
+        target = next((m for m in memberships if m.user_id == user_id), None)
+        if target is None:
+            raise HTTPException(404)
+        if body.role == ROLE_RESOURCE_PROVIDER and not any(
+            m.role != ROLE_RESOURCE_PROVIDER and m.user_id != user_id
+            for m in memberships
+        ):
+            raise HTTPException(400, "the workspace needs at least one admin")
+        target.role = body.role
+        store.put(target)
+        return {"user_id": user_id, "role": target.role}
+
     @app.get("/api/org-context")
     def get_org_context(ctx: AuthContext = Depends(current)):
         return {"text": store.get_org_context(ctx.workspace_id)}
 
     @app.put("/api/org-context")
-    def set_org_context(body: dict, ctx: AuthContext = Depends(current)):
+    def set_org_context(body: dict, ctx: AuthContext = Depends(editor)):
         store.set_org_context(body.get("text", ""), ctx.workspace_id)
         return {"ok": True}
 

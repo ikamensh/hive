@@ -217,6 +217,7 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
                 "id": t.id,
                 "project_id": t.project_id,
                 "project_name": name_by_id.get(t.project_id, "") if t.project_id else "",
+                "assignee_user_id": t.assignee_user_id,
                 "title": t.title,
                 "instructions": t.instructions,
                 "created_at": t.created_at,

@@ -1,7 +1,8 @@
 """Authentication, workspace bootstrap, and machine enrollment.
 
-Hive is single-user in the MVP, but the durable boundary is a workspace so
-projects/resources can become team-owned later without a schema rewrite.
+One workspace, many users: everyone on the GitHub allow-list becomes a member
+on first login (admin by default). A member's role rides the AuthContext so
+the API can hold resource providers to their own machines and licenses.
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ from fastapi.responses import RedirectResponse
 
 from hive.config.settings import Config
 from hive.models import (
+    ROLE_ADMIN,
+    ROLE_RESOURCE_PROVIDER,
     Machine,
     User,
     Workspace,
@@ -34,10 +37,17 @@ STATE_TTL_S = 10 * 60
 class AuthContext:
     user: User
     workspace: Workspace
+    role: str = ROLE_ADMIN
 
     @property
     def workspace_id(self) -> str:
         return self.workspace.id
+
+    @property
+    def is_admin(self) -> bool:
+        # Every role except resource_provider edits; legacy "owner" rows count
+        # as admin.
+        return self.role != ROLE_RESOURCE_PROVIDER
 
 
 def _b64(data: bytes) -> str:
@@ -161,7 +171,7 @@ class AuthManager:
             raise HTTPException(401, "session expired")
         return payload
 
-    def _ensure_user(self, github_login: str, display_name: str = "") -> User:
+    def _ensure_user(self, github_login: str, display_name: str = "") -> tuple[User, WorkspaceMembership]:
         login = github_login.lower()
         existing = next(
             (u for u in self.store.list(User) if u.github_login.lower() == login),
@@ -184,20 +194,20 @@ class AuthManager:
             None,
         )
         if membership is None:
-            self.store.put(
+            membership = self.store.put(
                 WorkspaceMembership(
                     id=f"{self.workspace.id}:{user.id}",
                     workspace_id=self.workspace.id,
                     user_id=user.id,
-                    role="owner",
+                    role=ROLE_ADMIN,
                 )
             )
-        return user
+        return user, membership
 
     def dev_context(self) -> AuthContext:
         login = next(iter(self.allowed_github), "dev")
-        user = self._ensure_user(login, login)
-        return AuthContext(user=user, workspace=self.workspace)
+        user, membership = self._ensure_user(login, login)
+        return AuthContext(user=user, workspace=self.workspace, role=membership.role)
 
     def session_token(self, user: User) -> str:
         return self._sign(
@@ -224,16 +234,16 @@ class AuthManager:
         user = self.store.get(User, payload.get("sub", ""))
         if not user:
             raise HTTPException(401, "unknown user")
-        membership = self.store.list(
+        memberships = self.store.list(
             WorkspaceMembership,
             workspace_id=self.workspace.id,
             user_id=user.id,
         )
-        if not membership:
+        if not memberships:
             raise HTTPException(403, "not a workspace member")
         user.last_seen = time.time()
         self.store.put(user)
-        return AuthContext(user=user, workspace=self.workspace)
+        return AuthContext(user=user, workspace=self.workspace, role=memberships[0].role)
 
     def state_token(self) -> str:
         return self._sign({"typ": "oauth_state", "exp": time.time() + STATE_TTL_S})
@@ -293,7 +303,7 @@ class AuthManager:
         login = str(profile.get("login", "")).lower()
         if login not in self.allowed_github:
             raise HTTPException(403, "GitHub user is not allowed")
-        user = self._ensure_user(login, profile.get("name") or login)
+        user, _membership = self._ensure_user(login, profile.get("name") or login)
         user.github_access_token = access_token
         self.store.put(user)
         response = RedirectResponse("/")

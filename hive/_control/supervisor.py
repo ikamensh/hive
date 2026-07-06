@@ -381,6 +381,7 @@ class Supervisor:
                         "This todo closes itself when the machine reconnects."
                     ),
                     workspace_id=self.workspace_id,
+                    assignee_user_id=machine.owner_user_id,
                 )
 
     def dispatch(self, project: Project) -> int:

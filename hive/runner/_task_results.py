@@ -23,7 +23,7 @@ from hive.runner._agent_results import (
 )
 from hive.runner._backends import REGISTRY
 from hive.config.settings import Config
-from hive._control.escalation import escalate
+from hive._control.escalation import escalate, runner_machine_owner
 from hive._workstreams.issues import (
     LANDING_FAILED_PREFIX,
     MergeConflictError,
@@ -480,6 +480,7 @@ class TaskResultProcessor:
                 f"Recent output:\n\n```\n{text[:1500]}\n```"
             ),
             workspace_id=workspace_id,
+            assignee_user_id=runner_machine_owner(self.store, runner),
         )
 
     def _handle_intake_result(self, task: Task, body: TaskResult) -> None:
@@ -594,6 +595,7 @@ class TaskResultProcessor:
             instructions=instructions,
             project_id="" if body.auth_blocked else project.id,
             workspace_id=project.workspace_id,
+            assignee_user_id=runner_machine_owner(self.store, runner) if body.auth_blocked else "",
         )
 
     def _land_resolve(self, task: Task, body: TaskResult) -> None:

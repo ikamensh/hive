@@ -348,6 +348,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("org-context-set", help="set org context (from arg or stdin)")
     p.add_argument("text", nargs="?", help="omit to read from stdin")
 
+    sub.add_parser("users", help="workspace members: role, machines, licenses, open todos")
+    p = sub.add_parser("user-role", help="set a member's role")
+    p.add_argument("user_id", help="user id (see `hive users`)")
+    p.add_argument("role", choices=("admin", "resource_provider"))
+    p = sub.add_parser("machine-owner", help="claim/assign a machine to a user ('' releases)")
+    p.add_argument("machine_id")
+    p.add_argument("user_id", nargs="?", default="", help="empty = release")
+
     return parser
 
 
@@ -1059,6 +1067,12 @@ def run(args: argparse.Namespace, client) -> dict | list:
     elif c == "org-context-set":
         text = args.text if args.text is not None else sys.stdin.read()
         r = client.put("/api/org-context", json={"text": text})
+    elif c == "users":
+        r = client.get("/api/users")
+    elif c == "user-role":
+        r = client.patch(f"/api/users/{args.user_id}", json={"role": args.role})
+    elif c == "machine-owner":
+        r = client.patch(f"/api/machines/{args.machine_id}", json={"owner_user_id": args.user_id})
     else:
         raise AssertionError(f"unhandled command {c}")
     r.raise_for_status()

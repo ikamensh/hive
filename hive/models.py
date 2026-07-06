@@ -35,11 +35,20 @@ class Workspace(BaseModel):
     created_at: float = Field(default_factory=now)
 
 
+# Workspace roles. `role` stays a plain str so legacy rows ("owner") keep
+# loading; anything that is not resource_provider counts as admin.
+ROLE_ADMIN = "admin"
+# Lends machines/licenses to the workspace but cannot edit projects or work:
+# manages only what they own (their machines, subscriptions, assigned todos).
+ROLE_RESOURCE_PROVIDER = "resource_provider"
+ROLES = (ROLE_ADMIN, ROLE_RESOURCE_PROVIDER)
+
+
 class WorkspaceMembership(BaseModel):
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
     user_id: str
-    role: str = "owner"
+    role: str = ROLE_ADMIN
     created_at: float = Field(default_factory=now)
 
 
@@ -56,6 +65,9 @@ class Machine(BaseModel):
     os: str = ""
     arch: str = ""
     device_kind: str = "unknown"  # availability class: laptop | server | unknown
+    # The user whose hands are on this machine — login todos for it go to them.
+    # Empty = unclaimed; any admin picks it up.
+    owner_user_id: str = ""
     first_seen: float = Field(default_factory=now)
     last_seen: float = Field(default_factory=now)
 
@@ -526,6 +538,7 @@ class Subscription(BaseModel):
     plan: str = ""  # e.g. "ChatGPT Plus", "Claude Max 5x"
     licensing_mode: LicensingMode = LicensingMode.unknown
     notes: str = ""  # e.g. which machines are logged in, renewal dates
+    owner_user_id: str = ""  # who holds this license; empty = workspace-shared
     created_at: float = Field(default_factory=now)
 
 
@@ -541,6 +554,9 @@ class HumanTask(BaseModel):
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
     project_id: str = ""  # empty = org-wide (runner logins, billing, DNS)
+    # Who has to act: set when only one user can (e.g. a login on their
+    # machine). Empty = any admin.
+    assignee_user_id: str = ""
     title: str
     instructions: str  # markdown, copy-pasteable commands
     status: HumanTaskStatus = HumanTaskStatus.open
