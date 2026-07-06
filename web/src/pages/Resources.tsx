@@ -212,11 +212,19 @@ function Subscriptions({
   );
 }
 
+// Public repo — the enroll snippet can include the clone verbatim (the mac
+// installer hardcodes the same remote).
+const HIVE_REPO = "https://github.com/ikamensh/hive";
+
 function AddLaptop() {
   const [enroll, setEnroll] = useState<EnrollToken | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState(false);
+
+  const snippet = enroll
+    ? `git clone ${HIVE_REPO} && cd hive\n${enroll.command}`
+    : "";
 
   const mint = async () => {
     setBusy(true);
@@ -231,8 +239,7 @@ function AddLaptop() {
   };
 
   const copy = async () => {
-    if (!enroll) return;
-    await navigator.clipboard.writeText(enroll.command);
+    await navigator.clipboard.writeText(snippet);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -256,10 +263,10 @@ function AddLaptop() {
     <section className="enroll-panel">
       <h2 className="col-title">add a laptop</h2>
       <p className="muted">
-        On the laptop, from a hive checkout (<code>git clone</code> the repo first), run:
+        On the laptop (needs <code>git</code> and <code>uv</code>), run:
       </p>
       <pre className="enroll-command">
-        <code>{enroll.command}</code>
+        <code>{snippet}</code>
       </pre>
       <div className="enroll-actions">
         <button onClick={copy}>{copied ? "copied" : "copy command"}</button>
