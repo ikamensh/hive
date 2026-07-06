@@ -1881,12 +1881,16 @@ const humanTodos: HumanTodo[] = [
     done_at: 0,
   },
   {
-    id: "ht3",
+    id: "ht5",
     project_id: "",
     assignee_user_id: "github:teammate",
     title: "Fix cursor login on hex-1",
     instructions:
       "Refresh or repair the `cursor` CLI login on runner `hex-1`, then rerun the resource probe.",
+    kind: "access",
+    dedup_key: "access:cursor:hex-1",
+    resolution: { check: "resource_usable", backend: "cursor", runner_name: "hex-1" },
+    resolved_reason: "",
     status: "open",
     created_at: now - 2400,
     done_at: 0,
