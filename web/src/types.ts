@@ -166,7 +166,7 @@ export interface Question {
   project_id: string;
   workstream_id: string;
   text: string;
-  status: "open" | "answered" | "dismissed";
+  status: "open" | "answered" | "dismissed" | "withdrawn";
   answer: string;
   created_at: number;
   answered_at: number;

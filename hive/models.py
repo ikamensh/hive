@@ -405,6 +405,7 @@ class QuestionStatus(StrEnum):
     open = "open"
     answered = "answered"
     dismissed = "dismissed"  # operator discarded it without answering
+    withdrawn = "withdrawn"  # the planner retracted its own question as moot
 
 
 class Question(BaseModel):
