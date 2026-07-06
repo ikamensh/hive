@@ -16,7 +16,7 @@ from pathlib import Path
 from hive.config.settings import Config
 from hive._control.escalation import escalate
 from hive._integrations.specrepo import SpecRepo
-from hive.models import Project, Question, QuestionStatus
+from hive.models import HumanTaskKind, Project, Question, QuestionStatus
 
 log = logging.getLogger("hive._control.clarifications")
 
@@ -78,6 +78,8 @@ def _escalate_log_failure(store, project: Project, question: Question, exc: Exce
         ),
         project_id=project.id,
         workspace_id=project.workspace_id,
+        kind=HumanTaskKind.repair,
+        dedup_key=f"repair:spec-log:{project.id}",
     )
 
 

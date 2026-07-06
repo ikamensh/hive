@@ -125,7 +125,6 @@ from hive.runner._task_results import (
     TaskResult,
     TaskResultProcessor,
     cancel_issue_work,
-    complete_resource_login_todos,
     sync_landing_failure_human_task,
 )
 
@@ -1521,8 +1520,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         updated = store.update(Resource, resource_id, mutate)
         if updated is None:
             raise HTTPException(404)
-        if body.enabled is False:
-            complete_resource_login_todos(store, updated)
         return {**updated.model_dump(), "available": updated.available()}
 
     @app.get("/api/subscriptions")

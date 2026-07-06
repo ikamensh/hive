@@ -18,13 +18,12 @@ import time
 from collections import defaultdict
 from typing import Callable
 
-from hive._control.escalation import escalate
+from hive._control.escalation import escalate, resolve_open_todos
 from hive.models import (
     AgentConversation,
     ConversationStatus,
     DEFAULT_WORKSPACE_ID,
-    HumanTask,
-    HumanTaskStatus,
+    HumanTaskKind,
     Machine,
     OrchestratorRun,
     Project,
@@ -336,32 +335,31 @@ class Supervisor:
                 "the required browser/Docker capability bundle.\n\n"
                 f"Blocked task(s):\n{needs}\n\n"
                 f"Available capacity right now: {available}\n\n"
-                "Install and probe the missing runner capability, or run a capable runner, then "
-                "mark this todo done so Hive can re-check dispatch."
+                "Install and probe the missing runner capability, or run a capable runner. "
+                "This todo closes itself when the project unblocks."
             ),
             project_id=project.id,
             workspace_id=self.workspace_id,
+            kind=HumanTaskKind.infra,
+            dedup_key=f"infra:capability:{project.id}",
+            resolution={
+                "check": "project_state_not",
+                "project_id": project.id,
+                "state": str(ProjectState.blocked_resources),
+            },
         )
 
     def check_dark_machines(self) -> None:
-        """File an operator todo for a machine that recently went dark, and
-        close it again the moment the machine heartbeats. Runs every step —
-        `escalate` is idempotent by title, so an outage yields one todo per
-        machine per offline episode."""
+        """File an operator todo for a machine that recently went dark. Runs
+        every step — `escalate` is idempotent by dedup_key, so an outage yields
+        one todo per machine per offline episode, and the todo's resolution
+        predicate (a heartbeat newer than the todo) closes it on reconnect via
+        the todo sweep."""
         now = time.time()
         for machine in self.store.list(Machine, workspace_id=self.workspace_id):
-            title = f"Bring machine {machine.name} back online"
             dark_for = now - machine.last_seen
             dark_after = MACHINE_DARK_AFTER_S.get(machine.device_kind, MACHINE_DARK_DEFAULT_S)
-            if dark_for < dark_after:
-                for task in self.store.list(
-                    HumanTask, workspace_id=self.workspace_id, title=title, project_id=""
-                ):
-                    if task.status == HumanTaskStatus.open:
-                        task.status = HumanTaskStatus.done
-                        task.done_at = now
-                        self.store.put(task)
-            elif dark_for < MACHINE_RETIRED_AFTER_S:
+            if dark_after <= dark_for < MACHINE_RETIRED_AFTER_S:
                 since = datetime.datetime.fromtimestamp(
                     machine.last_seen, datetime.UTC
                 ).strftime("%Y-%m-%d %H:%M UTC")
@@ -372,7 +370,7 @@ class Supervisor:
                 )
                 escalate(
                     self.store,
-                    title,
+                    f"Bring machine {machine.name} back online",
                     instructions=(
                         f"Machine `{machine.name}` ({machine.device_kind}, "
                         f"{machine.machine_type or machine.os or 'unknown type'}) last "
@@ -381,6 +379,9 @@ class Supervisor:
                         "This todo closes itself when the machine reconnects."
                     ),
                     workspace_id=self.workspace_id,
+                    kind=HumanTaskKind.infra,
+                    dedup_key=f"infra:machine:{machine.name}",
+                    resolution={"check": "machine_online", "machine_name": machine.name},
                 )
 
     def dispatch(self, project: Project) -> int:
@@ -568,6 +569,7 @@ class Supervisor:
     async def _step(self) -> None:
         self.fail_orphaned_tasks()
         self.check_dark_machines()
+        resolve_open_todos(self.store, self.workspace_id)
         avail = self.available_backends()
         for project in self.store.list(Project, workspace_id=self.workspace_id):
             if project.archived or project.paused or not project.spec_repo.strip():
@@ -666,8 +668,12 @@ class Supervisor:
                 f"Recent event(s):\n\n```\n{chr(10).join(events)[:1500]}\n```\n\n"
                 f"Error:\n\n```\n{detail[:1500]}\n```"
                 f"{hint}\n\n"
-                "Fix the orchestrator configuration, then mark this todo done so Hive re-evaluates the project."
+                "Fix the orchestrator configuration. This todo closes itself once the "
+                "planner completes an invocation again (mark it done to re-evaluate sooner)."
             ),
             project_id=project_id,
             workspace_id=self.workspace_id,
+            kind=HumanTaskKind.repair,
+            dedup_key=f"repair:orchestrator:{project_id}",
+            resolution={"check": "orchestrator_ran", "project_id": project_id},
         )
