@@ -23,7 +23,9 @@ from hive.models import (
     AgentConversation,
     ConversationStatus,
     DEFAULT_WORKSPACE_ID,
+    HumanTask,
     HumanTaskKind,
+    HumanTaskStatus,
     Machine,
     OrchestratorRun,
     Project,
@@ -130,6 +132,7 @@ class Supervisor:
     CI_CHECK_INTERVAL_S = 300.0  # how often a ci_autofix project's CI is polled per repo
     TESTING_CHECK_INTERVAL_S = 900.0  # how often a testing_auto project's backlog is re-judged
     ISSUE_SCAN_INTERVAL_S = 600.0  # how often new GitHub issues are ingested per project
+    TODO_TRIAGE_INTERVAL_S = 1800.0  # burst-guard on the LLM todo-board review
 
     def __init__(
         self,
@@ -140,6 +143,7 @@ class Supervisor:
         ci_check: Callable[[str], None] | None = None,
         testing_check: Callable[[str], None] | None = None,
         issue_scan: Callable[[str], None] | None = None,
+        todo_triage: Callable[[], None] | None = None,
     ) -> None:
         self.store = store
         self.orchestrate = orchestrate
@@ -153,6 +157,9 @@ class Supervisor:
         # Unattended issue ingestion (same shape): new issues — external, testing
         # findings, directives — enter the resolve pipeline without a human scan.
         self.issue_scan = issue_scan
+        # LLM second opinion on the open todo board (workspace-level, close-only;
+        # see _control/todo_triage.py). Runs only when the board changed.
+        self.todo_triage = todo_triage
         machine = machine_name or socket.gethostname()
         self.holder = f"{machine}:{os.getpid()}"
         self._events: dict[str, list[str]] = defaultdict(list)
@@ -165,6 +172,9 @@ class Supervisor:
         self._testing_busy: set[str] = set()  # projects with a testing check in flight
         self._last_issue_scan: dict[str, float] = {}
         self._issue_scan_busy: set[str] = set()  # projects with an issue scan in flight
+        self._last_todo_triage = 0.0
+        self._triaged_board: tuple[str, ...] = ()  # open-todo ids at the last triage
+        self._triage_busy = False
         self._dispatch_lock = threading.RLock()
 
     def wake(self, project_id: str, event: str) -> None:
@@ -544,6 +554,40 @@ class Supervisor:
             self._issue_scan_busy.discard(project_id)
             self._wakeup.set()
 
+    def _open_todo_board(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                t.id
+                for t in self.store.list(
+                    HumanTask, workspace_id=self.workspace_id, status=HumanTaskStatus.open
+                )
+            )
+        )
+
+    def _todo_triage_due(self) -> bool:
+        """The board review costs an LLM call, so it runs only when the set of
+        open todos differs from what the last pass saw (and at most once per
+        interval). A static board never re-triages; facts-only changes are the
+        deterministic sweep's job."""
+        return (
+            self.todo_triage is not None
+            and not self._triage_busy
+            and time.time() - self._last_todo_triage > self.TODO_TRIAGE_INTERVAL_S
+            and self._open_todo_board() != self._triaged_board
+        )
+
+    async def _run_todo_triage(self) -> None:
+        try:
+            await asyncio.to_thread(self.todo_triage)
+        except Exception:
+            log.exception("todo triage failed")
+        finally:
+            # Record the post-close board so the pass's own closes don't
+            # immediately re-trigger it.
+            self._triaged_board = self._open_todo_board()
+            self._triage_busy = False
+            self._wakeup.set()
+
     def _testing_check_due(self, project: Project) -> bool:
         """A `testing_auto` project inside its budget envelope whose poll interval
         elapsed and which has no testing check already running. Pure gate so it is
@@ -570,6 +614,10 @@ class Supervisor:
         self.fail_orphaned_tasks()
         self.check_dark_machines()
         resolve_open_todos(self.store, self.workspace_id)
+        if self._todo_triage_due():
+            self._last_todo_triage = time.time()
+            self._triage_busy = True
+            asyncio.get_running_loop().create_task(self._run_todo_triage())
         avail = self.available_backends()
         for project in self.store.list(Project, workspace_id=self.workspace_id):
             if project.archived or project.paused or not project.spec_repo.strip():

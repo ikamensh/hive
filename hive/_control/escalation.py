@@ -91,10 +91,11 @@ def resolve_todo(store, workspace_id: str, dedup_key: str, reason: str) -> None:
     test-refresh finalization)."""
     for task in store.list(HumanTask, workspace_id=workspace_id, status=HumanTaskStatus.open):
         if task.dedup_key == dedup_key:
-            _close(store, task, reason)
+            close_todo(store, task, reason)
 
 
-def _close(store, todo: HumanTask, reason: str) -> None:
+def close_todo(store, todo: HumanTask, reason: str) -> None:
+    """Close one todo with the evidence that resolved it (audit trail)."""
     todo.status = HumanTaskStatus.done
     todo.done_at = time.time()
     todo.resolved_reason = reason
@@ -230,6 +231,6 @@ def resolve_open_todos(store, workspace_id: str = DEFAULT_WORKSPACE_ID) -> list[
             continue
         reason = check(store, todo)
         if reason:
-            _close(store, todo, reason)
+            close_todo(store, todo, reason)
             resolved.append(todo)
     return resolved

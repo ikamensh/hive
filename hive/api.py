@@ -1831,6 +1831,25 @@ def make_testing_check(store, config: Config) -> Callable[[str], None]:
     return testing_check
 
 
+def make_todo_triage(store, config: Config) -> Callable[[], None]:
+    """LLM review of the open todo board (close-only duplicate/stale calls;
+    see hive/_control/todo_triage.py). The transport is a one-shot call on the
+    configured adapter, built per pass so a credential fix applies without a
+    restart."""
+    from hive.llm import ToolSet, build_adapter
+    from hive._control.todo_triage import triage_open_todos
+
+    def transport(prompt: str) -> str:
+        adapter = build_adapter(config)
+        adapter.start("Answer with JSON only.", [], prompt, ToolSet([]))
+        return adapter.step().text
+
+    def todo_triage() -> None:
+        triage_open_todos(store, transport, workspace_id=config.workspace_id)
+
+    return todo_triage
+
+
 def production_app() -> FastAPI:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     config = Config.from_env()
@@ -1850,6 +1869,7 @@ def production_app() -> FastAPI:
         ci_check=make_ci_check(store, config),
         testing_check=make_testing_check(store, config),
         issue_scan=make_issue_scan(store, config, blobs=blobs),
+        todo_triage=make_todo_triage(store, config),
     )
     from hive.runner._local import LocalRunnerManager
 
