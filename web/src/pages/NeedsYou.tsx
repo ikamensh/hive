@@ -66,10 +66,12 @@ function TodoItem({ todo, scope, onDone }: { todo: HumanTodo; scope: string; onD
     }
   };
 
+  const kind = todo.kind ?? "external";
+  const selfClosing = Object.keys(todo.resolution ?? {}).length > 0;
   return (
     <article className="needs-card reveal">
       <header className="needs-card-head">
-        <span className="needs-kind needs-kind-todo">todo</span>
+        <span className={`needs-kind needs-kind-${kind}`}>{kind}</span>
         {todo.project_id ? (
           <Link to={`/p/${todo.project_id}`} className="needs-scope">
             {scope}
@@ -78,6 +80,11 @@ function TodoItem({ todo, scope, onDone }: { todo: HumanTodo; scope: string; onD
           <span className="needs-scope">{scope}</span>
         )}
         <span className="muted">{ago(todo.created_at)}</span>
+        {selfClosing && (
+          <span className="muted needs-selfclose" title="Hive closes this itself once it observes the condition resolved (e.g. a successful probe or heartbeat)">
+            closes itself when resolved
+          </span>
+        )}
       </header>
       <h3 className="needs-card-title">{todo.title}</h3>
       <Markdown text={todo.instructions} />
@@ -95,6 +102,9 @@ function TodoItem({ todo, scope, onDone }: { todo: HumanTodo; scope: string; onD
   );
 }
 
+// Only-you-can actions first; things Hive is also working around come after.
+const KIND_ORDER: Record<string, number> = { external: 0, access: 1, infra: 2, repair: 3, env: 4 };
+
 export default function NeedsYou() {
   const overview = useOverview();
   const { data: todos, refresh: refreshTodos } = usePoll(() => api.humanTodos(), []);
@@ -102,7 +112,13 @@ export default function NeedsYou() {
 
   const questions = overview.data?.attention.questions ?? [];
   const offers = overview.data?.attention.offers ?? [];
-  const openTodos = (todos ?? []).filter((t) => t.status === "open");
+  const openTodos = (todos ?? [])
+    .filter((t) => t.status === "open")
+    .sort(
+      (a, b) =>
+        (KIND_ORDER[a.kind ?? "external"] ?? 9) - (KIND_ORDER[b.kind ?? "external"] ?? 9) ||
+        b.created_at - a.created_at,
+    );
   const doneTodos = (todos ?? []).filter((t) => t.status === "done");
   const shown = questions.length + openTodos.length;
   // attention.count is the authoritative open total; the embedded lists are capped.
@@ -187,6 +203,9 @@ export default function NeedsYou() {
           {doneTodos.map((t) => (
             <div key={t.id} className="answered-row">
               <span>{t.title}</span>
+              {t.resolved_reason && (
+                <span className="muted needs-resolved">auto: {t.resolved_reason}</span>
+              )}
               <span className="muted">{ago(t.done_at)}</span>
             </div>
           ))}

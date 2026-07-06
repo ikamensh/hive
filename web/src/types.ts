@@ -485,12 +485,18 @@ export interface SubscriptionCandidate {
   evidence: string;
 }
 
+export type HumanTodoKind = "access" | "infra" | "repair" | "env" | "external";
+
 export interface HumanTodo {
   id: string;
   workspace_id?: string;
   project_id: string; // empty = org-wide
   title: string;
   instructions: string;
+  kind: HumanTodoKind;
+  dedup_key: string; // stable condition identity ("" for hand-filed todos)
+  resolution: Record<string, string>; // non-empty = closes itself when the condition resolves
+  resolved_reason: string; // evidence recorded by an auto-close
   status: "open" | "done";
   created_at: number;
   done_at: number;
