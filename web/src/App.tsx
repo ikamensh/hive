@@ -195,6 +195,7 @@ export default function App() {
           </NavLink>
           <NavLink to="/needs-you">needs you</NavLink>
           <NavLink to="/machines">machines</NavLink>
+          <NavLink to="/users">users</NavLink>
         </nav>
         {auth.data && <AccountMenu auth={auth.data} loggingOut={loggingOut} onSignOut={signOut} />}
         <button

@@ -8,6 +8,7 @@ import ProjectPage from "./pages/Project";
 import ProjectSettingsPage from "./pages/ProjectSettings";
 import Resources from "./pages/Resources";
 import Settings from "./pages/Settings";
+import Users from "./pages/Users";
 import "./styles.css";
 
 const router = createBrowserRouter([
@@ -20,6 +21,7 @@ const router = createBrowserRouter([
       { path: "p/:id", element: <ProjectPage /> },
       { path: "p/:id/settings", element: <ProjectSettingsPage /> },
       { path: "machines", element: <Resources /> },
+      { path: "users", element: <Users /> },
       { path: "settings", element: <Settings /> },
     ],
   },

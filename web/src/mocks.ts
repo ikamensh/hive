@@ -36,6 +36,8 @@ import type {
   WorkItem,
   Workstream,
   WorkstreamPatch,
+  WorkspaceMember,
+  WorkspaceRole,
 } from "./types";
 
 const now = Date.now() / 1000;
@@ -932,6 +934,7 @@ const resourcesPayload: Omit<ResourcesPayload, "cards" | "subscription_candidate
       os: "macos",
       arch: "arm64",
       device_kind: "laptop",
+      owner_user_id: "github:ikamensh",
       first_seen: now - 86400 * 4,
       last_seen: now - 60 * 47,
     },
@@ -1025,6 +1028,7 @@ export const api = {
       last_seen: Date.now() / 1000,
     },
     workspace: { id: "default", name: "ikamen", created_at: now - 86400 },
+    role: "admin",
     auth_mode: "dev",
     storage: {
       backend: "file",
@@ -1697,6 +1701,34 @@ export const api = {
     );
   },
 
+  setMachineOwner: async (id: string, owner_user_id: string) => {
+    const machine = (resourcesPayload.machines ?? []).find((m) => m.id === id);
+    if (machine) machine.owner_user_id = owner_user_id;
+    return structuredClone(machine ?? {});
+  },
+
+  users: async (): Promise<WorkspaceMember[]> =>
+    structuredClone(
+      workspaceMembers.map((member) => ({
+        ...member,
+        machines: (resourcesPayload.machines ?? [])
+          .filter((m) => m.owner_user_id === member.user.id)
+          .map((m) => ({ id: m.id, name: m.name, device_kind: m.device_kind })),
+        subscriptions: subscriptions
+          .filter((s) => s.owner_user_id === member.user.id)
+          .map((s) => ({ id: s.id, provider: s.provider, plan: s.plan })),
+        open_todos: humanTodos.filter(
+          (t) => t.status === "open" && t.assignee_user_id === member.user.id,
+        ).length,
+      })),
+    ),
+
+  setUserRole: async (userId: string, role: WorkspaceRole) => {
+    const member = workspaceMembers.find((m) => m.user.id === userId);
+    if (member) member.role = role;
+    return { user_id: userId, role };
+  },
+
   subscriptions: async (): Promise<Subscription[]> => structuredClone(subscriptions),
 
   addSubscription: async (
@@ -1765,8 +1797,8 @@ export const api = {
 };
 
 const subscriptions: Subscription[] = [
-  { id: "s1", provider: "codex", plan: "ChatGPT Plus", licensing_mode: "machine_bound", notes: "logged in on laptop", created_at: now - 86400 },
-  { id: "s2", provider: "claude", plan: "Claude Max 5x", licensing_mode: "machine_bound", notes: "", created_at: now - 86400 },
+  { id: "s1", provider: "codex", plan: "ChatGPT Plus", licensing_mode: "machine_bound", notes: "logged in on laptop", owner_user_id: "github:ikamensh", created_at: now - 86400 },
+  { id: "s2", provider: "claude", plan: "Claude Max 5x", licensing_mode: "machine_bound", notes: "", owner_user_id: "github:ikamensh", created_at: now - 86400 },
 ];
 
 // Provider-rulebook licensing defaults; mirrors hive/runner/backends.py.
@@ -1795,15 +1827,58 @@ function subscriptionCandidates(): SubscriptionCandidate[] {
   return [...seen.values()];
 }
 
+const workspaceMembers: WorkspaceMember[] = [
+  {
+    user: {
+      id: "github:ikamensh",
+      github_login: "ikamensh",
+      display_name: "ikamensh",
+      created_at: now - 86400 * 30,
+      last_seen: now - 60,
+    },
+    role: "admin",
+    is_you: true,
+    machines: [],
+    subscriptions: [],
+    open_todos: 0,
+  },
+  {
+    user: {
+      id: "github:teammate",
+      github_login: "teammate",
+      display_name: "Teammate",
+      created_at: now - 86400 * 7,
+      last_seen: now - 7200,
+    },
+    role: "resource_provider",
+    is_you: false,
+    machines: [],
+    subscriptions: [],
+    open_todos: 0,
+  },
+];
+
 const humanTodos: HumanTodo[] = [
   {
     id: "ht1",
     project_id: "",
+    assignee_user_id: "github:ikamensh",
     title: "Log in codex on hive-vm",
     instructions:
       "Run on your laptop:\n\n```\ngcloud compute ssh hive-vm -- -L 1455:localhost:1455\nsudo HOME=/root codex login\n```\n\nOpen the printed URL in your local browser.",
     status: "open",
     created_at: now - 3600,
+    done_at: 0,
+  },
+  {
+    id: "ht3",
+    project_id: "",
+    assignee_user_id: "github:teammate",
+    title: "Fix cursor login on hex-1",
+    instructions:
+      "Refresh or repair the `cursor` CLI login on runner `hex-1`, then rerun the resource probe.",
+    status: "open",
+    created_at: now - 2400,
     done_at: 0,
   },
   {

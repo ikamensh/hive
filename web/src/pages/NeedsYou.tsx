@@ -54,7 +54,19 @@ function QuestionItem({ q, onAnswered }: { q: OverviewQuestion; onAnswered: () =
   );
 }
 
-function TodoItem({ todo, scope, onDone }: { todo: HumanTodo; scope: string; onDone: () => void }) {
+function TodoItem({
+  todo,
+  scope,
+  assignee,
+  canComplete,
+  onDone,
+}: {
+  todo: HumanTodo;
+  scope: string;
+  assignee?: string;
+  canComplete: boolean;
+  onDone: () => void;
+}) {
   const [busy, setBusy] = useState(false);
   const done = async () => {
     setBusy(true);
@@ -77,6 +89,11 @@ function TodoItem({ todo, scope, onDone }: { todo: HumanTodo; scope: string; onD
         ) : (
           <span className="needs-scope">{scope}</span>
         )}
+        {assignee && (
+          <span className="chip" title="only this user can act on it">
+            @{assignee}
+          </span>
+        )}
         <span className="muted">{ago(todo.created_at)}</span>
       </header>
       <h3 className="needs-card-title">{todo.title}</h3>
@@ -87,9 +104,11 @@ function TodoItem({ todo, scope, onDone }: { todo: HumanTodo; scope: string; onD
             open project →
           </Link>
         )}
-        <button onClick={done} disabled={busy}>
-          {busy ? "marking…" : "mark done"}
-        </button>
+        {canComplete && (
+          <button onClick={done} disabled={busy}>
+            {busy ? "marking…" : "mark done"}
+          </button>
+        )}
       </div>
     </article>
   );
@@ -99,11 +118,23 @@ export default function NeedsYou() {
   const overview = useOverview();
   const { data: todos, refresh: refreshTodos } = usePoll(() => api.humanTodos(), []);
   const { data: projects } = usePoll(() => api.projects(), [], 30000);
+  const { data: auth } = usePoll(() => api.me(), [], 30000);
+  const { data: members } = usePoll(() => api.users(), [], 30000);
+
+  const myId = auth?.user.id ?? "";
+  const isAdmin = auth?.role !== "resource_provider";
+  const loginById = new Map((members ?? []).map((m) => [m.user.id, m.user.github_login]));
 
   const questions = overview.data?.attention.questions ?? [];
   const offers = overview.data?.attention.offers ?? [];
   const openTodos = (todos ?? []).filter((t) => t.status === "open");
   const doneTodos = (todos ?? []).filter((t) => t.status === "done");
+  // Yours first: assigned to you, or unassigned (any admin's job) when you're
+  // an admin. The rest wait on a specific other user.
+  const yourTodos = openTodos.filter(
+    (t) => t.assignee_user_id === myId || (isAdmin && !t.assignee_user_id),
+  );
+  const otherTodos = openTodos.filter((t) => !yourTodos.includes(t));
   const shown = questions.length + openTodos.length;
   // attention.count is the authoritative open total; the embedded lists are capped.
   const total = overview.data?.attention.count ?? shown;
@@ -111,6 +142,9 @@ export default function NeedsYou() {
 
   const scopeName = (projectId: string) =>
     projectId === "" ? "org-wide" : projects?.find((p) => p.id === projectId)?.name ?? projectId;
+  const assigneeName = (t: HumanTodo) =>
+    t.assignee_user_id ? loginById.get(t.assignee_user_id) ?? t.assignee_user_id : undefined;
+  const canComplete = (t: HumanTodo) => isAdmin || t.assignee_user_id === myId;
 
   const refreshAll = () => {
     refreshTodos();
@@ -143,13 +177,41 @@ export default function NeedsYou() {
         </section>
       )}
 
-      {openTodos.length > 0 && (
+      {yourTodos.length > 0 && (
         <section className="needs-section">
           <h2 className="col-title">
-            todos <span className="col-count">{openTodos.length}</span>
+            your todos <span className="col-count">{yourTodos.length}</span>
           </h2>
-          {openTodos.map((t) => (
-            <TodoItem key={t.id} todo={t} scope={scopeName(t.project_id)} onDone={refreshAll} />
+          {yourTodos.map((t) => (
+            <TodoItem
+              key={t.id}
+              todo={t}
+              scope={scopeName(t.project_id)}
+              assignee={t.assignee_user_id && t.assignee_user_id !== myId ? assigneeName(t) : undefined}
+              canComplete={canComplete(t)}
+              onDone={refreshAll}
+            />
+          ))}
+        </section>
+      )}
+
+      {otherTodos.length > 0 && (
+        <section className="needs-section">
+          <h2 className="col-title">
+            waiting on others <span className="col-count">{otherTodos.length}</span>
+          </h2>
+          <p className="muted">
+            Assigned to whoever owns the machine or license involved — only they can act.
+          </p>
+          {otherTodos.map((t) => (
+            <TodoItem
+              key={t.id}
+              todo={t}
+              scope={scopeName(t.project_id)}
+              assignee={assigneeName(t)}
+              canComplete={canComplete(t)}
+              onDone={refreshAll}
+            />
           ))}
         </section>
       )}

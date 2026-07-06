@@ -29,6 +29,8 @@ import type {
   VersionInfo,
   Workstream,
   WorkstreamPatch,
+  WorkspaceMember,
+  WorkspaceRole,
 } from "./types";
 import { api as mockApi } from "./mocks";
 
@@ -195,6 +197,11 @@ const realApi = {
   forgetMachine: async (id: string) => {
     await http(`/api/machines/${id}`, { method: "DELETE" });
   },
+  setMachineOwner: (id: string, owner_user_id: string) =>
+    http(`/api/machines/${id}`, { method: "PATCH", body: JSON.stringify({ owner_user_id }) }),
+  users: () => http<WorkspaceMember[]>("/api/users"),
+  setUserRole: (userId: string, role: WorkspaceRole) =>
+    http(`/api/users/${userId}`, { method: "PATCH", body: JSON.stringify({ role }) }),
   subscriptions: () => http<Subscription[]>("/api/subscriptions"),
   addSubscription: (provider: string, plan: string, licensing_mode: LicensingMode, notes: string) =>
     http<Subscription>("/api/subscriptions", {

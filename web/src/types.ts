@@ -349,12 +349,25 @@ export interface Workspace {
   created_at: number;
 }
 
+export type WorkspaceRole = "admin" | "resource_provider";
+
 export interface AuthInfo {
   user: HiveUser;
   workspace: Workspace;
+  role?: WorkspaceRole;
   auth_mode: string;
   storage?: StorageInfo;
   version?: VersionInfo;
+}
+
+/** One workspace member with what they bring (GET /api/users). */
+export interface WorkspaceMember {
+  user: HiveUser;
+  role: WorkspaceRole;
+  is_you: boolean;
+  machines: { id: string; name: string; device_kind: string }[];
+  subscriptions: { id: string; provider: string; plan: string }[];
+  open_todos: number;
 }
 
 export interface VersionInfo {
@@ -401,6 +414,7 @@ export interface MachineInfo {
   os: string;
   arch: string;
   device_kind: string;
+  owner_user_id?: string; // whose hands are on it; "" = unclaimed
   first_seen: number;
   last_seen: number;
 }
@@ -475,6 +489,7 @@ export interface Subscription {
   plan: string;
   licensing_mode: LicensingMode;
   notes: string;
+  owner_user_id?: string; // who holds the license; "" = workspace-shared
   created_at: number;
 }
 
@@ -489,6 +504,7 @@ export interface HumanTodo {
   id: string;
   workspace_id?: string;
   project_id: string; // empty = org-wide
+  assignee_user_id?: string; // only this user can act; "" = any admin
   title: string;
   instructions: string;
   status: "open" | "done";
@@ -578,6 +594,7 @@ export interface OverviewTodo {
   id: string;
   project_id: string;
   project_name: string;
+  assignee_user_id?: string;
   title: string;
   instructions: string;
   created_at: number;

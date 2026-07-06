@@ -7,6 +7,7 @@ import type {
   MachineInfo,
   ResourceInfo,
   SubscriptionCandidate,
+  WorkspaceMember,
 } from "../types";
 
 const LICENSING_LABEL: Record<LicensingMode, string> = {
@@ -78,10 +79,12 @@ function licensingChip(mode: LicensingMode) {
 function Subscriptions({
   candidates,
   cards,
+  loginById,
   onChanged,
 }: {
   candidates: SubscriptionCandidate[];
   cards: MachineGroup[];
+  loginById: Map<string, string>;
   onChanged: () => void;
 }) {
   const { data, refresh } = usePoll(() => api.subscriptions(), []);
@@ -119,6 +122,7 @@ function Subscriptions({
             <th>agent</th>
             <th>plan</th>
             <th>licensing</th>
+            <th>owner</th>
             <th>status</th>
             <th>notes</th>
             <th />
@@ -132,6 +136,9 @@ function Subscriptions({
                 <td className="mono">{s.provider}</td>
                 <td>{s.plan || "—"}</td>
                 <td>{licensingChip(mode)}</td>
+                <td className="muted">
+                  {s.owner_user_id ? `@${loginById.get(s.owner_user_id) ?? s.owner_user_id}` : "shared"}
+                </td>
                 <td>{liveStatus(live.get(s.provider))}</td>
                 <td className="muted">{s.notes || "—"}</td>
                 <td className="num">
@@ -151,7 +158,7 @@ function Subscriptions({
           })}
           {data.length === 0 && (
             <tr>
-              <td colSpan={6} className="muted">
+              <td colSpan={7} className="muted">
                 no subscriptions recorded
               </td>
             </tr>
@@ -257,6 +264,8 @@ function OrgContext() {
 
 export default function Resources() {
   const { data, failed, refresh } = usePoll(() => api.resources(), []);
+  const { data: members, refresh: refreshMembers } = usePoll(() => api.users(), [], 30000);
+  const { data: auth } = usePoll(() => api.me(), [], 30000);
   const [probing, setProbing] = useState<string | null>(null);
   const [updatingResource, setUpdatingResource] = useState<string | null>(null);
   const [startingRunner, setStartingRunner] = useState(false);
@@ -331,8 +340,21 @@ export default function Resources() {
     }
   };
 
+  const setMachineOwner = async (machineId: string, ownerUserId: string) => {
+    setRunnerError("");
+    try {
+      await api.setMachineOwner(machineId, ownerUserId);
+      await Promise.all([refresh(), refreshMembers()]);
+    } catch {
+      setRunnerError("could not change the machine owner");
+    }
+  };
+
   const localRunner = data?.local_runner;
   const machineCards = data?.cards ?? [];
+  const loginById = new Map((members ?? []).map((m) => [m.user.id, m.user.github_login]));
+  const myId = auth?.user.id ?? "";
+  const isAdmin = auth?.role !== "resource_provider";
 
   return (
     <div className="page page-resources">
@@ -355,6 +377,7 @@ export default function Resources() {
           <Subscriptions
             candidates={data.subscription_candidates}
             cards={machineCards}
+            loginById={loginById}
             onChanged={refresh}
           />
           <h2 className="col-title">machines &amp; agents</h2>
@@ -386,9 +409,13 @@ export default function Resources() {
                 probing={probing}
                 updatingResource={updatingResource}
                 runnerOnline={runnerOnline}
+                members={members ?? []}
+                myId={myId}
+                isAdmin={isAdmin}
                 onProbe={probe}
                 onSetEnabled={setResourceEnabled}
                 onForget={forgetMachine}
+                onSetOwner={setMachineOwner}
               />
             ))}
           </div>
@@ -400,22 +427,88 @@ export default function Resources() {
   );
 }
 
+function MachineOwner({
+  machine,
+  members,
+  myId,
+  isAdmin,
+  onSetOwner,
+}: {
+  machine: MachineInfo;
+  members: WorkspaceMember[];
+  myId: string;
+  isAdmin: boolean;
+  onSetOwner: (machineId: string, ownerUserId: string) => void;
+}) {
+  const owner = machine.owner_user_id ?? "";
+  const ownerLogin = members.find((m) => m.user.id === owner)?.user.github_login ?? owner;
+  const title =
+    "The machine's owner gets its auth todos (CLI logins, restart-me) — only they have hands on it.";
+  if (isAdmin) {
+    return (
+      <select
+        className="machine-owner"
+        value={owner}
+        title={title}
+        onChange={(e) => onSetOwner(machine.id, e.target.value)}
+      >
+        <option value="">unclaimed</option>
+        {members.map((m) => (
+          <option key={m.user.id} value={m.user.id}>
+            @{m.user.github_login}
+          </option>
+        ))}
+      </select>
+    );
+  }
+  if (!owner) {
+    return (
+      <button className="ghost" title={title} onClick={() => onSetOwner(machine.id, myId)}>
+        claim as mine
+      </button>
+    );
+  }
+  if (owner === myId) {
+    return (
+      <span className="chip" title={title}>
+        yours
+        <button className="ghost quiet" onClick={() => onSetOwner(machine.id, "")}>
+          release
+        </button>
+      </span>
+    );
+  }
+  return (
+    <span className="chip" title={title}>
+      @{ownerLogin}
+    </span>
+  );
+}
+
 function MachineCard({
   card,
   probing,
   updatingResource,
   runnerOnline,
+  members,
+  myId,
+  isAdmin,
   onProbe,
   onSetEnabled,
   onForget,
+  onSetOwner,
 }: {
   card: MachineGroup;
   probing: string | null;
   updatingResource: string | null;
   runnerOnline: (id: string) => boolean;
+  members: WorkspaceMember[];
+  myId: string;
+  isAdmin: boolean;
   onProbe: (id: string) => void;
   onSetEnabled: (res: ResourceInfo, enabled: boolean) => void;
   onForget: (id: string) => void;
+  onSetOwner: (machineId: string, ownerUserId: string) => void;
 }) {
   const { online, last_seen: lastSeen } = card;
   const runnerById = new Map(card.runners.map((runner) => [runner.id, runner.name]));
@@ -459,6 +552,15 @@ function MachineCard({
         <span className="chip" title={deviceKindTitle(card.machine.device_kind)}>
           {deviceKindLabel(card.machine.device_kind)}
         </span>
+        {!isUnlinkedMachine(card.machine) && (
+          <MachineOwner
+            machine={card.machine}
+            members={members}
+            myId={myId}
+            isAdmin={isAdmin}
+            onSetOwner={onSetOwner}
+          />
+        )}
         {isUnlinkedMachine(card.machine) && (
           <span className="chip" title="This capacity is visible, but Hive has not linked it to a durable machine record.">
             unlinked machine

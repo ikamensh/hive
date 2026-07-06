@@ -3276,3 +3276,13 @@ a.needs-scope:hover { color: var(--accent); }
 .panel.skeleton.tall { height: 240px; }
 .skeleton::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--bg-raise), transparent); transform: translateX(-100%); animation: shimmer 1.3s infinite; }
 @keyframes shimmer { 100% { transform: translateX(100%); } }
+
+/* --- users page & ownership --- */
+.page-users .users-table { margin-top: 1rem; }
+.users-table .chip { margin-right: 0.35rem; }
+.you-chip { background: var(--accent); color: #ffffff; margin-left: 0.5rem; }
+.role-control { display: inline-flex; align-items: center; gap: 0.5rem; }
+.role-control .form-error { font-size: 0.8em; }
+.users-hint { margin-top: 1.2rem; }
+.machine-owner { font-size: 12px; padding: 2px 6px; }
+.machine-meta .chip .ghost.quiet { margin-left: 0.4rem; padding: 0 0.3rem; }
