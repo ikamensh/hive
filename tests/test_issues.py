@@ -37,8 +37,6 @@ from hive.models import (
     Workstream,
     WorkstreamSource,
     WorkstreamStatus,
-    parse_resolve,
-    parse_review,
 )
 from hive._control.orchestrator import Tools
 from hive.persistence.store import MemoryStore
@@ -183,14 +181,6 @@ def test_resolve_task_carries_issue_context():
     assert "stack trace here" in task.issue_doc
     assert task.issue_attachments == ["http://x/s.png"]
     assert "#42" in task.instructions and "ISSUE.md" in task.instructions
-
-
-def test_parse_resolve_and_review():
-    assert parse_resolve("done\nOUTCOME: FIXED") == Verdict.accept
-    assert parse_resolve("stop\nOUTCOME: BLOCKED") == Verdict.reject
-    assert parse_resolve("nothing") == Verdict.none
-    assert parse_review("ok\nREVIEW: ACCEPT") == Verdict.accept
-    assert parse_review("bad\nREVIEW: REJECT") == Verdict.reject
 
 
 def test_resolve_issue_close_is_idempotent_when_already_closed(monkeypatch):

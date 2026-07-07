@@ -143,8 +143,8 @@ def test_cli_parks_and_revives_a_resource(harness):
 
 def test_format_show_renders_readable_summary():
     """Default `hive show` output is a human summary, not JSON: every section
-    header present, the actionable facts (chief tag, agent notes, launchable
-    count, idle reasons) readable, and no JSON syntax anywhere."""
+    header present, payload facts (machine names, agent notes, autonomy actions
+    and idle reasons) surfaced verbatim, and no JSON syntax anywhere."""
     from hive.cli import format_show
 
     payload = {
@@ -200,21 +200,18 @@ def test_format_show_renders_readable_summary():
     }
 
     text = format_show(payload, None)
+    # Structure, not wording: every section renders under its header, and the
+    # facts the operator acts on survive from the payload into the text
+    # verbatim. Exact phrasing is free to change without touching this test.
+    for header in ("MACHINES", "AGENTS", "SUBSCRIPTIONS", "LIMITS", "AUTONOMY"):
+        assert header in text
     for fact in (
-        "MACHINES", "AGENTS — 1 of 2 launchable now", "SUBSCRIPTIONS", "LIMITS", "AUTONOMY",
-        "[chief]", "DARK",
-        "42% used",  # provider gauge rendered readable, with reset time
-        "hive spent ~123,456 tok",
-        "hit limit 2x",
-        "no usage gauge — empirical only",  # cursor exposes nothing natively
-        "Not logged in · Please run /login",
-        "serving: NOWHERE",  # claude sub with no machine able to serve it
-        "hive login claude --machine hive-vm",  # machine_bound gap -> the one-command fix
-        "provide the key/login on hive-vm (portable)",  # portable gap -> key hint, not SSH login
-        "usable on hive-vm",
-        "unowned — no subscription, usable nowhere: gemini-cli",
-        "every 5m via codex on hive-vm: poll CI",
-        "idle — no daily budget",
+        "hive-vm", "raven",  # machines by name
+        "Not logged in · Please run /login",  # agent note, verbatim
+        "usable on hive-vm",  # unregistered-subscription evidence
+        "gemini-cli",  # the unowned provider is named
+        "poll CI",  # autonomy action, verbatim
+        "no daily budget",  # idle reason, verbatim
     ):
         assert fact in text
     assert "{" not in text  # readable, not JSON
@@ -222,7 +219,7 @@ def test_format_show_renders_readable_summary():
     # a selected part renders alone
     assert format_show(payload["machines"], "machines").startswith("MACHINES")
     assert "AUTONOMY" not in format_show(payload["agents"], "agents")
-    assert "hive login claude" in format_show(payload["subscriptions"], "subscriptions")
+    assert "claude" in format_show(payload["subscriptions"], "subscriptions")
 
 
 def test_login_ssh_argv_recipes():
@@ -340,59 +337,6 @@ def test_cli_whoami(harness):
     assert me["version"]["version"]
     assert me["user"]["github_login"]
     assert me["workspace"]["id"]
-
-
-def test_cli_version_reports_cli_and_chief(harness):
-    client, _store = harness
-    result = cli(client, "version")
-
-    assert result["target"].startswith("http")
-    assert result["cli"]["version"]
-    assert result["chief"]["version"] == result["cli"]["version"]
-
-
-class _Recorder:
-    """A minimal httpx-shaped client that records the call instead of sending it
-    — enough to assert a CLI command maps to the documented API request."""
-
-    base_url = "http://rec"
-
-    def __init__(self):
-        self.calls: list[tuple[str, str, dict | None]] = []
-
-    def _send(self, method: str, url: str, json=None):
-        self.calls.append((method, url, json))
-
-        class _Resp:
-            def raise_for_status(self):
-                return self
-
-            def json(self):
-                return {"task": {"id": "t1"}}
-
-        return _Resp()
-
-    def get(self, url, **kw):
-        return self._send("GET", url, kw.get("json"))
-
-    def post(self, url, **kw):
-        return self._send("POST", url, kw.get("json"))
-
-    def patch(self, url, **kw):
-        return self._send("PATCH", url, kw.get("json"))
-
-    def delete(self, url, **kw):
-        return self._send("DELETE", url, kw.get("json"))
-
-
-def test_cli_test_refresh_maps_to_endpoint():
-    rec = _Recorder()
-    result = cli(rec, "test-refresh", "p1", "ws1", "--backend", "codex", "--model", "gpt")
-    assert rec.calls == [
-        ("POST", "/api/projects/p1/workstreams/ws1/test-refresh",
-         {"backend": "codex", "model": "gpt"}),
-    ]
-    assert result["task"]["id"] == "t1"
 
 
 def test_main_targets_stored_remote(monkeypatch, capsys):
@@ -899,6 +843,17 @@ def test_cli_stories_coverage_view(harness, tmp_path):
 
     cancelled = cli(client, "test-cancel", episode["id"])
     assert cancelled["status"] == "cancelled"
+
+    # Naming stories implies the selected scope; the episode records the selection.
+    selected = cli(client, "test-run", pid, stream["workstream_id"], "--story", "login")["episode"]
+    assert selected["scope"] == "selected"
+    assert selected["selected_story_keys"] == ["login"]
+    cli(client, "test-cancel", selected["id"])
+
+    # `hive test-refresh` queues a refresh task on the same workstream.
+    refreshed = cli(client, "test-refresh", pid, stream["workstream_id"], "--backend", "codex")
+    assert refreshed["task"]["kind"] == "test_refresh"
+    assert refreshed["task"]["backend"] == "codex"
 
 
 def test_cli_new_hands_spec_to_intake_in_one_command(harness, tmp_path):

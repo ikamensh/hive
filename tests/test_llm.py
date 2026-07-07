@@ -98,11 +98,8 @@ def test_tool_loop_stops_at_round_budget():
     out = ToolLoop(max_rounds=3).run(FakeAdapter(forever), "s", [], "u", toolset)
     assert "maximum" in out.text
     assert out.rounds == 3
-
-
-def test_tool_loop_empty_text_is_placeholder():
-    out = ToolLoop(max_rounds=1).run(FakeAdapter([Completion(text="")]), "s", [], "u", ToolSet([]))
-    assert out.text == "(no text)"
+    # The loop always hands back some text, even for an empty final completion.
+    assert ToolLoop(max_rounds=1).run(FakeAdapter([Completion(text="")]), "s", [], "u", ToolSet([])).text
 
 
 # -- provider resolution ------------------------------------------------------
@@ -134,24 +131,35 @@ def test_build_adapter_resolves_provider_and_guards_credentials():
 
 # -- OpenAI auto-select (no network) -----------------------------------------
 
-def test_select_model_skips_responses_only_pro_tier():
-    """Auto-select must ignore the "-pro" reasoning tier: it sorts newest but is
-    Responses-API-only, so it 404s on /chat/completions ("not a chat model").
-    Regression for the orchestrator picking gpt-5.5-pro and failing to plan."""
+def test_auto_select_picks_newest_chat_model_at_start():
+    """An empty model resolves at start(): the pick must be the newest *chat*
+    model — the "-pro" reasoning tier is Responses-API-only (regression: the
+    orchestrator picked gpt-5.5-pro and 404'd on /chat/completions), image /
+    embedding / realtime families are not chat models, and the o-series ranks
+    below the gpt family regardless of recency."""
     from hive.llm._openai import OpenAIAdapter
 
     class _Scripted(OpenAIAdapter):
         def _get(self, path):
             assert path == "/models"
             return {"data": [
-                {"id": "gpt-5.5-pro", "created": 300},      # newest, but Responses-only
+                {"id": "gpt-image-test", "created": 999},
+                {"id": "text-embedding-test", "created": 998},
+                {"id": "o-test", "created": 400},
+                {"id": "gpt-5.5-pro", "created": 300},      # newest gpt, but Responses-only
+                {"id": "gpt-4o-realtime-preview", "created": 250},
                 {"id": "gpt-5.5", "created": 200},          # newest real chat model
                 {"id": "gpt-5.4", "created": 100},
-                {"id": "gpt-4o-realtime-preview", "created": 250},  # non-chat, skipped
             ]}
 
+        def _post(self, path, body):
+            self.posted = body
+            return {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+
     adapter = _Scripted(api_key="k", base_url="https://api.openai.com/v1")
-    assert adapter._select_model() == "gpt-5.5"
+    adapter.start("sys", [], "go", ToolSet([]))
+    assert adapter.step().text == "ok"
+    assert adapter.posted["model"] == "gpt-5.5"
 
 
 def test_openai_classifies_quota_as_provider_unavailable_but_not_bad_request(monkeypatch):

@@ -54,17 +54,6 @@ class FailingStore(MemoryStore):
         super().delete(model, id)
 
 
-def test_hydration_exposes_preexisting_documents():
-    inner = MemoryStore()
-    project = inner.put(Project(name="p", spec_repo="s"))
-    runner = inner.put(Runner(name="r"))
-
-    cached = CachedStore(inner)
-
-    assert cached.get(Project, project.id).name == "p"
-    assert [r.id for r in cached.list(Runner)] == [runner.id]
-
-
 def test_mutations_mirror_into_backing_store():
     inner = MemoryStore()
     cached = CachedStore(inner)
@@ -75,6 +64,7 @@ def test_mutations_mirror_into_backing_store():
     )
     cached.update(Task, task.id, lambda t: setattr(t, "status", TaskStatus.running))
     cached.delete(Project, project.id)
+    assert cached.update(Task, "missing", lambda t: None) is None  # absent docs mutate nothing
 
     for model in (Project, Task, Runner):
         assert [o.model_dump() for o in cached.list(model)] == [
@@ -96,11 +86,6 @@ def test_reads_never_reach_backing_store_after_hydration():
     cached.list(Runner)
 
     assert inner.reads == 0
-
-
-def test_update_of_missing_document_returns_none():
-    cached = CachedStore(MemoryStore())
-    assert cached.update(Task, "nope", lambda t: None) is None
 
 
 def test_failed_backend_write_raises_and_leaves_memory_unchanged():

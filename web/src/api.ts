@@ -17,7 +17,6 @@ import type {
   ProjectPatch,
   ProjectRepoCreate,
   LicensingMode,
-  ProjectStart,
   PreflightResult,
   Question,
   ResourcesPayload,
@@ -103,8 +102,8 @@ const realApi = {
   projects: () => http<Project[]>("/api/projects"),
   createProject: (body: ProjectCreate) =>
     http<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
-  startProject: (id: string, body: ProjectStart) =>
-    http<Project>(`/api/projects/${id}/start`, { method: "POST", body: JSON.stringify(body) }),
+  startProject: (id: string) =>
+    http<Project>(`/api/projects/${id}/start`, { method: "POST" }),
   project: (id: string) => http<ProjectDetail>(`/api/projects/${id}`),
   reopenDecision: (projectId: string, decisionId: string) =>
     http(`/api/projects/${projectId}/decisions/${encodeURIComponent(decisionId)}/reopen`, {

@@ -93,7 +93,9 @@ def test_agent_status_degrades_sensibly():
 
 def test_discovery_offers_only_proven_unsubscribed_providers():
     """A usable agent with no Subscription is evidence to confirm; an already
-    recorded provider or an unproven CLI is not offered."""
+    recorded provider or an unproven CLI is not offered. Evidence names the
+    machine (the user-facing identity) when the resource is linked to one,
+    falling back to the runner name for legacy rows."""
     runner = Runner(name="laptop", backends=["claude", "cursor", "codex"])
     resources = [
         _usable(runner.id, "claude"),  # proven, no subscription -> candidate
@@ -105,19 +107,12 @@ def test_discovery_offers_only_proven_unsubscribed_providers():
     candidates = subscription_candidates(subs, resources, [runner])
 
     assert [c["provider"] for c in candidates] == ["claude"]
-    assert candidates[0]["evidence"] == "usable on laptop"
+    assert candidates[0]["evidence"] == "usable on laptop"  # runner-name fallback
 
-
-def test_discovery_evidence_prefers_machine_name():
-    """The machine is the user-facing identity; the runner name (asserted
-    above) is only the fallback for legacy rows with no machine link."""
     machine = Machine(name="macbook")
-    runner = Runner(name="macbook-runner", machine_id=machine.id, backends=["claude"])
-    resource = _usable(runner.id, "claude")
-    resource.machine_id = machine.id
-
-    candidates = subscription_candidates([], [resource], [runner], [machine])
-    assert candidates[0]["evidence"] == "usable on macbook"
+    linked = _usable(runner.id, "claude", machine_id=machine.id)
+    [candidate] = subscription_candidates(subs, [linked], [runner], [machine])
+    assert candidate["evidence"] == "usable on macbook"  # machine link wins
 
 
 def test_discovery_carries_provider_rulebook_licensing():

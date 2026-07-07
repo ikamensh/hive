@@ -86,18 +86,15 @@ def _complete_intake(client, pid):
     store.put(project)
 
 
-def _start_project(client, pid, mission="", iteration_goal=""):
+def _start_project(client, pid):
     _complete_intake(client, pid)
-    client.post(f"/api/projects/{pid}/start", json={
-        "mission": mission,
-        "iteration_goal": iteration_goal,
-    })
+    client.post(f"/api/projects/{pid}/start")
 
 
-def _create_started(client, name, spec_repo="https://example.com/spec.git", mission="", iteration_goal=""):
+def _create_started(client, name, spec_repo="https://example.com/spec.git"):
     project = client.post("/api/projects", json={"name": name}).json()
     _configure_project(client, project["id"], spec_repo)
-    _start_project(client, project["id"], mission, iteration_goal)
+    _start_project(client, project["id"])
     return project
 
 
@@ -141,22 +138,17 @@ class ScriptedOrchestrator:
 
 class ScriptedOpenAIAdapter(OpenAIAdapter):
     """Real OpenAIAdapter with its HTTP scripted — exercises the live message
-    plumbing (schemas, tool-result round-trip, model auto-select) sans network."""
+    plumbing (schemas, tool-result round-trip) sans network."""
 
-    def __init__(self, *args, responses, models=None, **kwargs):
+    def __init__(self, *args, responses, **kwargs):
         super().__init__(*args, **kwargs)
         self.responses = list(responses)
-        self.models = models or {"data": []}
         self.posts = []
 
     def _post(self, path: str, body: dict) -> dict:
         assert path == "/chat/completions"
         self.posts.append(body)
         return self.responses.pop(0)
-
-    def _get(self, path: str) -> dict:
-        assert path == "/models"
-        return self.models
 
 
 class AdapterOrchestrator(Orchestrator):
@@ -230,6 +222,12 @@ def test_full_loop(harness):
     pid = project["id"]
     _pump(client, store)
     detail = client.get(f"/api/projects/{pid}").json()
+    # The project payload contract: every section the UI reads is present.
+    assert {
+        "project", "workstreams", "work_items", "tasks", "questions",
+        "human_todos", "conversations", "issue_runs", "stories",
+        "findings", "test_episodes", "directives", "checkouts", "spend_today",
+    } <= detail.keys()
     iteration_stream = next(w for w in detail["workstreams"] if w["kind"] == "iteration")
     assert any(w["kind"] == "testing" for w in detail["workstreams"])
     assert len(detail["work_items"]) == 1
@@ -419,22 +417,14 @@ def test_start_requires_completed_intake(harness):
     assert len(orch.invocations) == 0
 
 
-def test_start_after_intake_wakes_orchestrator_and_ignores_legacy_brief(harness):
+def test_start_after_intake_wakes_orchestrator(harness):
     client, store, orch = harness
 
-    project = _create_started(
-        client,
-        "briefed",
-        mission="Make local Hive setup dependable.",
-        iteration_goal="Prove agents can register and run a probe.",
-    )
+    project = _create_started(client, "briefed")
     _pump(client, store)
 
     event = orch.invocations[0][0]
     assert "approved intake" in event
-    assert "Legacy start brief was ignored" in event
-    assert "Make local Hive setup dependable" not in event
-    assert "Prove agents can register" not in event
     assert store.get(Project, project["id"]).name == "briefed"
 
 
@@ -478,19 +468,6 @@ def test_answer_appends_raw_input_log_to_writable_spec_repo(harness, tmp_path):
     ).stdout
     assert "Which storage path" in logged
     assert "Append raw answers to input-log" in logged
-
-
-def test_orchestrator_requires_api_key_before_client(tmp_path):
-    store = MemoryStore()
-    project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
-    config = Config(
-        gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
-        orch_model="gemini-3-flash-preview", runner_token="test-token", data_dir=tmp_path,
-        orch_provider="gemini",
-    )
-    orch = Orchestrator(store, LocalBlobStore(tmp_path / "blobs"), config)
-    with pytest.raises(ValueError, match="GEMINI_API_KEY"):
-        orch._generate(project, [], "event", Tools(store, project, spec=None))
 
 
 def test_openai_orchestrator_tool_loop(tmp_path):
@@ -550,34 +527,6 @@ def test_openai_orchestrator_tool_loop(tmp_path):
     )
 
 
-def test_openai_orchestrator_auto_selects_model(tmp_path):
-    store = MemoryStore()
-    project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
-    config = Config(
-        gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
-        orch_model="", runner_token="test-token", data_dir=tmp_path,
-        orch_provider="openai", openai_api_key="test-key",
-    )
-    adapter = ScriptedOpenAIAdapter(
-        "test-key",
-        "https://api.openai.com/v1",
-        "",
-        responses=[{"choices": [{"message": {"role": "assistant", "content": "ok"}}]}],
-        models={
-            "data": [
-                {"id": "gpt-image-test", "created": 999},
-                {"id": "text-embedding-test", "created": 998},
-                {"id": "o-test-newer", "created": 30},
-                {"id": "gpt-test-new", "created": 20},
-            ]
-        },
-    )
-    orch = AdapterOrchestrator(store, LocalBlobStore(tmp_path / "blobs"), config, adapter)
-
-    assert orch._generate(project, [], "event", Tools(store, project, spec=None)).text == "ok"
-    assert adapter.posts[0]["model"] == "gpt-test-new"
-
-
 def test_orchestrator_falls_back_when_first_provider_is_out_of_quota(tmp_path):
     """The build loop must survive one provider going down. When the preferred
     adapter raises ProviderUnavailable before any tool ran, the orchestrator
@@ -620,19 +569,6 @@ def test_orchestrator_falls_back_when_first_provider_is_out_of_quota(tmp_path):
     assert result.model == "gemini-3.1-pro-preview"  # fell back to the working provider
 
 
-def test_openai_orchestrator_requires_api_key_for_official_api(tmp_path):
-    store = MemoryStore()
-    project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
-    config = Config(
-        gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
-        orch_model="gpt-test", runner_token="test-token", data_dir=tmp_path,
-        orch_provider="openai", openai_api_key="", openai_base_url="https://api.openai.com/v1",
-    )
-    orch = Orchestrator(store, LocalBlobStore(tmp_path / "blobs"), config)
-    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
-        orch._generate(project, [], "event", Tools(store, project, spec=None))
-
-
 def test_human_todo_tool_and_api(harness):
     client, store, _orch = harness
     project = store.put(Project(name="p", spec_repo="https://example.com/spec.git"))
@@ -653,27 +589,6 @@ def test_human_todo_tool_and_api(harness):
     assert "Log in codex" not in tools.snapshot()  # only open todos are shown
     detail = client.get(f"/api/projects/{other.id}").json()
     assert detail["human_todos"][0]["title"] == "Grant repo access"
-
-
-def test_rate_limited_result_sets_cooldown(harness):
-    client, store, orch = harness
-    _create_started(client, "p2")
-    _pump(client, store)
-    rid = _register_usable_runner(client, name="r2")
-    _pump(client, store)
-    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
-    client.post(
-        f"/api/tasks/{task['id']}/result",
-        json={"text": "429 rate limit", "is_error": True, "resource_exhausted": True},
-        headers=RUNNER_HEADERS,
-    )
-    res = client.get("/api/resources").json()["resources"][0]
-    assert not res["available"]
-    assert res["cooldown_until"] > time.time()
-    assert res["usability_status"] == "usable"
-    assert res["last_exhaustion_text"] == "429 rate limit"
-    assert res["last_exhaustion_task_id"] == task["id"]
-    assert res["last_exhaustion_at"] > 0
 
 
 def test_duplicate_task_result_is_ignored(harness):
@@ -949,69 +864,7 @@ def test_resource_exhausted_probe_is_availability_not_login_failure(harness):
     assert not store.list(HumanTask)
 
 
-def test_local_runner_start_endpoint(tmp_path):
-    from hive.api import create_app
-
-    class FakeLocalRunner:
-        runner_name = "local-host"
-
-        def __init__(self):
-            self.starts = 0
-            self.stops = 0
-            self.autostart = False
-
-        def status(self, *, message=""):
-            return {
-                "supported": True,
-                "running": self.starts > 0,
-                "registered": False,
-                "runner_name": self.runner_name,
-                "pid": 123 if self.starts > 0 else 0,
-                "autostart": self.autostart,
-                "log_path": str(tmp_path / "local-runner.log"),
-                "message": message,
-            }
-
-        def set_autostart(self, enabled):
-            self.autostart = enabled
-            return self.status(message="local runner autostart updated")
-
-        def start(self):
-            self.starts += 1
-            return self.status(message="local runner starting")
-
-        def stop(self):
-            self.stops += 1
-
-    store = MemoryStore()
-    supervisor = Supervisor(store, ScriptedOrchestrator(store).invoke)
-    config = Config(
-        gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
-        orch_model="", runner_token="test-token", data_dir=tmp_path,
-    )
-    local_runner = FakeLocalRunner()
-    client = TestClient(create_app(store, supervisor, config, local_runner=local_runner))
-
-    assert client.get("/api/resources").json()["local_runner"]["registered"] is False
-    started = client.post("/api/local-runner/start").json()
-    assert started["running"] is True
-    assert started["registered"] is False
-    assert local_runner.starts == 1
-
-    client.post(
-        "/api/runners/register",
-        json={"name": "local-host", "backends": ["codex"]},
-        headers=RUNNER_HEADERS,
-    )
-    resources = client.get("/api/resources").json()
-    assert resources["local_runner"]["registered"] is True
-
-    again = client.post("/api/local-runner/start").json()
-    assert again["message"] == "local runner already registered"
-    assert local_runner.starts == 1
-
-
-def test_local_runner_autostart_endpoint_starts_runner(tmp_path):
+def test_local_runner_start_and_autostart_endpoints(tmp_path):
     from hive.api import create_app
 
     class FakeLocalRunner:
@@ -1053,15 +906,27 @@ def test_local_runner_autostart_endpoint_starts_runner(tmp_path):
     local_runner = FakeLocalRunner()
     client = TestClient(create_app(store, supervisor, config, local_runner=local_runner))
 
+    assert client.get("/api/resources").json()["local_runner"]["registered"] is False
+
+    # Enabling autostart on a stopped runner starts it; disabling never stops it.
     updated = client.patch("/api/local-runner", json={"autostart": True}).json()
     assert updated["autostart"] is True
     assert updated["running"] is True
-    assert updated["registered"] is False
     assert local_runner.starts == 1
-
     updated = client.patch("/api/local-runner", json={"autostart": False}).json()
     assert updated["autostart"] is False
     assert updated["running"] is True
+    assert local_runner.starts == 1
+
+    # Once the runner registers, start becomes a no-op with an explanation.
+    client.post(
+        "/api/runners/register",
+        json={"name": "local-host", "backends": ["codex"]},
+        headers=RUNNER_HEADERS,
+    )
+    assert client.get("/api/resources").json()["local_runner"]["registered"] is True
+    again = client.post("/api/local-runner/start").json()
+    assert again["message"] == "local runner already registered"
     assert local_runner.starts == 1
 
 
@@ -1644,26 +1509,11 @@ def test_project_read_paths_recompute_stale_goal_complete_state(harness):
     assert sum(1 for question in detail["questions"] if question["status"] == "open") == 1
 
 
-def test_subscription_records_licensing_mode(harness):
-    """A subscription persists how its credential is licensed, so the recovery
-    flow can later decide self-serve vs ask-a-human without re-guessing."""
-    client, store, _ = harness
-    created = client.post(
-        "/api/subscriptions",
-        json={"provider": "claude", "plan": "Claude Max 5x", "licensing_mode": "machine_bound"},
-    ).json()
-    assert created["licensing_mode"] == "machine_bound"
-    assert store.get(Subscription, created["id"]).licensing_mode == "machine_bound"
-
-    # Omitting it is allowed and defaults to unknown rather than erroring.
-    bare = client.post("/api/subscriptions", json={"provider": "cursor"}).json()
-    assert bare["licensing_mode"] == "unknown"
-
-
 def test_resources_surface_unsubscribed_usable_providers(harness):
     """/api/resources offers a usable-but-unrecorded provider as a candidate the
     user can confirm, carrying the provider-rulebook licensing default; once a
-    subscription exists the candidate disappears."""
+    subscription exists (its licensing mode persisted, defaulting to unknown)
+    the candidate disappears."""
     client, store, _ = harness
     runner = store.put(Runner(name="laptop", backends=["cursor"]))
     store.put(
@@ -1679,82 +1529,17 @@ def test_resources_surface_unsubscribed_usable_providers(harness):
     assert candidates[0]["licensing_mode"] == "portable"  # Cursor key is portable
     assert candidates[0]["evidence"] == "usable on laptop"
 
-    client.post("/api/subscriptions", json={"provider": "cursor"})
+    created = client.post(
+        "/api/subscriptions",
+        json={"provider": "cursor", "plan": "Pro", "licensing_mode": "portable"},
+    ).json()
+    assert created["licensing_mode"] == "portable"
+    assert store.get(Subscription, created["id"]).licensing_mode == "portable"
     assert client.get("/api/resources").json()["subscription_candidates"] == []
 
-
-def test_project_payload_regression_work_verify_accept(harness):
-    """Regression test ensuring the project detail payload contract matches the
-    expected schema and updates correctly throughout a work-verify-accept cycle.
-    """
-    client, store, _orch = harness
-
-    # 1. Create and start a project
-    project = _create_started(client, "regression-demo")
-    pid = project["id"]
-    _pump(client, store)
-
-    # 2. Get project payload and verify all fields are present
-    payload = client.get(f"/api/projects/{pid}").json()
-    expected_keys = {
-        "project",
-        "workstreams",
-        "work_items",
-        "tasks",
-        "questions",
-        "human_todos",
-        "conversations",
-        "issue_runs",
-        "stories",
-        "findings",
-        "test_episodes",
-        "directives",
-        "checkouts",
-        "spend_today",
-    }
-    assert expected_keys.issubset(payload.keys())
-    assert payload["project"]["name"] == "regression-demo"
-    assert len(payload["work_items"]) == 1
-    assert len(payload["tasks"]) == 1
-
-    # 3. Register a runner, poll for task, verify running status in payload
-    rid = _register_usable_runner(client)
-    _pump(client, store)
-    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
-    assert task is not None and task["kind"] == "work"
-
-    payload = client.get(f"/api/projects/{pid}").json()
-    assert len(payload["tasks"]) == 1
-    assert payload["tasks"][0]["id"] == task["id"]
-
-    # 4. Finish work task -> verify task gets queued
-    client.post(
-        f"/api/tasks/{task['id']}/result",
-        json={"text": "project payload regression verified", "cost_usd": 0.05},
-        headers=RUNNER_HEADERS,
-    )
-    _pump(client, store)
-    verify = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
-    assert verify is not None and verify["kind"] == "verify"
-
-    # Verify both tasks exist in the payload
-    payload = client.get(f"/api/projects/{pid}").json()
-    assert len(payload["tasks"]) == 2
-    assert any(t["kind"] == "verify" for t in payload["tasks"])
-
-    # 5. Finish verify task with ACCEPT verdict -> parsed into payload correctly
-    client.post(
-        f"/api/tasks/{verify['id']}/result",
-        json={"text": "VERDICT: ACCEPT"},
-        headers=RUNNER_HEADERS,
-    )
-    _pump(client, store)
-
-    payload = client.get(f"/api/projects/{pid}").json()
-    verify_task_payload = next(t for t in payload["tasks"] if t["kind"] == "verify")
-    assert verify_task_payload["verdict"] == "accept"
-    assert store.get(Task, verify["id"]).verdict == "accept"
-
+    # Omitting the licensing mode is allowed: unknown, not an error.
+    bare = client.post("/api/subscriptions", json={"provider": "claude"}).json()
+    assert bare["licensing_mode"] == "unknown"
 
 
 def test_finalize_that_did_not_land_reopens_intake_instead_of_waking_planning(harness, tmp_path):

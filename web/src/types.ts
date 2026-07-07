@@ -689,11 +689,6 @@ export interface ProjectCreate {
   spec_text?: string;
 }
 
-export interface ProjectStart {
-  mission?: string;
-  iteration_goal?: string;
-}
-
 export interface IntakeMessage {
   action?: "message" | "proceed" | "approve";
   message?: string;

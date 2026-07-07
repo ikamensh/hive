@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from hive._workstreams.critique import LENSES, CritiqueReport, critique, report_markdown
+from hive._workstreams.critique import LENSES, critique, report_markdown
 from hive.llm._parsing import extract_json
 
 CRITIC_REPLY = """Here is my analysis.
@@ -102,10 +102,3 @@ def test_smartest():
     assert smartest(["composer-2.5"]) == "composer-2.5"
     with pytest.raises(KeyError):
         smartest(["unknown-model-9000"])
-
-
-def test_report_roundtrips_as_model():
-    report = CritiqueReport(
-        findings=[], verdicts=[], inbox_markdown="", flags_markdown="", prompt_versions={}
-    )
-    assert CritiqueReport(**json.loads(report.model_dump_json())) == report

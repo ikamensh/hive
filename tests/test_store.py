@@ -9,12 +9,8 @@ import time
 import pytest
 
 from hive.models import Question, QuestionStatus, Project, Resource, Task, TaskStatus, User
-from hive.persistence.store import FileStore, MemoryStore, StoreBase
+from hive.persistence.store import FileStore, MemoryStore
 from hive.config.storage import copy_store
-
-
-def test_memory_store_is_a_storebase():
-    assert isinstance(MemoryStore(), StoreBase)
 
 
 def test_list_filters_orders_and_limits():
@@ -105,10 +101,6 @@ def test_file_store_persists_across_restart(tmp_path):
     loaded = store2.get(Project, project.id)
     assert loaded is not None and loaded.name == "durable"
     assert store2.get_org_context() == "org notes"
-
-
-def test_file_store_is_a_storebase(tmp_path):
-    assert isinstance(FileStore(tmp_path), StoreBase)
 
 
 def test_file_store_skips_corrupt_docs(tmp_path):

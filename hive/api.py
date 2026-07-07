@@ -167,11 +167,6 @@ class ProjectCreate(BaseModel):
     spec_text: str = ""  # the user's spec, handed over at creation
 
 
-class ProjectStart(BaseModel):
-    mission: str = ""
-    iteration_goal: str = ""
-
-
 class ProjectPatch(BaseModel):
     name: str | None = None
     archived: bool | None = None
@@ -652,18 +647,16 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return project.model_dump()
 
     @app.post("/api/projects/{project_id}/start")
-    def start_project(
-        project_id: str, body: ProjectStart, ctx: AuthContext = Depends(editor)
-    ):
+    def start_project(project_id: str, ctx: AuthContext = Depends(editor)):
         project = require_project(project_id, ctx)
         if not project.spec_repo.strip():
             raise HTTPException(400, "spec_repo must be set before starting")
         if not intake.is_done(store, project):
             raise HTTPException(409, "complete project intake before starting planning")
-        note = "Project start requested after approved intake. Plan from the durable spec."
-        if body.mission.strip() or body.iteration_goal.strip():
-            note += "\n\nLegacy start brief was ignored because intake specs are authoritative."
-        supervisor.wake(project_id, note)
+        supervisor.wake(
+            project_id,
+            "Project start requested after approved intake. Plan from the durable spec.",
+        )
         return project.model_dump()
 
     @app.post("/api/projects/{project_id}/intake/start")

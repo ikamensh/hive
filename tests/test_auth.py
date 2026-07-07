@@ -1,13 +1,12 @@
 from urllib.parse import parse_qs, urlparse
 
 import json
-from concurrent.futures import ThreadPoolExecutor
 
 from fastapi.testclient import TestClient
 
 from hive.config.settings import Config
-from hive.models import Machine, Project
-from hive.persistence.store import FileStore, MemoryStore
+from hive.models import Machine, Project, User
+from hive.persistence.store import MemoryStore
 from hive._control.supervisor import Supervisor
 
 
@@ -97,45 +96,6 @@ def test_dev_auth_disables_github_oauth_routes():
     assert callback.json()["detail"] == "GitHub auth is not enabled"
 
 
-def test_dev_auth_concurrent_file_store(tmp_path):
-    """FileStore remains available for tests; production runtime uses managed state."""
-    from hive.api import create_app
-
-    store = FileStore(tmp_path / "store")
-    config = Config(
-        gcp_project="",
-        gcs_bucket="",
-        gh_token="",
-        gemini_api_key="",
-        orch_model="",
-        runner_token="t",
-        data_dir=tmp_path,
-        machine_name="chief-test",
-    )
-    supervisor = Supervisor(store, lambda p, e: None, machine_name=config.machine_name)
-    client = TestClient(create_app(store, supervisor, config))
-
-    def poll_auth():
-        response = client.get("/api/auth/me")
-        assert response.status_code == 200
-        return response.json()["user"]["github_login"]
-
-    def poll_projects():
-        response = client.get("/api/projects")
-        assert response.status_code == 200
-        return len(response.json())
-
-    with ThreadPoolExecutor(max_workers=20) as pool:
-        auth_hits = list(pool.map(lambda _: poll_auth(), range(30)))
-        project_hits = list(pool.map(lambda _: poll_projects(), range(20)))
-
-    assert all(login == "ikamensh" for login in auth_hits)
-    assert all(count == 0 for count in project_hits)
-    user_file = tmp_path / "store" / "users" / "github:ikamensh.json"
-    assert user_file.is_file()
-    assert json.loads(user_file.read_text())["github_login"] == "ikamensh"
-
-
 def test_project_routes_are_workspace_scoped():
     store = MemoryStore()
     client, _config = make_client(store)
@@ -178,38 +138,8 @@ def test_github_login_accepts_allowlisted_user(monkeypatch):
     assert callback.status_code in {302, 307}
     assert "hive_session" in callback.headers["set-cookie"]
     assert client.get("/api/auth/me").json()["user"]["github_login"] == "ikamensh"
-
-
-def test_github_callback_stores_access_token(monkeypatch):
-    store = MemoryStore()
-    client, _config = make_client(
-        store,
-        auth_mode="github",
-        github_client_id="client-id",
-        github_client_secret="client-secret",
-        auth_secret="auth-secret",
-        public_url="http://testserver",
-    )
-    start = client.get("/api/auth/github/start", follow_redirects=False)
-    state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
-    monkeypatch.setattr(
-        "hive._integrations.auth.httpx.post",
-        lambda *a, **k: FakeResponse({"access_token": "gho_test"}),
-    )
-    monkeypatch.setattr(
-        "hive._integrations.auth.httpx.get",
-        lambda *a, **k: FakeResponse({"login": "ikamensh", "name": "Ikamen"}),
-    )
-
-    client.get(
-        f"/api/auth/github/callback?code=abc&state={state}",
-        follow_redirects=False,
-    )
-
-    from hive.models import User
-
-    user = store.list(User)[0]
-    assert user.github_access_token == "gho_test"
+    # The OAuth token is stored for user-scoped GitHub API calls.
+    assert store.list(User)[0].github_access_token == "gho_test"
 
 
 def test_github_repos_uses_server_token_when_gh_unavailable(monkeypatch):

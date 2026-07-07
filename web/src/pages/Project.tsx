@@ -143,7 +143,7 @@ export default function ProjectPage() {
     setLaunchError("");
     setLaunchMessage("");
     try {
-      await api.startProject(id, { mission: "", iteration_goal: "" });
+      await api.startProject(id);
       setLaunchMessage("build planning requested");
       refreshProjectAndOverview();
     } catch (e) {

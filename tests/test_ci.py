@@ -186,13 +186,20 @@ def test_ci_check_due_respects_toggle_and_interval():
     assert not no_cb._ci_check_due(on)
 
 
-def test_run_ci_check_invokes_callback_and_clears_busy():
+def test_completed_ci_check_releases_the_in_flight_guard():
+    """The poll loop marks a project busy before scheduling its check; a
+    finished check must release that guard or one completed run would silence
+    CI checks for the project forever."""
     store = MemoryStore()
     seen: list[str] = []
     sup = Supervisor(store, lambda p, e: None, ci_check=seen.append)
-    sup._ci_busy.add("pid")
-    asyncio.run(sup._run_ci_check("pid"))
-    assert seen == ["pid"] and "pid" not in sup._ci_busy
+    on = store.put(Project(name="on", spec_repo="x", ci_autofix=True))
+
+    sup._ci_busy.add(on.id)  # as the poll loop does when scheduling
+    asyncio.run(sup._run_ci_check(on.id))
+
+    assert seen == [on.id]
+    assert sup._ci_check_due(on)  # guard released; only the interval gates now
 
 
 # -- API: toggle + webhook ---------------------------------------------------

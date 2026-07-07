@@ -185,8 +185,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("start", help="wake planning after approved project intake")
     p.add_argument("project_id")
-    p.add_argument("--mission", default="", help=argparse.SUPPRESS)
-    p.add_argument("--iteration-goal", default="", help=argparse.SUPPRESS)
 
     p = sub.add_parser("repo-create", help="create a private greenfield repo for a project")
     p.add_argument("project_id")
@@ -978,10 +976,7 @@ def run(args: argparse.Namespace, client) -> dict | list:
             ),
         }
     elif c == "start":
-        r = client.post(f"/api/projects/{args.project_id}/start", json={
-            "mission": args.mission,
-            "iteration_goal": args.iteration_goal,
-        })
+        r = client.post(f"/api/projects/{args.project_id}/start")
     elif c == "repo-create":
         r = client.post(f"/api/projects/{args.project_id}/repo", json={
             "name": args.name,

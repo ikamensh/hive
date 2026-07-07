@@ -20,7 +20,6 @@ import type {
   ProjectDetail,
   ProjectPatch,
   ProjectRepoCreate,
-  ProjectStart,
   PreflightResult,
   Question,
   ResourcesPayload,
@@ -1228,7 +1227,7 @@ export const api = {
     return structuredClone(p);
   },
 
-  startProject: async (id: string, _body: ProjectStart): Promise<Project> => {
+  startProject: async (id: string): Promise<Project> => {
     const project = projects.find((p) => p.id === id);
     if (!project) throw new Error("not found");
     if (!project.spec_repo.trim()) throw new Error("spec_repo required");
