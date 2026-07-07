@@ -125,7 +125,7 @@ from hive._control.show import build_show
 from hive._control.supervisor import Supervisor
 from hive.version import get_version, version_payload
 from hive.runner import registration
-from hive.runner._chief_roster import parse_urls
+from hive.worker import parse_urls
 from hive.runner.registration import RunnerRegister
 from hive.runner._task_results import (
     TaskResult,
@@ -1814,7 +1814,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         payload = registration.register(store, body, workspace_id)
         # Advertise this chief's reachable URLs: runners persist them as
         # reconnect candidates, so relocating the chief only requires the new
-        # instance to advertise itself (see hive/runner/_chief_roster.py).
+        # instance to advertise itself (see hive/worker/roster.py).
         # Explicit HIVE_ADVERTISED_URLS is trusted verbatim; the public_url
         # fallback drops loopback addresses — they point at the wrong host on
         # every other machine, so a default local chief advertises nothing.

@@ -432,7 +432,7 @@ def test_poll_persists_last_seen_only_when_stale():
 def test_register_response_advertises_chief_urls():
     """The register response is how runners learn where the chief lives:
     HIVE_ADVERTISED_URLS when set, else the chief's public_url. Runners
-    persist these as reconnect candidates (see hive/runner/_chief_roster.py),
+    persist these as reconnect candidates (see hive/worker/roster.py),
     so a relocated chief only has to advertise itself."""
     store = MemoryStore()
     config = Config(gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",

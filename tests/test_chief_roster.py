@@ -16,8 +16,7 @@ update_available properties (real local git repos, no network):
 import json
 import subprocess
 
-from hive.runner._chief_roster import ChiefRoster, parse_urls
-from hive.runner._daemon import update_available
+from hive.worker import ChiefRoster, parse_urls, update_available
 
 
 def test_parse_urls_normalizes():

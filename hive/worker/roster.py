@@ -17,7 +17,7 @@ import logging
 import threading
 from pathlib import Path
 
-log = logging.getLogger("hive.runner._chief_roster")
+log = logging.getLogger("hive.worker.roster")
 
 
 def parse_urls(raw: str) -> list[str]:

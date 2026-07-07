@@ -36,7 +36,7 @@ from hive.agents import (
     validate_probe_result,
 )
 from hive.runner._agent_results import result_spec_for_task
-from hive.runner._chief_roster import ChiefRoster, parse_urls
+from hive.worker import WorkerConfig, WorkerLoop, parse_urls, update_available
 from hive.fleet import machine_metadata
 from hive.models import DEFAULT_WORKSPACE_ID
 from hive.version import get_version
@@ -62,11 +62,6 @@ CANCEL_POLL_S = 5.0  # how often a running task checks for an operator cancel re
 CHIEF_STATE_PATH = (
     Path(os.environ.get("HIVE_RUNNER_STATE_DIR", "~/.config/hive")).expanduser() / "chiefs.json"
 )
-RECONNECT_AFTER_FAILURES = 3  # consecutive errors before re-resolving across the roster
-# How long to keep retrying the report of a finished task's result. A live
-# runner is never orphan-failed, so a result lost to a transient chief outage
-# (a deploy restart, say) would leave the task 'running' forever.
-RESULT_REPORT_RETRY_S = 600.0
 # Self-update (set by install_mac_runner.sh for dedicated service clones, never
 # for dev checkouts or the VM, where push.sh owns the tree): between tasks the
 # daemon exits when origin/main is ahead; the service wrapper pulls + respawns.
@@ -655,37 +650,6 @@ def _upload_artifacts(task_id: str, project_dir: Path, headers: dict, auth) -> l
     return uploaded
 
 
-def report_result(task_id: str, result: dict, headers: dict, auth) -> None:
-    """Deliver a finished task's result, retrying transient failures hard.
-
-    The chief records results idempotently (a non-running task ignores late
-    posts), so retrying is always safe. Client errors mean the chief made a
-    decision about this task (cancelled/deleted) — no point retrying those.
-    """
-    deadline = time.monotonic() + RESULT_REPORT_RETRY_S
-    delay = 2.0
-    while True:
-        try:
-            with httpx.Client(base_url=HIVE_URL, headers=headers, timeout=30.0, auth=auth) as c:
-                c.post(f"/api/tasks/{task_id}/result", json=result).raise_for_status()
-            return
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code < 500:
-                log.error("chief rejected result for task %s: %s", task_id, exc)
-                return
-            failure: Exception = exc
-        except (httpx.HTTPError, OSError) as exc:
-            failure = exc
-        if time.monotonic() > deadline:
-            log.error("giving up reporting result for task %s: %s", task_id, failure)
-            return
-        log.warning(
-            "result report for task %s failed (%s) — retrying in %.0fs", task_id, failure, delay
-        )
-        time.sleep(delay)
-        delay = min(delay * 2, 30.0)
-
-
 def execute(task: dict, headers: dict, auth) -> dict:
     from kodo import log as kodo_log
 
@@ -783,24 +747,6 @@ def execute(task: dict, headers: dict, auth) -> dict:
     }
 
 
-def update_available(repo_root: Path) -> bool:
-    """True when origin/main has commits this checkout lacks. Any git or
-    network trouble reads as 'no update' — never take a working runner down
-    over a fetch hiccup."""
-    try:
-        subprocess.run(
-            ["git", "fetch", "--quiet", "origin", "main"],
-            cwd=repo_root, check=True, capture_output=True, timeout=60,
-        )
-        revs = subprocess.run(
-            ["git", "rev-parse", "HEAD", "FETCH_HEAD"],
-            cwd=repo_root, check=True, capture_output=True, text=True, timeout=10,
-        ).stdout.split()
-        return len(revs) == 2 and revs[0] != revs[1]
-    except (subprocess.SubprocessError, OSError):
-        return False
-
-
 def main(argv: list[str] | None = None) -> None:
     if argv is None:
         argv = sys.argv[1:]
@@ -828,144 +774,77 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     headers = {"X-Hive-Token": RUNNER_TOKEN, "X-Hive-Workspace": WORKSPACE_ID}
     auth = tuple(HIVE_BASIC_AUTH.split(":", 1)) if HIVE_BASIC_AUTH else None
-    roster = ChiefRoster(parse_urls(HIVE_URL), CHIEF_STATE_PATH)
 
-    def register(client: httpx.Client, *, boot: bool = False) -> tuple[str, list[str]]:
+    def payload(boot: bool) -> dict:
         backends, discoveries = discovery_payload()
-        capabilities = detect_capabilities()
-        data = client.post(
-            "/api/runners/register",
-            json={
-                "name": RUNNER_NAME,
-                "backends": backends,
-                "machine_id": MACHINE_ID,
-                "machine_name": MACHINE_NAME,
-                "machine_type": MACHINE_TYPE,
-                "machine_os": MACHINE_OS,
-                "machine_arch": MACHINE_ARCH,
-                "machine_kind": MACHINE_KIND,
-                "boot": boot,
-                "owner_user_id": RUNNER_OWNER,
-                "discoveries": discoveries,
-                "capabilities": capabilities,
-                "auto_probe": True,
-                "checkouts": collect_checkouts(),
-                "usage_snapshots": usage_snapshots(backends),
-            },
-        ).raise_for_status().json()
-        roster.merge_advertised(data.get("chief_urls", []))
-        return data["runner_id"], backends
+        if boot and not backends:
+            log.warning("no supported agents on PATH — registering anyway for visibility")
+        return {
+            "name": RUNNER_NAME,
+            "backends": backends,
+            "machine_id": MACHINE_ID,
+            "machine_name": MACHINE_NAME,
+            "machine_type": MACHINE_TYPE,
+            "machine_os": MACHINE_OS,
+            "machine_arch": MACHINE_ARCH,
+            "machine_kind": MACHINE_KIND,
+            "boot": boot,
+            "owner_user_id": RUNNER_OWNER,
+            "discoveries": discoveries,
+            "capabilities": detect_capabilities(),
+            "auto_probe": True,
+            "checkouts": collect_checkouts(),
+            "usage_snapshots": usage_snapshots(backends),
+        }
 
-    def connect(*, boot: bool = False) -> tuple[httpx.Client, str, list[str]]:
-        """Try roster candidates in order until a chief accepts registration.
-        The leader lease guarantees at most one live chief, so the first
-        responder is the right one."""
-        last_error: Exception | None = None
-        for url in roster.candidates():
-            candidate = httpx.Client(base_url=url, headers=headers, timeout=40.0, auth=auth)
-            try:
-                runner_id, backends = register(candidate, boot=boot)
-            except (httpx.HTTPError, OSError) as exc:
-                candidate.close()
-                last_error = exc
-                continue
-            global HIVE_URL
-            HIVE_URL = url  # task-execution and heartbeat clients follow the winner
-            roster.mark_success(url)
-            if backends:
-                log.info(
-                    "registered as %s (%s) at %s with backends %s",
-                    RUNNER_NAME, runner_id, url, backends,
-                )
-            else:
-                log.warning(
-                    "registered as %s (%s) at %s with no supported agents on PATH",
-                    RUNNER_NAME, runner_id, url,
-                )
-            return candidate, runner_id, backends
-        raise ConnectionError(
-            f"no chief reachable among {roster.candidates()}: {last_error}"
-        )
+    def on_connected(url: str) -> None:
+        global HIVE_URL
+        HIVE_URL = url  # task-execution and cancel-watch clients follow the winner
 
-    while True:
-        try:
-            client, runner_id, backends = connect(boot=True)
-            break
-        except OSError as exc:
-            log.warning("%s — retrying in 10s", exc)
-            time.sleep(10)
+    def run_task(task: dict) -> dict:
+        log.info("executing %s task %s on %s", task["kind"], task["id"], task["repo"])
+        result = execute(task, headers, auth)
+        log.info("task %s done (error=%s)", task["id"], result.get("is_error"))
+        return result
 
-    def heartbeat() -> None:
-        # Keeps last_seen fresh while a long task blocks the main loop;
-        # otherwise the chief declares us offline and orphans the task.
-        # A fresh client each beat follows HIVE_URL when the chief moves.
-        while True:
-            time.sleep(30)
-            try:
-                with httpx.Client(
-                    base_url=HIVE_URL, headers=headers, timeout=15.0, auth=auth
-                ) as hb:
-                    register(hb)
-            except (httpx.HTTPError, OSError):
-                pass
-
-    threading.Thread(target=heartbeat, daemon=True).start()
-
-    failures = 0
     last_update_check = time.monotonic()
     update_checked_for = ""  # chief version we already fetched for, to fetch once per skew
-    while True:
-        try:
-            if SELF_UPDATE and time.monotonic() - last_update_check > UPDATE_CHECK_INTERVAL_S:
-                last_update_check = time.monotonic()
-                if update_available(REPO_ROOT):
-                    # Between tasks by construction: nothing is in flight here.
-                    log.info("origin/main moved — exiting so the service wrapper updates us")
-                    return
-            if client is None:
-                client, runner_id, backends = connect()
-                failures = 0
-            response = client.post(f"/api/runners/{runner_id}/poll")
-            if response.status_code == 404:
-                runner_id, backends = register(client)
-                continue
-            failures = 0
-            data = response.raise_for_status().json()
-            chief_version = data.get("chief_version", "")
-            if (
-                SELF_UPDATE
-                and chief_version
-                and chief_version not in (RUNNER_VERSION, update_checked_for)
-            ):
-                # The chief changed version (a deploy restarts it): check for an
-                # update now rather than waiting out the periodic timer, so the
-                # fleet runs mixed versions for seconds, not minutes. The
-                # update_available() gate matters: a chief on uncommitted code
-                # (push.sh ships working trees) must not exit-loop runners that
-                # can only ever update to origin/main — hence the memo.
-                update_checked_for = chief_version
-                last_update_check = time.monotonic()
-                if update_available(REPO_ROOT):
-                    log.info(
-                        "chief is at %s, we are at %s and origin/main moved — "
-                        "exiting so the service wrapper updates us",
-                        chief_version, RUNNER_VERSION,
-                    )
-                    return
-            task = data.get("task")
-            if not task:
-                continue
-            log.info("executing %s task %s on %s", task["kind"], task["id"], task["repo"])
-            result = execute(task, headers, auth)
-            log.info("task %s done (error=%s)", task["id"], result.get("is_error"))
-            report_result(task["id"], result, headers, auth)
-        except (httpx.HTTPError, OSError) as exc:
-            failures += 1
-            log.warning("transient error: %s — retrying in 10s", exc)
-            if client is not None and failures >= RECONNECT_AFTER_FAILURES:
-                client.close()
-                client = None  # next iteration re-resolves across the roster
-            time.sleep(10)
+
+    def between_tasks(data: dict) -> str:
+        # Self-update (dedicated service clones only): exit between tasks when
+        # origin/main moved; the service wrapper pulls and respawns. Checked on
+        # a timer, and immediately when the chief's version changes (a deploy
+        # restarts it) so the fleet runs mixed versions for seconds, not
+        # minutes. The update_available() gate matters: a chief on uncommitted
+        # code (push.sh ships working trees) must not exit-loop runners that
+        # can only ever update to origin/main — hence the memo.
+        nonlocal last_update_check, update_checked_for
+        if not SELF_UPDATE:
+            return ""
+        chief_version = data.get("chief_version", "")
+        version_skew = chief_version and chief_version not in (RUNNER_VERSION, update_checked_for)
+        timer_due = time.monotonic() - last_update_check > UPDATE_CHECK_INTERVAL_S
+        if not (timer_due or version_skew):
+            return ""
+        if version_skew:
+            update_checked_for = chief_version
+        last_update_check = time.monotonic()
+        if update_available(REPO_ROOT):
+            return "origin/main moved — exiting so the service wrapper updates us"
+        return ""
+
+    WorkerLoop(
+        WorkerConfig(
+            urls=parse_urls(HIVE_URL),
+            state_path=CHIEF_STATE_PATH,
+            headers=headers,
+            auth=auth,
+        ),
+        payload=payload,
+        execute=run_task,
+        on_connected=on_connected,
+        between_tasks=between_tasks,
+    ).run()
 
 
 if __name__ == "__main__":
