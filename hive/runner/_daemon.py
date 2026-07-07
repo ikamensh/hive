@@ -35,7 +35,7 @@ from hive.runner._backends import (
 from hive.runner._agent_results import call_agent, result_spec_for_task
 from hive.runner._chief_roster import ChiefRoster, parse_urls
 from hive.runner._limits import collect_usage, parse_reset_hint
-from hive.runner._machine import machine_metadata
+from hive.fleet import machine_metadata
 from hive.models import DEFAULT_WORKSPACE_ID
 from hive.version import get_version
 

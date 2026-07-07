@@ -1,11 +1,25 @@
-"""Local machine metadata used for runner enrollment."""
+"""Who is this machine: OS/arch/type detection and a stable identity.
+
+`machine_metadata()` answers "what kind of host am I on" (overridable via
+`HIVE_MACHINE_*` env vars); `stable_machine_id()` turns a human-chosen machine
+name into a deterministic id, so re-registrations reuse the same identity.
+"""
 
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
 import subprocess
 from collections.abc import Mapping
+
+
+def stable_machine_id(name: str, scope: str = "default") -> str:
+    """Deterministic machine id for a named machine within a scope (e.g. a
+    workspace). The same (scope, name) always maps to the same id, so restarts
+    and re-enrollments converge on one machine record."""
+    digest = hashlib.sha256(f"{scope}:{name}".encode()).hexdigest()[:16]
+    return f"machine-{digest}"
 
 
 def detect_machine_os() -> str:

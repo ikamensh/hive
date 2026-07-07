@@ -19,6 +19,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from hive.config.settings import Config
+from hive.fleet import stable_machine_id
 from hive.models import (
     ROLE_ADMIN,
     ROLE_RESOURCE_PROVIDER,
@@ -62,11 +63,6 @@ def _unb64(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
-def _machine_id(workspace_id: str, name: str) -> str:
-    digest = hashlib.sha256(f"{workspace_id}:{name}".encode()).hexdigest()[:16]
-    return f"machine-{digest}"
-
-
 def ensure_workspace(store, config: Config) -> Workspace:
     workspace = store.get(Workspace, config.workspace_id)
     if workspace:
@@ -87,7 +83,7 @@ def ensure_machine(
     machine_arch: str = "",
     device_kind: str = "",
 ) -> Machine:
-    machine_id = machine_id or _machine_id(workspace_id, name)
+    machine_id = machine_id or stable_machine_id(name, workspace_id)
     now = time.time()
     machine = store.get(Machine, machine_id)
     if machine is None or machine.workspace_id != workspace_id:

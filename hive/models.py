@@ -8,6 +8,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from hive.fleet import DEFAULT_LIVENESS, Liveness
+
 
 def new_id() -> str:
     return uuid.uuid4().hex[:12]
@@ -441,10 +443,8 @@ class Runner(BaseModel):
     capabilities: list[str] = []  # runner-local capabilities such as browser/docker
     last_seen: float = Field(default_factory=now)
 
-    ONLINE_WINDOW_S: float = 90.0
-
     def online(self) -> bool:
-        return now() - self.last_seen < self.ONLINE_WINDOW_S
+        return DEFAULT_LIVENESS.assess(self.last_seen) is Liveness.online
 
 
 class ResourceUsability(StrEnum):

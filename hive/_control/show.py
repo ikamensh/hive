@@ -29,12 +29,8 @@ from hive._control.capacity import (
     subscription_candidates,
 )
 from hive._control.limits import limits_view
-from hive._control.supervisor import (
-    MACHINE_DARK_AFTER_S,
-    MACHINE_DARK_DEFAULT_S,
-    MACHINE_RETIRED_AFTER_S,
-    Supervisor,
-)
+from hive._control.supervisor import Supervisor
+from hive.fleet import DEFAULT_LIVENESS, Liveness
 from hive._workstreams.issues import RESOLVE_BACKEND
 from hive._workstreams.testing import auto_testing_decision
 from hive.config.settings import Config
@@ -75,8 +71,7 @@ def machines_view(groups: list[MachineGroup], chief_machine_name: str = "") -> l
     rows = []
     for g in groups:
         m = g.machine
-        dark_after = MACHINE_DARK_AFTER_S.get(m.device_kind, MACHINE_DARK_DEFAULT_S)
-        dark_for = now - g.last_seen
+        verdict = DEFAULT_LIVENESS.assess(g.last_seen, m.device_kind, now=now)
         rows.append(
             {
                 "id": m.id,
@@ -91,8 +86,8 @@ def machines_view(groups: list[MachineGroup], chief_machine_name: str = "") -> l
                 "kind": m.kind,
                 "online": g.online,
                 "last_seen": g.last_seen,
-                "dark": not g.online and dark_after < dark_for < MACHINE_RETIRED_AFTER_S,
-                "retired": dark_for >= MACHINE_RETIRED_AFTER_S,
+                "dark": verdict is Liveness.dark,
+                "retired": verdict is Liveness.retired,
                 "runners": [
                     {
                         "name": r.name,

@@ -20,11 +20,8 @@ import time
 from hive.models import HumanTask, HumanTaskStatus, Machine
 from hive.persistence.store import MemoryStore
 from hive._control.escalation import resolve_open_todos
-from hive._control.supervisor import (
-    MACHINE_DARK_AFTER_S,
-    MACHINE_RETIRED_AFTER_S,
-    Supervisor,
-)
+from hive._control.supervisor import Supervisor
+from hive.fleet import DEFAULT_LIVENESS
 
 HOUR = 3600.0
 
@@ -46,7 +43,7 @@ def open_todos(store):
 def test_dark_machine_escalates_once():
     store = MemoryStore()
     supervisor = make_supervisor(store)
-    put_machine(store, dark_for=MACHINE_DARK_AFTER_S["laptop"] + HOUR)
+    put_machine(store, dark_for=DEFAULT_LIVENESS.dark_after("laptop") + HOUR)
 
     supervisor.check_dark_machines()
     supervisor.check_dark_machines()  # outage persists across many steps
@@ -60,7 +57,7 @@ def test_dark_machine_escalates_once():
 def test_todo_closes_when_machine_returns():
     store = MemoryStore()
     supervisor = make_supervisor(store)
-    machine = put_machine(store, dark_for=MACHINE_DARK_AFTER_S["laptop"] + HOUR)
+    machine = put_machine(store, dark_for=DEFAULT_LIVENESS.dark_after("laptop") + HOUR)
     supervisor.check_dark_machines()
     assert len(open_todos(store)) == 1
 
@@ -77,7 +74,7 @@ def test_todo_closes_when_machine_returns():
 def test_retired_machine_stays_silent():
     store = MemoryStore()
     supervisor = make_supervisor(store)
-    put_machine(store, name="selftest-old", dark_for=MACHINE_RETIRED_AFTER_S + HOUR)
+    put_machine(store, name="selftest-old", dark_for=DEFAULT_LIVENESS.retired_after_s + HOUR)
 
     supervisor.check_dark_machines()
 
@@ -87,13 +84,13 @@ def test_retired_machine_stays_silent():
 def test_new_offline_episode_files_new_todo():
     store = MemoryStore()
     supervisor = make_supervisor(store)
-    machine = put_machine(store, dark_for=MACHINE_DARK_AFTER_S["laptop"] + HOUR)
+    machine = put_machine(store, dark_for=DEFAULT_LIVENESS.dark_after("laptop") + HOUR)
     supervisor.check_dark_machines()
     machine.last_seen = time.time()
     store.put(machine)
     resolve_open_todos(store)  # recovery closes the first todo
 
-    machine.last_seen = time.time() - (MACHINE_DARK_AFTER_S["laptop"] + HOUR)
+    machine.last_seen = time.time() - (DEFAULT_LIVENESS.dark_after("laptop") + HOUR)
     store.put(machine)
     supervisor.check_dark_machines()  # second outage
 

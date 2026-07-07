@@ -19,6 +19,7 @@ from collections import defaultdict
 from typing import Callable
 
 from hive._control.escalation import escalate, resolve_open_todos
+from hive.fleet import DEFAULT_LIVENESS, Liveness
 from hive.models import (
     AgentConversation,
     ConversationStatus,
@@ -45,16 +46,6 @@ log = logging.getLogger("hive._control.supervisor")
 RUNNER_OFFLINE_TASK_FAIL_S = 300.0
 LEASE_TTL_S = 60.0  # renewed every tick (15s); a dead leader is superseded within a minute
 PARALLEL_REPO_TASKS = (TaskKind.test_sweep, TaskKind.test_reproduce, TaskKind.test_judge)
-
-# Dark-machine escalation: a machine that heartbeated recently but has now been
-# silent past its availability class's threshold gets an operator todo (a dead
-# laptop runner once went unnoticed for 9 days). Laptops sleep for hours as a
-# matter of course; servers should never be quiet.
-MACHINE_DARK_AFTER_S = {"laptop": 24 * 3600.0, "server": 4 * 3600.0}
-MACHINE_DARK_DEFAULT_S = 24 * 3600.0
-# Silent longer than this = retired, not broken: no todo. Keeps graveyard rows
-# (old selftest machines, replaced hosts) from generating noise forever.
-MACHINE_RETIRED_AFTER_S = 7 * 24 * 3600.0
 
 
 def utc_day_start() -> float:
@@ -367,9 +358,8 @@ class Supervisor:
         the todo sweep."""
         now = time.time()
         for machine in self.store.list(Machine, workspace_id=self.workspace_id):
-            dark_for = now - machine.last_seen
-            dark_after = MACHINE_DARK_AFTER_S.get(machine.device_kind, MACHINE_DARK_DEFAULT_S)
-            if dark_after <= dark_for < MACHINE_RETIRED_AFTER_S:
+            verdict = DEFAULT_LIVENESS.assess(machine.last_seen, machine.device_kind, now=now)
+            if verdict is Liveness.dark:
                 since = datetime.datetime.fromtimestamp(
                     machine.last_seen, datetime.UTC
                 ).strftime("%Y-%m-%d %H:%M UTC")
