@@ -9,6 +9,7 @@ directory; not part of the package.
 from __future__ import annotations
 
 import threading
+import time
 
 import uvicorn
 from fastapi import FastAPI
@@ -46,7 +47,7 @@ class ToyChief:
     def start(self) -> "ToyChief":
         self._thread.start()
         while not self._server.started:
-            pass
+            time.sleep(0.01)
         return self
 
     def stop(self) -> None:

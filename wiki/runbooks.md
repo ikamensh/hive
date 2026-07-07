@@ -21,7 +21,7 @@ it. The chief reads `last_seen` through two thresholds:
 
 | Threshold | Constant | Meaning |
 |---|---|---|
-| 90s | `Runner.ONLINE_WINDOW_S` (`hive/models.py`) | `Runner.online()` — drives dispatch eligibility and the UI's online/offline badge |
+| 90s | `LivenessPolicy.online_window_s` (`hive/fleet/liveness.py`) | `Runner.online()` — drives dispatch eligibility and the UI's online/offline badge |
 | 300s | `RUNNER_OFFLINE_TASK_FAIL_S` (`hive/_control/supervisor.py`) | `Supervisor.fail_orphaned_tasks()` declares the runner gone and fails its in-flight task |
 
 So "offline mid-task" means: **no heartbeat for 5 minutes while a task was

@@ -8,22 +8,25 @@ This file is the lean map (always loaded). Per-file detail is in `wiki/code-map.
 
 ## Layout
 
-Files are grouped into subpackages by responsibility — the folder name tells you what lives there:
+Files are grouped into subpackages by responsibility — the folder name tells you what lives there. Five subpackages are **standalone**: usable outside hive, import nothing else from hive (enforced by `tests/test_isolation.py`), each with a facade `__init__` and two runnable demos under `demos/<package>/`:
 
 ```
 hive/
-  models.py            domain vocabulary (imported everywhere)
+  models.py            domain vocabulary (imported by the app layers)
   api.py  cli.py       the two entrypoints
-  config/              how this install is configured (settings, machine-local file)
-  persistence/         where data lives (store, storage selection, blobstore)
-  llm/                 talking to models (adapters, prompts/, pricing, model_intel)
+  config/              how this install is configured (settings, machine-local file, storage selection)
+  persistence/         [standalone] typed doc store + blobstore over any pydantic models; leader lease
+  llm/                 [standalone] tool-loop LLM access (adapters, prompts/, pricing, model_intel)
+  agents/              [standalone] coding-agent CLIs: registry, run_agent, probes, usage gauges
+  fleet/               [standalone] machine identity + liveness policy
+  worker/              [standalone] worker lifecycle: chief roster + register/poll/execute/report loop
   _control/            the brain: supervisor, orchestrator, escalation
   _workstreams/        the work pipelines: issues, testing, critique, preflight
-  runner/              the execution side: daemon, local, backends, *_results, machine
+  runner/              hive's runner: daemon composition, chief-side registration, task results
   _integrations/       external services: github_repos, specrepo, auth
 ```
 
-For what each module does and how the pipelines wire together, see `wiki/code-map.md`.
+For what each module does and how the pipelines wire together, see `wiki/code-map.md`; the standalone-subsystem inventory and its rules are in `wiki/subsystems.md`.
 
 ## Conventions
 

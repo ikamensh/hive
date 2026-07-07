@@ -140,7 +140,7 @@ RUNNER_POLL_WAIT_S = 5.0
 RUNNER_POLL_SLEEP_S = 1.0
 # Persist a polling runner's last_seen at most this often. Firestore charges
 # per write, the register() heartbeat already refreshes every 30s, and
-# Runner.ONLINE_WINDOW_S is 90s — so per-second bumps buy nothing.
+# the liveness online window is 90s — so per-second bumps buy nothing.
 RUNNER_LAST_SEEN_REFRESH_S = 15.0
 
 
