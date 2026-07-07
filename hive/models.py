@@ -1,10 +1,15 @@
-"""Domain models. All persisted via Store as plain dicts (pydantic round-trip)."""
+"""Domain models. All persisted via Store as plain dicts (pydantic round-trip).
+
+Collection names derive from class names (`hive.persistence.collection_name`);
+models with irregular plurals declare `__collection__`. `ALL_MODELS` is the
+full persisted vocabulary, for whole-store operations (export, migration)."""
 
 from __future__ import annotations
 
 import time
 import uuid
 from enum import StrEnum
+from typing import ClassVar
 
 from pydantic import BaseModel, Field
 
@@ -689,6 +694,8 @@ class StoryOracleStatus(StrEnum):
 
 
 class Story(BaseModel):
+    __collection__: ClassVar[str] = "stories"
+
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
     project_id: str
@@ -803,6 +810,8 @@ class Finding(BaseModel):
 class Feedback(BaseModel):
     """Explicit human feedback on a task or question. Future GEPA input."""
 
+    __collection__: ClassVar[str] = "feedback"
+
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
     project_id: str
@@ -876,3 +885,31 @@ class Checkout(BaseModel):
     dirty: bool = False  # uncommitted working-tree changes
     env_status: str = "unknown"  # reserved: dependency-setup readiness
     last_reported_at: float = Field(default_factory=now)
+
+
+# Every persisted model, for whole-store operations (export, migration).
+ALL_MODELS: tuple[type[BaseModel], ...] = (
+    AgentConversation,
+    Checkout,
+    Directive,
+    Feedback,
+    Finding,
+    HumanTask,
+    IssueRun,
+    LimitEvent,
+    Machine,
+    OrchestratorRun,
+    Project,
+    ProjectWorkstream,
+    Question,
+    Resource,
+    Runner,
+    Story,
+    Subscription,
+    Task,
+    TestEpisode,
+    User,
+    Workspace,
+    WorkspaceMembership,
+    Workstream,
+)

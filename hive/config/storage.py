@@ -5,16 +5,17 @@ from __future__ import annotations
 import uuid
 import time
 
-from hive.persistence.blobstore import GcsBlobStore, LocalBlobStore
-from hive.config.settings import Config
-from hive.models import DEFAULT_WORKSPACE_ID, Workspace
-from hive.persistence.store import (
+from hive.persistence import (
     CachedStore,
     FileStore,
     FirestoreStore,
+    GcsBlobStore,
+    LocalBlobStore,
     StoreBase,
-    _COLLECTIONS,
+    collection_name,
 )
+from hive.config.settings import Config
+from hive.models import ALL_MODELS, DEFAULT_WORKSPACE_ID, Workspace
 
 
 class ManagedStateConfigError(RuntimeError):
@@ -89,8 +90,8 @@ def storage_info(store: StoreBase, config: Config, blobs) -> dict:
 
     counts: dict[str, int] = {}
     if backend == "file":
-        for model, name in _COLLECTIONS.items():
-            counts[name] = len(store.list(model))
+        for model in ALL_MODELS:
+            counts[collection_name(model)] = len(store.list(model))
 
     fully_managed = backend == "firestore" and blob_backend == "gcs"
     return {
@@ -109,11 +110,11 @@ def storage_info(store: StoreBase, config: Config, blobs) -> dict:
 def copy_store(source: StoreBase, dest: StoreBase) -> dict[str, int]:
     """Copy every document and org context from ``source`` to ``dest``."""
     counts: dict[str, int] = {}
-    for model, collection in _COLLECTIONS.items():
+    for model in ALL_MODELS:
         items = source.list(model)
         for item in items:
             dest.put(item)
-        counts[collection] = len(items)
+        counts[collection_name(model)] = len(items)
 
     workspace_ids = {ws.id for ws in source.list(Workspace)}
     workspace_ids.add(DEFAULT_WORKSPACE_ID)
@@ -137,7 +138,7 @@ def copy_blobs(source: LocalBlobStore, dest: GcsBlobStore) -> int:
 
 
 def _verify_store_copy(source: StoreBase, dest: StoreBase) -> None:
-    for model in _COLLECTIONS:
+    for model in ALL_MODELS:
         for item in source.list(model):
             copied = dest.get(model, item.id)
             if copied is None:

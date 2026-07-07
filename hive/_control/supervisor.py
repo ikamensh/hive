@@ -31,6 +31,8 @@ from hive.models import (
     OrchestratorRun,
     Project,
     ProjectState,
+    Question,
+    QuestionStatus,
     Resource,
     Runner,
     Task,
@@ -290,7 +292,7 @@ class Supervisor:
         state = compute_state(
             project,
             workstreams,
-            len(self.store.open_questions(project.id)),
+            len(self.store.list(Question, project_id=project.id, status=QuestionStatus.open)),
             tasks,
             self.available_backends(),
             self.over_budget(project),
@@ -645,8 +647,8 @@ class Supervisor:
             )
             needs_decision = (
                 state == ProjectState.working
-                and not self.store.tasks_in(project.id, TaskStatus.running)
-                and not self.store.tasks_in(project.id, TaskStatus.pending)
+                and not self.store.list(Task, project_id=project.id, status=TaskStatus.running)
+                and not self.store.list(Task, project_id=project.id, status=TaskStatus.pending)
                 and heartbeat_due
             )
             # Pending work is stuck on a backend no online runner offers, but

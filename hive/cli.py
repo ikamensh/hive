@@ -842,7 +842,7 @@ def _run_chief(args: argparse.Namespace) -> None:
 
 def _run_doctor(args: argparse.Namespace) -> None:
     from hive.config.settings import Config
-    from hive.persistence.storage import managed_state_doctor
+    from hive.config.storage import managed_state_doctor
 
     prepare_run_env(os.environ, load_stored_config())
     if args.doctor_command == "storage":
@@ -856,7 +856,7 @@ def _run_doctor(args: argparse.Namespace) -> None:
 
 def _run_migrate_local_state(args: argparse.Namespace) -> None:
     from hive.persistence.blobstore import LocalBlobStore
-    from hive.persistence.storage import migrate_local_state
+    from hive.config.storage import migrate_local_state
     from hive.persistence.store import FileStore
 
     data_dir = Path(args.data_dir).expanduser()

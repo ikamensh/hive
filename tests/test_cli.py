@@ -733,7 +733,7 @@ def test_doctor_storage_uses_managed_state_config(monkeypatch, capsys):
     monkeypatch.setenv("HIVE_RUNNER_TOKEN", "runner")
     monkeypatch.setattr("hive.cli.load_stored_config", lambda: {})
     monkeypatch.setattr(
-        "hive.persistence.storage.managed_state_doctor",
+        "hive.config.storage.managed_state_doctor",
         lambda config: {
             "ok": True,
             "gcp_project": config.gcp_project,
@@ -778,7 +778,7 @@ def test_migrate_local_state_command(monkeypatch, tmp_path, capsys):
         calls.append((store.root, blobs.root, kwargs))
         return {"ok": True, "documents": {}, "blobs": 0, "verified": kwargs["verify"]}
 
-    monkeypatch.setattr("hive.persistence.storage.migrate_local_state", fake_migrate)
+    monkeypatch.setattr("hive.config.storage.migrate_local_state", fake_migrate)
     monkeypatch.setattr("hive.cli.load_stored_config", lambda: {})
 
     from hive.cli import main

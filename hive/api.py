@@ -113,7 +113,7 @@ from hive.models import (
     WorkstreamSource,
     WorkstreamStatus,
 )
-from hive.persistence.storage import storage_info
+from hive.config.storage import storage_info
 from hive._control.capacity import (
     group_machines,
     machine_cards,
@@ -2057,7 +2057,7 @@ def make_todo_triage(store, config: Config) -> Callable[[], None]:
 def production_app() -> FastAPI:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     config = Config.from_env()
-    from hive.persistence.storage import make_blob_store, make_store
+    from hive.config.storage import make_blob_store, make_store
 
     store = make_store(config)
     blobs = make_blob_store(config)

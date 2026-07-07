@@ -5,7 +5,7 @@ import pytest
 from hive.persistence.blobstore import LocalBlobStore
 from hive.config.settings import Config
 from hive.models import Project
-from hive.persistence.storage import (
+from hive.config.storage import (
     ManagedStateConfigError,
     managed_state_missing,
     make_blob_store,
@@ -70,8 +70,8 @@ def test_production_app_refuses_unmanaged_state(monkeypatch, tmp_path):
 
 
 def test_runtime_storage_uses_managed_backends(tmp_path, monkeypatch):
-    monkeypatch.setattr("hive.persistence.storage.FirestoreStore", FakeFirestoreStore)
-    monkeypatch.setattr("hive.persistence.storage.GcsBlobStore", FakeGcsBlobStore)
+    monkeypatch.setattr("hive.config.storage.FirestoreStore", FakeFirestoreStore)
+    monkeypatch.setattr("hive.config.storage.GcsBlobStore", FakeGcsBlobStore)
     cfg = config(tmp_path, gcp_project="proj", gcs_bucket="bucket")
 
     store = make_store(cfg)
@@ -111,8 +111,8 @@ def test_migrate_local_state_requires_gcs_bucket(tmp_path):
 def test_migrate_local_state_copies_and_verifies(tmp_path, monkeypatch):
     fake_store = FakeFirestoreStore("proj")
     fake_blobs = FakeGcsBlobStore("bucket")
-    monkeypatch.setattr("hive.persistence.storage.FirestoreStore", lambda project: fake_store)
-    monkeypatch.setattr("hive.persistence.storage.GcsBlobStore", lambda bucket: fake_blobs)
+    monkeypatch.setattr("hive.config.storage.FirestoreStore", lambda project: fake_store)
+    monkeypatch.setattr("hive.config.storage.GcsBlobStore", lambda bucket: fake_blobs)
 
     source = FileStore(tmp_path / "store")
     project = source.put(Project(name="p"))

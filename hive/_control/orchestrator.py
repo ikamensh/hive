@@ -436,7 +436,9 @@ class Tools:
             )
             if w.source != WorkstreamSource.issue
         ]
-        open_questions = self.store.open_questions(self.project.id)
+        open_questions = self.store.list(
+            Question, project_id=self.project.id, status=QuestionStatus.open
+        )
         if unfinished or active or open_questions:
             return (
                 f"rejected: {len(unfinished)} unfinished tasks, {len(active)} active "

@@ -10,7 +10,7 @@ import pytest
 
 from hive.models import Question, QuestionStatus, Project, Resource, Task, TaskStatus, User
 from hive.persistence.store import FileStore, MemoryStore, StoreBase
-from hive.persistence.storage import copy_store
+from hive.config.storage import copy_store
 
 
 def test_memory_store_is_a_storebase():
@@ -69,16 +69,17 @@ def test_update_is_lossless_under_concurrent_writers():
     assert store.get(Resource, resource.id).total_tasks == workers * per_worker
 
 
-def test_convenience_queries():
+def test_filtered_queries():
     store = MemoryStore()
     q_open = store.put(Question(project_id="p", text="open?"))
     store.put(Question(project_id="p", text="answered?", status=QuestionStatus.answered))
     store.put(Task(project_id="p", workstream_id="w", repo="r", instructions="i",
                    status=TaskStatus.running))
 
-    assert [q.id for q in store.open_questions("p")] == [q_open.id]
-    assert len(store.tasks_in("p", TaskStatus.running)) == 1
-    assert store.tasks_in("p", TaskStatus.done) == []
+    open_qs = store.list(Question, project_id="p", status=QuestionStatus.open)
+    assert [q.id for q in open_qs] == [q_open.id]
+    assert len(store.list(Task, project_id="p", status=TaskStatus.running)) == 1
+    assert store.list(Task, project_id="p", status=TaskStatus.done) == []
 
 
 def test_leader_lease():
