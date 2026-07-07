@@ -1,6 +1,7 @@
 import json
 
-from hive.runner._agent_results import ResultSpec, VerifyResult, call_agent
+from hive.agents import ResultSpec, call_agent
+from hive.runner._agent_results import VerifyResult
 
 
 class FakeResult:
@@ -52,7 +53,14 @@ def test_call_agent_accepts_pydantic_model_and_reads_valid_result(tmp_path):
         )
         return FakeResult("VERDICT omitted on purpose", cost=1.5, input_tokens=10, output_tokens=3)
 
-    result = call_agent(FakeAgent([write_valid]), task, project_dir, VerifyResult)
+    result = call_agent(
+        FakeAgent([write_valid]),
+        instructions=task["instructions"],
+        workdir=project_dir,
+        result_spec=VerifyResult,
+        task_id=task["id"],
+        agent_name=task["kind"],
+    )
 
     assert result.structured_result["outcome"] == "accept"
     assert result.structured_result["commands_run"] == ["pytest"]
@@ -79,7 +87,14 @@ def test_call_agent_repairs_missing_result_in_same_session(tmp_path):
         return FakeResult("fixed result", cost=0.25, input_tokens=4, output_tokens=1)
 
     agent = FakeAgent([forget, repair])
-    result = call_agent(agent, task, project_dir, ResultSpec(VerifyResult, repair_attempts=1))
+    result = call_agent(
+        agent,
+        instructions=task["instructions"],
+        workdir=project_dir,
+        result_spec=ResultSpec(VerifyResult, repair_attempts=1),
+        task_id=task["id"],
+        agent_name=task["kind"],
+    )
 
     assert [name for name, _ in agent.calls] == ["verify", "verify-result-repair"]
     assert result.text == "fixed result"
@@ -107,9 +122,11 @@ def test_call_agent_returns_validation_error_after_repair_budget(tmp_path):
 
     result = call_agent(
         FakeAgent([wrong_task, still_wrong]),
-        task,
-        project_dir,
-        ResultSpec(VerifyResult, repair_attempts=1),
+        instructions=task["instructions"],
+        workdir=project_dir,
+        result_spec=ResultSpec(VerifyResult, repair_attempts=1),
+        task_id=task["id"],
+        agent_name=task["kind"],
     )
 
     assert result.structured_result == {}

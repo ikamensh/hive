@@ -2,8 +2,8 @@ import subprocess
 
 import pytest
 
-from hive.runner import _backends as backends
-from hive.runner._backends import BackendDiscovery, REGISTRY, discover_backend
+from hive.agents import backends
+from hive.agents import BackendDiscovery, REGISTRY, discover_backend
 from hive.runner import _daemon as runner
 
 

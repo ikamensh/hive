@@ -44,7 +44,7 @@ from hive.models import (
     Runner,
     Subscription,
 )
-from hive.runner._backends import BACKEND_NAMES, backend_licensing
+from hive.agents import BACKEND_NAMES, backend_licensing
 
 
 _ERRORISH = ("error", "fail", "not logged", "denied", "unauthorized", "authentication", "quota")

@@ -1,7 +1,6 @@
 import subprocess
 
-from hive.runner._backends import PROBE_MARKER
-from hive.runner._daemon import ensure_probe_repo, validate_probe_result
+from hive.agents import PROBE_MARKER, ensure_probe_repo, validate_probe_result
 
 
 def _porcelain(path):
@@ -10,15 +9,11 @@ def _porcelain(path):
     ).stdout.strip()
 
 
-def test_ensure_probe_repo_builds_clean_repo_and_self_cleans(tmp_path, monkeypatch):
+def test_ensure_probe_repo_builds_clean_repo_and_self_cleans(tmp_path):
     """The runner builds its own probe repo (no chief path, so remote
     runners can probe), idempotently, and resets it clean each time so a prior
     probe's mess never fails the next."""
-    import hive.runner._daemon as daemon
-
-    monkeypatch.setattr(daemon, "WORKDIR", tmp_path)
-
-    repo = ensure_probe_repo()
+    repo = ensure_probe_repo(tmp_path)
     assert (repo / ".git").exists()
     assert _porcelain(repo) == ""  # fresh repo is clean
     text, is_error = validate_probe_result(repo, PROBE_MARKER, False)
@@ -26,7 +21,7 @@ def test_ensure_probe_repo_builds_clean_repo_and_self_cleans(tmp_path, monkeypat
 
     # A dirty tree (as a misbehaving probe might leave) is restored on next build.
     (repo / "scratch.txt").write_text("junk left by a probe")
-    again = ensure_probe_repo()
+    again = ensure_probe_repo(tmp_path)
     assert again == repo
     assert _porcelain(repo) == ""
 

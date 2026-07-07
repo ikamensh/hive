@@ -24,17 +24,19 @@ from pathlib import Path
 
 import httpx
 
-from hive.runner._backends import (
+from hive.agents import (
     BACKEND_NAMES,
-    PROBE_MARKER,
     classify_failure,
+    collect_usage,
     detected_backend_names,
     discover_backends,
-    make_session,
+    ensure_probe_repo,
+    parse_reset_hint,
+    run_agent,
+    validate_probe_result,
 )
-from hive.runner._agent_results import call_agent, result_spec_for_task
+from hive.runner._agent_results import result_spec_for_task
 from hive.runner._chief_roster import ChiefRoster, parse_urls
-from hive.runner._limits import collect_usage, parse_reset_hint
 from hive.fleet import machine_metadata
 from hive.models import DEFAULT_WORKSPACE_ID
 from hive.version import get_version
@@ -492,31 +494,6 @@ def _git(args: list[str], cwd: Path, timeout: float = 120.0) -> subprocess.Compl
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
 
 
-def ensure_probe_repo() -> Path:
-    """A throwaway local git repo the runner builds itself for usability probes.
-
-    Probes only need *some* clean git repo to prove a backend can run and leave
-    the tree tidy. Building it locally — rather than cloning a path on the
-    chief — means a probe needs no shared filesystem and no network, so
-    it works for any runner, including ones on machines remote from the
-    chief (the normal case for Hive)."""
-    path = WORKDIR / "agent-probe-repo"
-    path.mkdir(parents=True, exist_ok=True)
-    if not (path / ".git").exists():
-        _git(["init", "-b", "main"], path, 60)
-        _git(["config", "user.email", "hive-probe@example.invalid"], path)
-        _git(["config", "user.name", "Hive Probe"], path)
-        (path / "README.md").write_text(
-            "# Hive agent probe\n\nThis repository is only for backend usability checks.\n"
-        )
-        _git(["add", "README.md"], path)
-        _git(["commit", "-m", "Initial probe repo"], path)
-    else:  # reuse across probes, but always start from a clean tree
-        _git(["reset", "--hard"], path, 60)
-        _git(["clean", "-fd"], path, 60)
-    return path
-
-
 def _checkout_facts(repo_dir: Path) -> dict | None:
     """Read the git drift facts for one checkout: origin URL, HEAD, branch,
     ahead/behind vs its upstream, and whether the tree is dirty. Best-effort —
@@ -711,11 +688,10 @@ def report_result(task_id: str, result: dict, headers: dict, auth) -> None:
 
 def execute(task: dict, headers: dict, auth) -> dict:
     from kodo import log as kodo_log
-    from kodo.agent import Agent
 
     if task["kind"] == "probe":
         # Probes run in a self-built local repo, never a chief path.
-        project_dir = ensure_probe_repo()
+        project_dir = ensure_probe_repo(WORKDIR)
     else:
         try:
             project_dir = checkout(
@@ -735,15 +711,10 @@ def execute(task: dict, headers: dict, auth) -> dict:
 
     with _git_auth_environment(task["repo"]):
         kodo_log.init(kodo_log.RunDir.create(project_dir))  # capture a per-task JSONL trace
-        session = make_session(
-            task["backend"],
-            task.get("model", ""),
-            task.get("session_handle", ""),
-        )
         cancelled = threading.Event()
         stop_watch = threading.Event()
 
-        def watch_for_cancel() -> None:
+        def watch_for_cancel(session) -> None:
             # Poll the task; on an operator cancel request, terminate the session,
             # which unblocks Agent.run in its worker thread.
             watcher = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=15.0, auth=auth)
@@ -757,16 +728,22 @@ def execute(task: dict, headers: dict, auth) -> dict:
                     session.terminate()
                     return
 
-        watcher_thread = threading.Thread(target=watch_for_cancel, daemon=True)
-        watcher_thread.start()
+        def start_cancel_watch(session) -> None:
+            threading.Thread(target=watch_for_cancel, args=(session,), daemon=True).start()
+
         try:
-            with Agent(session, max_turns=100, timeout_s=TASK_TIMEOUT_S) as agent:
-                result = call_agent(
-                    agent,
-                    task,
-                    project_dir,
-                    result_spec_for_task(task["kind"]),
-                )
+            result = run_agent(
+                task["backend"],
+                str(task.get("instructions") or ""),
+                project_dir,
+                model=task.get("model", ""),
+                resume_session=task.get("session_handle", ""),
+                result_spec=result_spec_for_task(task["kind"]),
+                timeout_s=TASK_TIMEOUT_S,
+                task_id=str(task.get("id") or ""),
+                agent_name=str(task.get("kind") or "agent"),
+                on_session=start_cancel_watch,
+            )
         except BaseException:
             if cancelled.is_set():
                 return {"text": "Task cancelled by operator.", "cancelled": True}
@@ -787,15 +764,6 @@ def execute(task: dict, headers: dict, auth) -> dict:
             is_error,
             backend=task.get("backend", ""),
         )
-    session_handle = ""
-    session_id = getattr(session, "session_id", None)
-    if callable(session_id):
-        try:
-            session_handle = session_id() or ""
-        except Exception:
-            session_handle = ""
-    elif session_id:
-        session_handle = str(session_id)
     failure = classify_failure(text, is_error=is_error)
     return {
         "text": text,
@@ -807,44 +775,12 @@ def execute(task: dict, headers: dict, auth) -> dict:
         "structured_result_error": result.structured_result_error,
         "resource_exhausted": failure == "exhausted",
         "auth_blocked": failure == "auth",
-        "session_handle": session_handle,
+        "session_handle": result.session_handle,
         # Parsed on the runner because clock-time messages are rendered in
         # this machine's timezone; 0.0 = the message named no reset time.
         "reset_at_hint": parse_reset_hint(text) if failure == "exhausted" else 0.0,
         "usage_snapshot": refresh_usage(task["backend"]) or {},
     }
-
-
-def validate_probe_result(
-    project_dir: Path,
-    text: str,
-    is_error: bool,
-    *,
-    backend: str = "",
-) -> tuple[str, bool]:
-    diagnostics = []
-    if PROBE_MARKER not in text:
-        diagnostics.append(f"probe marker {PROBE_MARKER!r} was not found in the agent reply")
-    if backend == "codex" and "--full-auto" in text and "deprecated" in text.lower():
-        diagnostics.append(
-            "codex-cli is installed, but the kodo Codex wrapper invoked the deprecated "
-            "`--full-auto` mode and returned no assistant message; update the wrapper to "
-            "use the current `codex exec --sandbox ...` interface"
-        )
-    dirty = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=project_dir,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    ).stdout.strip()
-    if dirty:
-        diagnostics.append(f"probe left repository changes:\n{dirty}")
-    if diagnostics:
-        return f"{text}\n\nHIVE PROBE FAILED:\n" + "\n".join(f"- {d}" for d in diagnostics), True
-    if not is_error:
-        text = f"{text}\n\nHIVE PROBE PASSED: backend replied with {PROBE_MARKER} and left the repo clean."
-    return text, is_error
 
 
 def update_available(repo_root: Path) -> bool:

@@ -1,6 +1,6 @@
 """License-limit accounting: turn runner-reported usage into dispatch facts.
 
-The runner side (`hive/runner/_limits.py`) collects two kinds of evidence and
+The runner side (`hive/agents/usage.py`) collects two kinds of evidence and
 ships them raw: provider usage snapshots (exact used-percent + reset time per
 window) and reset hints parsed from rate-limit error messages. This module is
 the chief-side consumer:

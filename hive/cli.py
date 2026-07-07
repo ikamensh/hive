@@ -1078,7 +1078,7 @@ def run(args: argparse.Namespace, client) -> dict | list:
     elif c == "cancel":
         r = client.post(f"/api/tasks/{args.task_id}/cancel")
     elif c == "agents":
-        from hive.runner._backends import BACKEND_NAMES
+        from hive.agents import BACKEND_NAMES
         from hive.runner._daemon import discovery_payload
 
         detected, discoveries = discovery_payload()

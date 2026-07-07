@@ -13,7 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from hive.runner._backends import PROBE_MARKER
+from hive.agents import PROBE_MARKER
 from hive.persistence.blobstore import LocalBlobStore
 from hive.config.settings import Config
 from hive.llm._openai import OpenAIAdapter

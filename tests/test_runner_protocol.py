@@ -6,7 +6,7 @@ import time
 
 from fastapi.testclient import TestClient
 
-from hive.runner._backends import PROBE_MARKER
+from hive.agents import PROBE_MARKER
 from hive.config.settings import Config
 from hive.models import (
     Machine,

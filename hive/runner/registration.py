@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from hive._integrations.auth import ensure_machine
 from hive._control.limits import apply_snapshot, record_snapshot
-from hive.runner._backends import probe_instructions
+from hive.agents import probe_instructions
 from hive.models import (
     Checkout,
     Resource,
@@ -79,7 +79,7 @@ class RunnerRegister(BaseModel):
     capabilities: list[str] = []
     auto_probe: bool = False
     checkouts: list[CheckoutReport] = []  # git facts per repo this runner has checked out
-    # backend -> usage snapshot (hive/runner/_limits.py); refreshed by the
+    # backend -> usage snapshot (hive/agents/usage.py); refreshed by the
     # heartbeat so limit state stays current even when no tasks run.
     usage_snapshots: dict[str, dict] = {}
 

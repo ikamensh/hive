@@ -22,8 +22,7 @@ Snapshots are plain dicts shaped like
 so they travel through task results and register heartbeats unchanged; the
 chief validates them into models (`hive._control.limits`).
 
-Run `python -m hive.runner._limits` on any runner machine to see what it can
-collect.
+Run `python -m hive.agents` on any machine to see what it can collect.
 """
 
 from __future__ import annotations

@@ -14,7 +14,7 @@ import logging
 import time
 from pathlib import Path
 
-from hive.runner._backends import BACKEND_NAMES, REGISTRY
+from hive.agents import BACKEND_NAMES, REGISTRY
 from hive._control.escalation import escalate
 from hive._workstreams.issues import ensure_iteration_workstream
 from hive.llm import LoopResult, ProviderUnavailable, ToolLoop, ToolSet, build_adapters

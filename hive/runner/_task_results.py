@@ -21,7 +21,7 @@ from hive.runner._agent_results import (
     test_ux_outcome as structured_test_ux_outcome,
     verdict_from_structured,
 )
-from hive.runner._backends import REGISTRY
+from hive.agents import REGISTRY
 from hive.config.settings import Config
 from hive._control.escalation import (
     escalate,
