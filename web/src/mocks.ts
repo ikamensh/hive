@@ -1045,8 +1045,31 @@ export const api = {
   }),
   logout: async (): Promise<void> => {},
 
-  overview: async (): Promise<Overview> =>
-    structuredClone({
+  overview: async (): Promise<Overview> => {
+    const projectName = (id: string) => projects.find((p) => p.id === id)?.name ?? "";
+    const openQuestions = questions
+      .filter((q) => q.status === "open")
+      .sort((a, b) => b.created_at - a.created_at)
+      .map((q) => ({
+        id: q.id,
+        project_id: q.project_id,
+        project_name: projectName(q.project_id),
+        text: q.text,
+        created_at: q.created_at,
+      }));
+    const openTodos = structuredClone(humanTodos)
+      .filter((t) => t.status === "open")
+      .map((t) => ({
+        id: t.id,
+        project_id: t.project_id,
+        project_name: projectName(t.project_id),
+        assignee_user_id: t.assignee_user_id,
+        title: t.title,
+        instructions: t.instructions,
+        created_at: t.created_at,
+      }));
+
+    return structuredClone({
       projects: [
         { id: "p-relay", name: "relay", spec_repo: "git@github.com:acme/relay.git", state: "working", paused: false, created_at: now - 86400 * 5, daily_budget_usd: 40, spend_today: 8.2, counts: { active: 2, running: 1, questions: 0, blockers: 0, streams: 3 } },
         { id: "p-atlas", name: "atlas", spec_repo: "git@github.com:acme/atlas-spec.git", state: "needs_attention", paused: false, created_at: now - 86400 * 9, daily_budget_usd: 25, spend_today: 3.1, counts: { active: 1, running: 0, questions: 1, blockers: 1, streams: 4 } },
@@ -1080,7 +1103,7 @@ export const api = {
         { id: "t-relay-1", project_id: "p-relay", project_name: "relay", backend: "claude", model: "", kind: "work", started_at: now - 95, issue_number: 0 },
       ],
       attention: {
-        count: 4,
+        count: openQuestions.length + openTodos.length,
         offers: [
           {
             project_id: "p-beacon",
@@ -1093,13 +1116,8 @@ export const api = {
             action: "refresh" as const,
           },
         ],
-        questions: [
-          { id: "q-atlas", project_id: "p-atlas", project_name: "atlas", text: "Should signups default to email verification on, or off for the beta?", created_at: now - 600 },
-          { id: "q-beacon", project_id: "p-beacon", project_name: "beacon", text: "Which currency should the ledger export use as its base?", created_at: now - 4000 },
-        ],
-        human_todos: structuredClone(humanTodos)
-          .filter((t) => t.status === "open")
-          .map((t) => ({ id: t.id, project_id: t.project_id, project_name: t.project_id === "p-probe" ? "probe" : "", title: t.title, instructions: t.instructions, created_at: t.created_at })),
+        questions: openQuestions,
+        human_todos: openTodos,
       },
       subscriptions: structuredClone(subscriptions),
       totals: {
@@ -1108,11 +1126,12 @@ export const api = {
         agents_total: 4,
         machines_online: 1,
         machines_total: 2,
-        needs_you: 4,
+        needs_you: openQuestions.length + openTodos.length,
         spend_today: 12.7,
         budget_today: 80,
       },
-    }),
+    });
+  },
 
   projects: async (): Promise<Project[]> => structuredClone(projects),
 
