@@ -1126,7 +1126,7 @@ export const api = {
         agents_total: 4,
         machines_online: 1,
         machines_total: 2,
-        needs_you: 4,
+        needs_you: openQuestions.length + openTodos.length,
         spend_today: 12.7,
         budget_today: 80,
       },
