@@ -278,6 +278,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("test-cancel", help="cancel a testing episode (dequeues pending, stops running tasks)")
     p.add_argument("episode_id")
 
+    p = sub.add_parser("issue-cancel", help="cancel a GitHub issue run (dequeues pending, stops running tasks)")
+    p.add_argument("run_id")
+
     p = sub.add_parser("iterate", help="start the next iteration with a note")
     p.add_argument("project_id")
     p.add_argument("note")
@@ -1060,6 +1063,8 @@ def run(args: argparse.Namespace, client) -> dict | list:
         return stories_report(detail)
     elif c == "test-cancel":
         r = client.post(f"/api/test-episodes/{args.episode_id}/cancel")
+    elif c == "issue-cancel":
+        r = client.post(f"/api/issue-runs/{args.run_id}/cancel")
     elif c == "iterate":
         r = client.patch(f"/api/projects/{args.project_id}",
                          json={"new_iteration_note": args.note})

@@ -11,7 +11,7 @@ export function projectViewModel(
     resources?: ResourcesPayload | null;
   },
 ) {
-  const { project, workstreams, work_items, tasks, questions, conversations, stories, findings, test_episodes } = data;
+  const { project, workstreams, work_items, tasks, questions, conversations, stories, findings, test_episodes, issue_runs } = data;
   const humanTodos = data.human_todos ?? [];
   const intakeConversation =
     conversations.find((c) => c.id === project.intake_conversation_id) ??
@@ -32,6 +32,9 @@ export function projectViewModel(
     .sort((a, b) => (MANUAL_WORK_ORDER[a.status] ?? 9) - (MANUAL_WORK_ORDER[b.status] ?? 9));
   const issueWorkItems = work_items.filter((w) =>
     w.source === "issue" && (!activeIssueStream || !w.workstream_id || w.workstream_id === activeIssueStream.id)
+  );
+  const issueRuns = issue_runs.filter((run) =>
+    !activeIssueStream || run.workstream_id === activeIssueStream.id
   );
   const testingStories = stories.filter((story) =>
     !activeTestingStream || story.workstream_id === activeTestingStream.id
@@ -79,6 +82,7 @@ export function projectViewModel(
     issueStreams,
     activeIssueStream,
     issueWorkItems,
+    issueRuns,
     issueNeeds,
     testingStreams,
     activeTestingStream,

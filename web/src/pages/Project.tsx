@@ -60,6 +60,7 @@ export default function ProjectPage() {
     issueStreams,
     activeIssueStream,
     issueWorkItems,
+    issueRuns,
     issueNeeds,
     testingStreams,
     activeTestingStream,
@@ -383,6 +384,7 @@ export default function ProjectPage() {
                     setSelectedIssueNumbers([]);
                   }}
                   selectedNumbers={selectedIssueNumbers}
+                  issueRuns={issueRuns}
                   onChanged={refresh}
                 />
                 <h2 className="col-title issues-title">

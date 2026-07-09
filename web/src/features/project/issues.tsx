@@ -5,6 +5,7 @@ import type {
   CiCheckResult,
   PreflightCheck,
   PreflightResult,
+  IssueRun,
   Project,
   ScanResult,
   WorkItem,
@@ -12,6 +13,8 @@ import type {
   Workstream,
 } from "../../types";
 import { CheckList, checksFromError, PreflightSummary } from "./preflight";
+
+const ACTIVE_ISSUE_RUN_STATUSES = new Set<IssueRun["status"]>(["scanning", "queued", "running", "blocked"]);
 
 /** Derive the issue's branch tree URL from its issue URL (`.../issues/42` to `.../tree/hive/issue-42`). */
 function issueBranchUrl(ws: WorkItem): string | null {
@@ -25,6 +28,7 @@ export function IssuesToolbar({
   selectedStreamId,
   onSelectedStream,
   selectedNumbers,
+  issueRuns,
   onChanged,
 }: {
   project: Project;
@@ -32,9 +36,11 @@ export function IssuesToolbar({
   selectedStreamId: string;
   onSelectedStream: (id: string) => void;
   selectedNumbers: number[];
+  issueRuns: IssueRun[];
   onChanged: () => void;
 }) {
   const [busyAction, setBusyAction] = useState<"preflight" | "sync" | "run" | "ci" | "">("");
+  const [cancellingRunId, setCancellingRunId] = useState("");
   const [result, setResult] = useState<ScanResult | null>(null);
   const [ci, setCi] = useState<CiCheckResult | null>(null);
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
@@ -43,9 +49,12 @@ export function IssuesToolbar({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [scope, setScope] = useState<"selected" | "all_open_now" | "scan_only">("selected");
   const stream = issueStreams.find((w) => w.id === selectedStreamId) ?? issueStreams[0];
+  const activeRun = [...issueRuns]
+    .filter((run) => run.workstream_id === stream?.id && ACTIVE_ISSUE_RUN_STATUSES.has(run.status))
+    .sort((a, b) => b.created_at - a.created_at)[0];
   const noRepo = !stream;
   const streamDisabled = Boolean(stream && (!stream.enabled || stream.status === "disabled"));
-  const busy = busyAction !== "";
+  const busy = busyAction !== "" || cancellingRunId !== "";
 
   const runPreflight = async () => {
     if (!stream) return;
@@ -113,6 +122,22 @@ export function IssuesToolbar({
     setBusyAction("");
   };
 
+  const cancelRun = async () => {
+    if (!activeRun) return;
+    setCancellingRunId(activeRun.id);
+    setError("");
+    setErrorChecks([]);
+    try {
+      await api.cancelIssueRun(activeRun.id);
+      setDrawerOpen(false);
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message || "cancel failed");
+      setErrorChecks(checksFromError(e));
+    }
+    setCancellingRunId("");
+  };
+
   return (
     <section className="scan-bar reveal">
       <div className="scan-text">
@@ -145,11 +170,31 @@ export function IssuesToolbar({
           >
             {busyAction === "ci" ? "checking CI..." : "check CI"}
           </button>
-          <button onClick={() => setDrawerOpen((v) => !v)} disabled={busy || noRepo || streamDisabled} title={noRepo ? "set a GitHub repo first" : undefined}>
-            run issues
+          <button
+            onClick={() => setDrawerOpen((v) => !v)}
+            disabled={busy || noRepo || streamDisabled || Boolean(activeRun)}
+            title={
+              noRepo
+                ? "set a GitHub repo first"
+                : activeRun
+                  ? "cancel the active issue run before starting another"
+                  : undefined
+            }
+          >
+            {activeRun ? "run active" : "run issues"}
           </button>
         </div>
-        {drawerOpen && (
+        {activeRun && (
+          <div className="issue-run-status">
+            <span>
+              run {activeRun.status.replace(/_/g, " ")} - {activeRun.counts.running ?? 0} running, {activeRun.counts.queued ?? 0} queued
+            </span>
+            <button className="danger-outline" onClick={cancelRun} disabled={busy}>
+              {cancellingRunId === activeRun.id ? "cancelling..." : "cancel run"}
+            </button>
+          </div>
+        )}
+        {drawerOpen && !activeRun && (
           <div className="issue-run-drawer">
             <label>
               <input

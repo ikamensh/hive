@@ -966,11 +966,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             return True
         return False
 
-    @app.post("/api/issue-runs/{run_id}/cancel")
-    def cancel_issue_run(run_id: str, ctx: AuthContext = Depends(editor)):
-        run = store.get(IssueRun, run_id)
-        if not run or run.workspace_id != ctx.workspace_id:
-            raise HTTPException(404)
+    def cancel_issue_run_record(run: IssueRun, ctx: AuthContext) -> IssueRun:
         project = require_project(run.project_id, ctx)
         cancelled_tasks = sum(
             cancel_one_task(
@@ -993,8 +989,14 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             saved.finished_at = saved.finished_at or time.time()
             saved.counts = {**saved.counts, "cancelled_tasks": cancelled_tasks}
 
-        run = store.update(IssueRun, run.id, mark) or run
-        return run.model_dump()
+        return store.update(IssueRun, run.id, mark) or run
+
+    @app.post("/api/issue-runs/{run_id}/cancel")
+    def cancel_issue_run(run_id: str, ctx: AuthContext = Depends(editor)):
+        run = store.get(IssueRun, run_id)
+        if not run or run.workspace_id != ctx.workspace_id:
+            raise HTTPException(404)
+        return cancel_issue_run_record(run, ctx).model_dump()
 
     @app.post("/api/projects/{project_id}/workstreams/{workstream_id}/check-ci")
     def check_workstream_ci(
@@ -1413,14 +1415,25 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if not task or task.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
         was_pending = task.status == TaskStatus.pending
-        cancel_one_task(
-            task,
-            pending_msg="Cancelled by operator before dispatch.",
-            predelivery_msg="Cancelled by operator before delivery to a runner.",
-        )
+        task_active = task.status in (TaskStatus.pending, TaskStatus.running)
+        issue_run = store.get(IssueRun, task.run_id) if task.run_id else None
+        active_issue_run = issue_run and issue_run.status in {
+            IssueRunStatus.scanning,
+            IssueRunStatus.queued,
+            IssueRunStatus.running,
+            IssueRunStatus.blocked,
+        }
+        if task_active and issue_run and issue_run.workspace_id == ctx.workspace_id and active_issue_run:
+            cancel_issue_run_record(issue_run, ctx)
+        else:
+            cancel_one_task(
+                task,
+                pending_msg="Cancelled by operator before dispatch.",
+                predelivery_msg="Cancelled by operator before delivery to a runner.",
+            )
         if was_pending:
             supervisor.wake(task.project_id, f"Task {task.id} was cancelled before it ran.")
-        return task.model_dump()
+        return (store.get(Task, task.id) or task).model_dump()
 
     @app.post("/api/tasks/{task_id}/trace")
     async def upload_trace(
