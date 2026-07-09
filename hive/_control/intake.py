@@ -311,7 +311,11 @@ def prompt(
             "Write the durable spec files to match it and push:\n"
             "- mission.md — the long-term mission and operating principles.\n"
             "- iteration.md — the concrete next iteration goal and acceptance signal.\n"
-            "- wiki/decisions.md — each assumption and accepted answer, with provenance."
+            "- wiki/decisions.md — each assumption and accepted answer, with provenance: "
+            "source_type, impact, reversibility, status, expires_when, and trace. "
+            "Use source_type: agent_proposed and a non-empty expires_when for "
+            "assumptions made instead of asking; use source_type: user_provided for "
+            "accepted user answers."
             + original_spec
             + "\nPreserve coherent existing spec text; rewrite stale or wrong content. "
             "Do not modify product code. Commit and push the spec changes. Report the "
