@@ -19,6 +19,7 @@ from typing import Iterable
 
 import httpx
 
+from hive._control.allowances import resolve_agent
 from hive._integrations.github_repos import _GH_HEADERS, parse_repo_ref
 from hive.llm._parsing import extract_json
 from hive.models import (
@@ -698,6 +699,7 @@ def queue_refresh_task(
     model: str = "",
 ) -> Task:
     instructions, versions = refresh_instructions(project)
+    backend, model = resolve_agent(project.agent_grants, backend, model)
     return store.put(
         Task(
             workspace_id=project.workspace_id,
@@ -807,6 +809,12 @@ def start_episode(
     confirm_backend: str = DEFAULT_TEST_BACKEND,
     confirm_model: str = "",
 ) -> tuple[TestEpisode, Task]:
+    # Resolve every phase's agent through the project's grants up front, so
+    # the episode records what will actually run (sweep/confirm tasks copy
+    # their backend/model from the episode).
+    refresh_backend, refresh_model = resolve_agent(project.agent_grants, refresh_backend, refresh_model)
+    sweep_backend, sweep_model = resolve_agent(project.agent_grants, sweep_backend, sweep_model)
+    confirm_backend, confirm_model = resolve_agent(project.agent_grants, confirm_backend, confirm_model)
     episode = store.put(
         TestEpisode(
             workspace_id=project.workspace_id,

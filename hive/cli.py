@@ -236,6 +236,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--paused", choices=["true", "false"])
     p.add_argument("--daily-budget", type=float, help="daily cap on all paid work in USD (0 pauses it; new projects default to 10)")
+    p.add_argument(
+        "--grants",
+        help="agent allowance as JSON, e.g. "
+        '\'[{"sessions_per_day": 5}, {"backends": ["codex"], "models": ["gpt-5.4-mini"]}]\' '
+        "(omit sessions_per_day for unlimited; '[]' clears back to no limits)",
+    )
     p.add_argument("--member-repos", help="comma-separated git URLs (replaces the list)")
     p.add_argument("--spec-repo", help="spec home git URL")
 
@@ -1014,6 +1020,8 @@ def run(args: argparse.Namespace, client) -> dict | list:
                 body[flag] = v == "true"
         if args.daily_budget is not None:
             body["daily_budget_usd"] = args.daily_budget
+        if args.grants is not None:
+            body["agent_grants"] = json.loads(args.grants)
         if args.member_repos is not None:
             body["member_repos"] = _csv(args.member_repos)
         if args.spec_repo is not None:

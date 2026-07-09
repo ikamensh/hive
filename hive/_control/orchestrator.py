@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 from hive.agents import BACKEND_NAMES, REGISTRY
+from hive._control import allowances
 from hive._control.escalation import escalate
 from hive._workstreams.issues import ensure_iteration_workstream
 from hive.llm import LoopResult, ProviderUnavailable, ToolLoop, ToolSet, build_adapters
@@ -120,15 +121,35 @@ class Tools:
         instructions: str,
         backend: str = "cursor",
         kind: str = "work",
+        model: str = "",
     ) -> str:
         """Queue a task for a coding agent. repo is the git URL to check out.
         kind is 'work' (implements, then lands changes) or 'verify' (fresh-eyes
         review of the previous task; landing is disabled). backend is one of
         claude | cursor | codex | gemini-cli — pick one with a *usable* agent
         on an online machine (see RUNNERS in the snapshot), or the task cannot
+        dispatch. model optionally pins the backend's model (empty = the
+        backend's default); when AGENT ALLOWANCE in the snapshot restricts
+        models, pick an allowed (backend, model) pair or the task cannot
         dispatch."""
         if backend not in BACKEND_NAMES:
             return f"error: unknown backend {backend!r}, use one of {BACKEND_NAMES}"
+        grants = self.project.agent_grants
+        if grants:
+            left = allowances.remaining(
+                grants,
+                allowances.sessions_today(
+                    self.store.list(Task, project_id=self.project.id),
+                    allowances.utc_day_start(),
+                ),
+            )
+            if not allowances.admits(grants, left, backend, model):
+                pair = f"{backend!r} with model {model!r}" if model else f"{backend!r} (default model)"
+                return (
+                    f"error: the project's agent allowance does not permit {pair} right now. "
+                    f"Allowance: {allowances.describe(grants, left)}. Pick an allowed "
+                    "backend/model, or stop planning paid work until the UTC-midnight reset."
+                )
         online_runners = {
             r.id
             for r in self.store.list(Runner, workspace_id=self.project.workspace_id)
@@ -202,6 +223,7 @@ class Tools:
                 kind=TaskKind(kind),
                 instructions=instructions,
                 backend=backend,
+                model=model,
                 prompt_versions=prompt_versions,
             )
         )
@@ -540,6 +562,12 @@ class Tools:
             for f in self.store.list(Feedback, project_id=self.project.id, limit=5)
         ]
         p = self.project
+        allowance_left = allowances.remaining(
+            p.agent_grants,
+            allowances.sessions_today(
+                self.store.list(Task, project_id=p.id), allowances.utc_day_start()
+            ),
+        )
         return "\n".join(
             [
                 f"PROJECT {p.name} | mode={p.mode} "
@@ -547,6 +575,8 @@ class Tools:
                 f"goal_complete={p.goal_complete}",
                 f"member repos: {', '.join(p.member_repos) or '(none)'}",
                 f"spec repo: {p.spec_repo}",
+                "AGENT ALLOWANCE (sessions/day; disallowed tasks cannot dispatch): "
+                + allowances.describe(p.agent_grants, allowance_left),
                 "",
                 "WORK ITEMS:",
                 *(ws_lines or ["(none yet)"]),

@@ -30,7 +30,8 @@ from hive._integrations.auth import (
     AuthManager,
 )
 from hive.config.settings import Config
-from hive._control import clarifications, decisions, intake
+from hive._control import allowances, clarifications, decisions, intake
+from hive.agents import BACKEND_NAMES
 from hive._integrations.github_repos import all_repos as list_github_repos
 from hive._integrations.github_repos import create_repo as create_github_repo
 from hive._integrations.specrepo import SpecRepo
@@ -72,6 +73,7 @@ from hive._workstreams.testing import (
 )
 from hive.models import (
     AgentConversation,
+    AgentGrant,
     Autonomy,
     Checkout,
     ConversationStatus,
@@ -179,6 +181,7 @@ class ProjectPatch(BaseModel):
     testing_auto: bool | None = None
     paused: bool | None = None
     daily_budget_usd: float | None = None
+    agent_grants: list[AgentGrant] | None = None  # [] clears (back to unlimited)
     member_repos: list[str] | None = None
     new_iteration_note: str | None = None  # set when starting the next iteration
 
@@ -1229,6 +1232,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             "checkouts": [c.model_dump() for c in project_checkouts(ctx.workspace_id, project)],
             "decision_ledger": decisions.read_decision_ledger(config, project).model_dump(),
             "spend_today": supervisor.spend_today(project_id),
+            "allowance": allowances.allowance_view(
+                project.agent_grants,
+                store.list(Task, workspace_id=ctx.workspace_id, project_id=project_id),
+            ),
         }
 
     @app.post("/api/projects/{project_id}/decisions/{decision_id}/reopen")
@@ -1347,6 +1354,11 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         project = require_project(project_id, ctx)
         updates = body.model_dump(exclude_none=True)
         note = updates.pop("new_iteration_note", None)
+        if updates.pop("agent_grants", None) is not None:
+            problem = allowances.grant_problems(body.agent_grants, BACKEND_NAMES)
+            if problem:
+                raise HTTPException(400, problem)
+            project.agent_grants = body.agent_grants
         if "name" in updates:
             updates["name"] = updates["name"].strip()
             if not updates["name"]:

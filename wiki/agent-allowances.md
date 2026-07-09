@@ -1,6 +1,7 @@
 # Agent allowances (per-project session grants)
 
-Status: designed, not implemented. Complements `daily_budget_usd` (money) with
+Status: implemented (`hive/_control/allowances.py`; tests in
+`tests/test_allowances.py`). Complements `daily_budget_usd` (money) with
 count-based, per-project permissions on *which agents* may run and *how many
 sessions per day* — the unit that actually meters subscription capacity.
 

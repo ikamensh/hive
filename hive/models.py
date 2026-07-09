@@ -97,6 +97,19 @@ class GuessPropensity(StrEnum):
     always = "always"
 
 
+class AgentGrant(BaseModel):
+    """One additive permission to run agent sessions: which (backend, model)
+    pairs it covers and how many sessions per UTC day it allows. A project with
+    no grants may run anything; with grants, only what some grant matches —
+    grants combine ("5 of anything" + "unlimited cheap"). Enforcement and
+    accounting live in `hive/_control/allowances.py` (design:
+    wiki/agent-allowances.md)."""
+
+    backends: list[str] = []  # empty = any backend
+    models: list[str] = []  # empty = any model (incl. the backend's default)
+    sessions_per_day: int | None = None  # None = unlimited
+
+
 class ProjectState(StrEnum):
     intake = "intake"  # intake scout is aligning the project before planning
     working = "working"
@@ -134,6 +147,10 @@ class Project(BaseModel):
     # planner invocations, build/verify tasks, and autonomous testing alike.
     # 0 pauses paid work entirely (blocked_budget); raise it to spend more.
     daily_budget_usd: float = 10.0
+    # Count-based agent permissions — the money budget cannot see subscription
+    # usage (subscription CLIs report ~zero cost), so sessions/day is the cap
+    # that actually meters it. Empty = anything allowed.
+    agent_grants: list[AgentGrant] = []
     goal_complete: bool = False
     goal_complete_note: str = ""
     intake_conversation_id: str = ""

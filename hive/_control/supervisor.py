@@ -18,6 +18,8 @@ import time
 from collections import defaultdict
 from typing import Callable
 
+from hive._control import allowances
+from hive._control.allowances import utc_day_start
 from hive._control.escalation import escalate, resolve_open_todos
 from hive.fleet import DEFAULT_LIVENESS, Liveness
 from hive.models import (
@@ -51,14 +53,6 @@ LEASE_TTL_S = 60.0  # renewed every tick (15s); a dead leader is superseded with
 PARALLEL_REPO_TASKS = (TaskKind.test_sweep, TaskKind.test_reproduce, TaskKind.test_judge)
 
 
-def utc_day_start() -> float:
-    """Epoch seconds for 00:00 UTC today — the daily-budget window boundary."""
-    midnight = datetime.datetime.now(datetime.UTC).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    return midnight.timestamp()
-
-
 def _capacity_key(backend: str, capabilities: list[str]) -> str:
     caps = ",".join(sorted(capabilities))
     return f"{backend}|{caps}" if caps else backend
@@ -80,6 +74,7 @@ def compute_state(
     available_backends: set[str],
     over_budget: bool = False,
     available_capacity: set[str] | None = None,
+    grant_blocked: set[str] | None = None,
 ) -> ProjectState:
     running = [t for t in tasks if t.status == TaskStatus.running]
     pending = [t for t in tasks if t.status == TaskStatus.pending]
@@ -89,11 +84,17 @@ def compute_state(
         if over_budget:
             return ProjectState.blocked_budget
         capacity = available_capacity if available_capacity is not None else available_backends
+        blocked = grant_blocked or set()
         # Backend-aware: a pending task only counts as progressable if some
         # online runner offers its backend with available quota. Otherwise the
         # project is genuinely stuck on resources, not silently "working".
-        if any(_task_capacity_key(t) in capacity for t in pending):
+        with_capacity = [t for t in pending if _task_capacity_key(t) in capacity]
+        if any(t.id not in blocked for t in with_capacity):
             return ProjectState.working
+        if with_capacity:
+            # Capacity exists but today's session allowance is spent — same
+            # midnight-reset semantics as the money budget.
+            return ProjectState.blocked_budget
         return ProjectState.blocked_resources
     active = [
         w
@@ -296,12 +297,17 @@ class Supervisor:
         workstreams = self.store.list(
             Workstream, workspace_id=self.workspace_id, project_id=project.id
         )
+        # all_tasks feeds grant accounting (sessions_today needs finished tasks
+        # and handles its own kind exemptions); compute_state sees live
+        # non-bookkeeping work only.
+        all_tasks = self.store.list(
+            Task, workspace_id=self.workspace_id, project_id=project.id
+        )
         tasks = [
             t
-            for t in self.store.list(
-                Task, workspace_id=self.workspace_id, project_id=project.id
-            )
+            for t in all_tasks
             if t.kind not in (TaskKind.intake, TaskKind.probe)
+            and t.status in (TaskStatus.pending, TaskStatus.running)
         ]
         available_capacity = self.available_capacity()
         state = compute_state(
@@ -312,6 +318,7 @@ class Supervisor:
             self.available_backends(),
             self.over_budget(project),
             available_capacity,
+            self._grant_blocked(project, all_tasks),
         )
         if state == ProjectState.blocked_resources:
             self._file_testing_capability_blocker(project, tasks, available_capacity)
@@ -408,10 +415,31 @@ class Supervisor:
         with self._dispatch_lock:
             return self._dispatch_unlocked(project)
 
+    def _grant_blocked(self, project: Project, all_tasks: list[Task]) -> set[str]:
+        """Pending task ids the project's agent allowance blocks right now."""
+        grants = project.agent_grants
+        if not grants:
+            return set()
+        left = allowances.remaining(
+            grants, allowances.sessions_today(all_tasks, utc_day_start())
+        )
+        return {
+            t.id
+            for t in all_tasks
+            if t.status == TaskStatus.pending
+            and not allowances.exempt(t)
+            and not allowances.admits(grants, left, t.backend, t.model)
+        }
+
     def _dispatch_unlocked(self, project: Project) -> int:
         if self.over_budget(project):
             return 0  # daily soft cap reached; no new spend until UTC midnight
         tasks = self.store.list(Task, workspace_id=self.workspace_id, project_id=project.id)
+        # Session-allowance headroom, consumed locally as this pass dispatches.
+        grants = project.agent_grants
+        grant_left = allowances.remaining(
+            grants, allowances.sessions_today(tasks, utc_day_start())
+        )
         busy_repos = {
             t.repo
             for t in tasks
@@ -440,6 +468,12 @@ class Supervisor:
                 continue
             if _serializes_repo(task) and task.repo in busy_repos:
                 continue
+            if (
+                grants
+                and not allowances.exempt(task)
+                and not allowances.admits(grants, grant_left, task.backend, task.model)
+            ):
+                continue  # session allowance spent for this pair; waits for UTC midnight
             for runner in runners:
                 if runner.id in busy_runners:
                     continue
@@ -453,6 +487,8 @@ class Supervisor:
                         busy_runners.add(runner.id)
                         if _serializes_repo(task):
                             busy_repos.add(task.repo)
+                        if grants and not allowances.exempt(task):
+                            allowances.consume(grants, grant_left, task.backend, task.model)
                         dispatched += 1
                         log.info("dispatched task %s to runner %s", task.id, runner.name)
                     break  # this task is decided (claimed, or taken by someone else)
