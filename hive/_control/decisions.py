@@ -74,12 +74,16 @@ def parse_decision_ledger(text: str, must_ask: list[str] | None = None, error: s
     >>> ledger = parse_decision_ledger('## INV-001 · Expiry\\nsource_type: agent_proposed\\nimpact: medium · reversibility: high · status: accepted_for_iteration\\nexpires_when: user decides\\n\\nUse 7 days.')
     >>> ledger.decisions[0].id, ledger.decisions[0].reversibility, ledger.counts["hive_assumed"]
     ('INV-001', 'high', 1)
+    >>> broken = parse_decision_ledger('## INV-002 · Expiry\\nsource_type: agent_proposed\\nimpact: low · reversibility: high · status: accepted\\nexpires_when:\\n\\nUse 7 days.')
+    >>> broken.error
+    'Hive assumption INV-002 is missing expires_when'
     """
     decisions: list[DecisionEntry] = []
     for block in _decision_blocks(text):
         entry = _parse_block(block)
         if entry:
             decisions.append(entry)
+    problems = _provenance_problems(decisions)
     source_types = sorted({d.source_type for d in decisions if d.source_type})
     operator = sum(1 for d in decisions if d.source_type == "user_provided")
     assumed = sum(1 for d in decisions if d.source_type in ASSUMED_SOURCE_TYPES)
@@ -93,7 +97,7 @@ def parse_decision_ledger(text: str, must_ask: list[str] | None = None, error: s
         },
         source_types=source_types,
         must_ask=must_ask or list(DEFAULT_MUST_ASK),
-        error=error,
+        error=_join_errors(error, problems),
     )
 
 
@@ -211,6 +215,27 @@ def _parse_block(block: str) -> DecisionEntry | None:
         body=body,
         can_reopen=source_type in ASSUMED_SOURCE_TYPES and status in REOPENABLE_STATUSES,
     )
+
+
+def _provenance_problems(decisions: list[DecisionEntry]) -> list[str]:
+    problems: list[str] = []
+    for decision in decisions:
+        if decision.source_type not in ASSUMED_SOURCE_TYPES:
+            continue
+        missing = [
+            field
+            for field in ("impact", "reversibility", "status", "expires_when")
+            if not getattr(decision, field).strip()
+        ]
+        if missing:
+            problems.append(f"Hive assumption {decision.id} is missing {', '.join(missing)}")
+    return problems
+
+
+def _join_errors(error: str, problems: list[str]) -> str:
+    parts = [error.strip()] if error.strip() else []
+    parts.extend(problems)
+    return "; ".join(parts)
 
 
 def _parse_heading(heading: str) -> tuple[str, str]:
