@@ -24,6 +24,7 @@ from hive.models import (
     Task,
     TaskKind,
     TaskStatus,
+    Verdict,
     Workstream,
     WorkstreamStatus,
 )
@@ -70,9 +71,43 @@ def seed(store, *, with_runner=True) -> Project:
     return project
 
 
-def test_goal_complete_wins():
+def test_goal_complete_only_when_project_is_quiescent_and_verified():
     p = Project(name="p", spec_repo="x", goal_complete=True)
     assert compute_state(p, [], 0, [], set()) == ProjectState.idle_goal_complete
+
+    running = Task(project_id=p.id, workstream_id="w", repo="r", instructions="i",
+                   status=TaskStatus.running)
+    assert compute_state(p, [], 0, [running], set()) == ProjectState.working
+
+    pending = Task(project_id=p.id, workstream_id="w", repo="r", instructions="i")
+    assert compute_state(p, [], 0, [pending], {"cursor"}) == ProjectState.working
+
+    assert compute_state(p, [], 1, [], set()) == ProjectState.needs_attention
+
+    done_ws = Workstream(project_id=p.id, title="done", status=WorkstreamStatus.done)
+    assert compute_state(p, [done_ws], 0, [], set()) == ProjectState.idle
+
+    rejected_verify = Task(
+        project_id=p.id,
+        workstream_id=done_ws.id,
+        repo="r",
+        instructions="i",
+        kind=TaskKind.verify,
+        status=TaskStatus.done,
+        verdict=Verdict.reject,
+    )
+    assert compute_state(p, [done_ws], 0, [rejected_verify], set()) == ProjectState.idle
+
+    accepted_verify = Task(
+        project_id=p.id,
+        workstream_id=done_ws.id,
+        repo="r",
+        instructions="i",
+        kind=TaskKind.verify,
+        status=TaskStatus.done,
+        verdict=Verdict.accept,
+    )
+    assert compute_state(p, [done_ws], 0, [accepted_verify], set()) == ProjectState.idle_goal_complete
 
 
 def test_running_task_means_working():
