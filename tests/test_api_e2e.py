@@ -24,6 +24,7 @@ from hive.models import (
     HumanTaskStatus,
     OrchestratorRun,
     Project,
+    ProjectState,
     Question,
     Resource,
     ResourceUsability,
@@ -1596,6 +1597,51 @@ def test_overview_reflects_project_and_capacity(harness):
     assert ov["totals"]["machines_online"] >= 1
     # Totals stay internally consistent with the rows they summarize.
     assert ov["totals"]["tasks_running"] == sum(p["counts"]["running"] for p in ov["projects"])
+
+
+def test_project_read_paths_recompute_stale_goal_complete_state(harness):
+    """Regression: a cached goal-complete state must not survive visible live
+    work. Each public read path recomputes the state before returning it, so the
+    banner/composer cannot contradict running tasks or open questions."""
+    client, store, _ = harness
+    project = store.put(
+        Project(
+            name="hive",
+            spec_repo="https://example.com/spec.git",
+            goal_complete=True,
+            goal_complete_note="done",
+            state=ProjectState.idle_goal_complete,
+        )
+    )
+    store.put(
+        Task(
+            project_id=project.id,
+            workstream_id="testing",
+            repo="https://example.com/spec.git",
+            instructions="still running",
+            status=TaskStatus.running,
+        )
+    )
+    store.put(Question(project_id=project.id, text="which behavior should the test expect?"))
+
+    def restale() -> None:
+        saved = store.get(Project, project.id)
+        saved.state = ProjectState.idle_goal_complete
+        store.put(saved)
+
+    assert client.get("/api/projects").json()[0]["state"] == "working"
+
+    restale()
+    overview_project = client.get("/api/overview").json()["projects"][0]
+    assert overview_project["state"] == "working"
+    assert overview_project["counts"]["running"] == 1
+    assert overview_project["counts"]["questions"] == 1
+
+    restale()
+    detail = client.get(f"/api/projects/{project.id}").json()
+    assert detail["project"]["state"] == "working"
+    assert sum(1 for task in detail["tasks"] if task["status"] == "running") == 1
+    assert sum(1 for question in detail["questions"] if question["status"] == "open") == 1
 
 
 def test_subscription_records_licensing_mode(harness):

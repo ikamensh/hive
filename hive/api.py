@@ -323,6 +323,24 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             raise HTTPException(404)
         return project
 
+    def refresh_project_state_for_view(project: Project) -> Project:
+        """Keep user-facing cached state honest before exposing it.
+
+        Draft projects have no configured repo yet; the supervisor loop also
+        skips them, and refreshing them would prematurely move setup screens
+        into intake.
+        """
+        if not project.spec_repo.strip():
+            return project
+        supervisor.refresh_state(project)
+        return store.get(Project, project.id) or project
+
+    def refresh_project_states_for_view(workspace_id: str, include_archived: bool = False) -> None:
+        for project in store.list(Project, workspace_id=workspace_id):
+            if project.archived and not include_archived:
+                continue
+            refresh_project_state_for_view(project)
+
     def require_project_workstream(
         project: Project,
         workstream_id: str,
@@ -607,6 +625,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @app.get("/api/overview")
     def overview(ctx: AuthContext = Depends(current)):
+        refresh_project_states_for_view(ctx.workspace_id)
         return build_overview(store, ctx.workspace_id, supervisor.spend_today)
 
     @app.get("/api/show")
@@ -615,6 +634,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @app.get("/api/projects")
     def list_projects(include_archived: bool = False, ctx: AuthContext = Depends(current)):
+        refresh_project_states_for_view(ctx.workspace_id, include_archived=include_archived)
         projects = store.list(Project, workspace_id=ctx.workspace_id)
         if not include_archived:
             projects = [p for p in projects if not p.archived]
@@ -1139,7 +1159,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @app.get("/api/projects/{project_id}")
     def get_project(project_id: str, ctx: AuthContext = Depends(current)):
-        project = require_project(project_id, ctx)
+        project = refresh_project_state_for_view(require_project(project_id, ctx))
         work_items = store.list(Workstream, workspace_id=ctx.workspace_id, project_id=project_id)
         human_todos = [
             t.model_dump()
