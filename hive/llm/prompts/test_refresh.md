@@ -40,6 +40,8 @@ Your structured result must match the final spec state after your changes:
 - `created_story_keys`, `updated_story_keys`, `archived_story_keys`: exact story keys touched.
 - `changed_files`: relative paths you changed. These should normally be under `acceptance/`.
 - `commit_sha`: the pushed commit SHA when `changed_files` is non-empty; otherwise `""`.
-- `questions`: material ambiguities that remain, phrased for a human.
+- `questions`: material ambiguities that remain, phrased for a human. Each item
+  should be structured markdown with context, the gap or contradiction, proposed
+  options, and your recommendation.
 
 End your report with `REFRESH: DONE`.

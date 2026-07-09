@@ -413,6 +413,10 @@ def test_testing_refresh_files_structured_questions(tmp_path):
     assert len(questions) == 1
     assert "testing refresh" in questions[0].text
     assert "4xx responses" in questions[0].text
+    assert "**Context:**" in questions[0].text
+    assert "**Gap:**" in questions[0].text
+    assert "**Options:**" in questions[0].text
+    assert "**Recommendation:**" in questions[0].text
 
 
 def test_artifact_upload_roundtrip(tmp_path):
