@@ -30,7 +30,7 @@ from hive._integrations.auth import (
     AuthManager,
 )
 from hive.config.settings import Config
-from hive._control import clarifications, intake
+from hive._control import clarifications, decisions, intake
 from hive._integrations.github_repos import all_repos as list_github_repos
 from hive._integrations.github_repos import create_repo as create_github_repo
 from hive._integrations.specrepo import SpecRepo
@@ -251,6 +251,10 @@ class TestEpisodeCreate(BaseModel):
 
 class AnswerBody(BaseModel):
     answer: str
+
+
+class DecisionReopenBody(BaseModel):
+    workstream_id: str = ""
 
 
 class FeedbackBody(BaseModel):
@@ -1208,8 +1212,35 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 for d in store.list(Directive, workspace_id=ctx.workspace_id, project_id=project_id)
             ],
             "checkouts": [c.model_dump() for c in project_checkouts(ctx.workspace_id, project)],
+            "decision_ledger": decisions.read_decision_ledger(config, project).model_dump(),
             "spend_today": supervisor.spend_today(project_id),
         }
+
+    @app.post("/api/projects/{project_id}/decisions/{decision_id}/reopen")
+    def reopen_project_decision(
+        project_id: str,
+        decision_id: str,
+        body: DecisionReopenBody | None = None,
+        ctx: AuthContext = Depends(editor),
+    ):
+        project = require_project(project_id, ctx)
+        try:
+            return decisions.reopen_decision(
+                store,
+                supervisor,
+                config,
+                project,
+                decision_id,
+                (body.workstream_id if body else "").strip(),
+            )
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     def project_repos(project: Project) -> list[str]:
         """The repos a project physically lives in: spec home plus members."""

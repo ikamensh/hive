@@ -197,6 +197,36 @@ export interface ProjectDetail {
   test_episodes: TestEpisode[];
   directives?: Directive[];
   checkouts?: Checkout[];
+  decision_ledger?: DecisionLedger;
+}
+
+export type DecisionSourceType = "user_provided" | "agent_proposed" | "code_derived" | "inferred" | string;
+
+export interface DecisionEntry {
+  id: string;
+  title: string;
+  source_type: DecisionSourceType;
+  impact: string;
+  reversibility: string;
+  status: string;
+  expires_when: string;
+  trace: string;
+  body: string;
+  can_reopen: boolean;
+}
+
+export interface DecisionLedger {
+  decisions: DecisionEntry[];
+  counts: {
+    total: number;
+    operator_specified: number;
+    hive_assumed: number;
+    reopenable: number;
+    [key: string]: number;
+  };
+  source_types: string[];
+  must_ask: string[];
+  error: string;
 }
 
 export type DirectiveStatus = "triaging" | "working" | "done" | "cancelled";

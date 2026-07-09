@@ -106,6 +106,11 @@ const realApi = {
   startProject: (id: string, body: ProjectStart) =>
     http<Project>(`/api/projects/${id}/start`, { method: "POST", body: JSON.stringify(body) }),
   project: (id: string) => http<ProjectDetail>(`/api/projects/${id}`),
+  reopenDecision: (projectId: string, decisionId: string) =>
+    http(`/api/projects/${projectId}/decisions/${encodeURIComponent(decisionId)}/reopen`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
   createDirective: (id: string, text: string) =>
     http<Directive>(`/api/projects/${id}/directives`, {
       method: "POST",
