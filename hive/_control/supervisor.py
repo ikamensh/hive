@@ -38,6 +38,7 @@ from hive.models import (
     Task,
     TaskKind,
     TaskStatus,
+    Verdict,
     Workstream,
     WorkstreamSource,
     WorkstreamStatus,
@@ -80,8 +81,6 @@ def compute_state(
     over_budget: bool = False,
     available_capacity: set[str] | None = None,
 ) -> ProjectState:
-    if project.goal_complete:
-        return ProjectState.idle_goal_complete
     running = [t for t in tasks if t.status == TaskStatus.running]
     pending = [t for t in tasks if t.status == TaskStatus.pending]
     if running:
@@ -113,7 +112,23 @@ def compute_state(
         return ProjectState.needs_attention
     if open_question_count:
         return ProjectState.needs_attention
+    if project.goal_complete and _completed_workstreams_verified(workstreams, tasks):
+        return ProjectState.idle_goal_complete
     return ProjectState.idle
+
+
+def _completed_workstreams_verified(workstreams: list[Workstream], tasks: list[Task]) -> bool:
+    tasks_by_workstream: dict[str, list[Task]] = defaultdict(list)
+    for task in tasks:
+        tasks_by_workstream[task.workstream_id].append(task)
+    for workstream in workstreams:
+        if workstream.source == WorkstreamSource.issue or workstream.status != WorkstreamStatus.done:
+            continue
+        ws_tasks = tasks_by_workstream.get(workstream.id, [])
+        last = ws_tasks[-1] if ws_tasks else None
+        if last is None or last.kind != TaskKind.verify or last.verdict != Verdict.accept:
+            return False
+    return True
 
 
 class Supervisor:
@@ -286,7 +301,7 @@ class Supervisor:
             for t in self.store.list(
                 Task, workspace_id=self.workspace_id, project_id=project.id
             )
-            if t.status in (TaskStatus.pending, TaskStatus.running)
+            if t.kind not in (TaskKind.intake, TaskKind.probe)
         ]
         available_capacity = self.available_capacity()
         state = compute_state(

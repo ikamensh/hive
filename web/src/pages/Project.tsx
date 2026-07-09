@@ -350,7 +350,7 @@ export default function ProjectPage() {
         />
       ) : (
         <>
-          {project.goal_complete && <GoalBanner project={project} onPatch={patch} />}
+          {project.state === "idle_goal_complete" && <GoalBanner project={project} onPatch={patch} />}
 
           <div
             className={`columns ${
