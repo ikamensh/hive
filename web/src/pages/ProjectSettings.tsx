@@ -45,6 +45,16 @@ export default function ProjectSettingsPage() {
           </h1>
         </div>
         <StateBadge state={project.state} />
+        <div className="project-head-links">
+          <Link className="project-settings-link ghost" to={`/p/${id}/decisions`}>
+            <i className="ti ti-git-branch" aria-hidden /> Decisions
+            {data.decision_ledger && (
+              <span className="head-link-count">
+                {data.decision_ledger.counts.operator_specified}/{data.decision_ledger.counts.hive_assumed}
+              </span>
+            )}
+          </Link>
+        </div>
         <ProjectActions project={project} onPatch={patch} />
       </div>
       <ProjectSettings

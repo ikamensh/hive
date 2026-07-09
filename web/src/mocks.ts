@@ -6,6 +6,7 @@ import type {
   AuthInfo,
   Checkout,
   CiCheckResult,
+  DecisionLedger,
   Directive,
   GithubRepo,
   HumanTodo,
@@ -193,6 +194,73 @@ const projects: Project[] = [
     created_at: now - 86400 * 3,
   },
 ];
+
+const decisionLedgers: Record<string, DecisionLedger> = {
+  "p-atlas": {
+    decisions: [
+      {
+        id: "ATL-001",
+        title: "Paid pilot pricing uses hybrid metering",
+        source_type: "user_provided",
+        impact: "high",
+        reversibility: "medium",
+        status: "accepted",
+        expires_when: "when packaging changes after the first pilots",
+        trace: "input-log/2026-07-01-pricing.md",
+        body: "Atlas starts with a base seat fee plus compute overage. Pure per-call billing is out for the first paid pilots.",
+        can_reopen: false,
+      },
+      {
+        id: "ATL-002",
+        title: "Webhook retries expire after 24 hours",
+        source_type: "agent_proposed",
+        impact: "medium",
+        reversibility: "high",
+        status: "accepted_for_iteration",
+        expires_when: "operator specifies a customer-facing retry policy",
+        trace: "input-log/2026-07-02-hardening.md#retry-policy",
+        body: "Failed webhooks are retried with backoff for 24 hours, then surfaced in the admin audit log.",
+        can_reopen: true,
+      },
+      {
+        id: "ATL-003",
+        title: "Refresh rotation keeps a twelve-hour sliding cap",
+        source_type: "code_derived",
+        impact: "medium",
+        reversibility: "medium",
+        status: "accepted",
+        expires_when: "auth threat model changes",
+        trace: "atlas-api/auth/session.ts",
+        body: "The existing API already enforces a twelve-hour sliding cap. Hive keeps that policy unless the operator changes the auth model.",
+        can_reopen: true,
+      },
+      {
+        id: "ATL-004",
+        title: "Onboarding setup can stay single-org for the first pass",
+        source_type: "inferred",
+        impact: "low",
+        reversibility: "high",
+        status: "accepted_for_iteration",
+        expires_when: "multi-org invites enter the iteration goal",
+        trace: "wiki/onboarding.md",
+        body: "The onboarding wizard assumes one organization per pilot account for this iteration.",
+        can_reopen: true,
+      },
+    ],
+    counts: { total: 4, operator_specified: 1, hive_assumed: 3, reopenable: 3 },
+    source_types: ["agent_proposed", "code_derived", "inferred", "user_provided"],
+    must_ask: [
+      "who is authorized to perform an action (permission/auth model)",
+      "billing, pricing, or seat behavior",
+      "data retention and destructive defaults (hard vs soft delete)",
+      "public API contracts and breaking changes",
+      "legal/compliance wording and notices",
+      "security-sensitive defaults (e.g. token handling, account-existence leaks)",
+      "customer-facing pricing changes",
+    ],
+    error: "",
+  },
+};
 
 const conversations: AgentConversation[] = [
   {
@@ -1337,6 +1405,53 @@ export const api = {
       test_episodes: testEpisodes.filter((e) => e.project_id === id),
       directives: directives.filter((d) => d.project_id === id),
       checkouts: checkoutsForProject(id),
+      decision_ledger: decisionLedgers[id] ?? {
+        decisions: [],
+        counts: { total: 0, operator_specified: 0, hive_assumed: 0, reopenable: 0 },
+        source_types: [],
+        must_ask: [
+          "who is authorized to perform an action (permission/auth model)",
+          "billing, pricing, or seat behavior",
+          "data retention and destructive defaults (hard vs soft delete)",
+          "public API contracts and breaking changes",
+          "legal/compliance wording and notices",
+          "security-sensitive defaults (e.g. token handling, account-existence leaks)",
+        ],
+        error: "",
+      },
+    });
+  },
+
+  reopenDecision: async (projectId: string, decisionId: string): Promise<unknown> => {
+    const ledger = decisionLedgers[projectId];
+    const decision = ledger?.decisions.find((d) => d.id === decisionId);
+    if (!ledger || !decision || !decision.can_reopen) throw new Error("decision cannot be re-opened");
+    decision.status = "needs_clarification";
+    decision.can_reopen = false;
+    ledger.counts.reopenable = ledger.decisions.filter((d) => d.can_reopen).length;
+    const parked = workItems.filter(
+      (w) => w.project_id === projectId && (w.source ?? "manual") === "manual" && w.status === "active",
+    );
+    for (const item of parked) {
+      item.status = "parked";
+      item.parked_reason = `decision ${decision.id} re-opened`;
+    }
+    const question: Question = {
+      id: `q-decision-${decision.id.toLowerCase()}`,
+      project_id: projectId,
+      workstream_id: "",
+      text: `## Re-open decision ${decision.id}: ${decision.title}\n\n${decision.body}`,
+      status: "open",
+      answer: "",
+      created_at: Date.now() / 1000,
+      answered_at: 0,
+    };
+    questions.unshift(question);
+    return structuredClone({
+      decision,
+      question,
+      parked_workstream_ids: parked.map((w) => w.id),
+      commit: "mock",
     });
   },
 

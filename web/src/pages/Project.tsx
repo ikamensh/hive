@@ -330,9 +330,19 @@ export default function ProjectPage() {
           {configured && <span className="head-repo">{repoShort(project.spec_repo)}</span>}
         </h1>
         <StateBadge state={project.state} attentionCount={inboxCount} />
-        <Link className="project-settings-link ghost" to={`/p/${id}/settings`}>
-          <i className="ti ti-settings" aria-hidden /> Settings
-        </Link>
+        <div className="project-head-links">
+          <Link className="project-settings-link ghost" to={`/p/${id}/decisions`}>
+            <i className="ti ti-git-branch" aria-hidden /> Decisions
+            {data.decision_ledger && (
+              <span className="head-link-count">
+                {data.decision_ledger.counts.operator_specified}/{data.decision_ledger.counts.hive_assumed}
+              </span>
+            )}
+          </Link>
+          <Link className="project-settings-link ghost" to={`/p/${id}/settings`}>
+            <i className="ti ti-settings" aria-hidden /> Settings
+          </Link>
+        </div>
         <ProjectActions project={project} onPatch={patch} />
       </div>
 

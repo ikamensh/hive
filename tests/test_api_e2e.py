@@ -34,6 +34,7 @@ from hive.models import (
     TaskStatus,
     Verdict,
     Workstream,
+    WorkstreamStatus,
 )
 from hive._control.orchestrator import Orchestrator, Tools
 from hive.persistence.store import MemoryStore
@@ -311,6 +312,102 @@ def test_start_requires_spec_repo(harness):
     project = client.post("/api/projects", json={"name": "draft"}).json()
     assert client.post(f"/api/projects/{project['id']}/start", json={}).status_code == 400
     assert len(orch.invocations) == 0
+
+
+def test_project_payload_includes_decision_ledger(harness, tmp_path):
+    """Project detail is the CLI/UI payload; it must carry the ledger fields
+    needed to show operator-vs-Hive provenance without a second command."""
+    client, store, _orch = harness
+    origin = _spec_origin(
+        tmp_path,
+        {
+            "mission.md": "# Mission\n\nmust_ask:\n  - launch pricing\n",
+            "iteration.md": "# Iteration\n\nalso_must_ask:\n  - data migration timing\n",
+            "wiki/decisions.md": (
+                "# Decision ledger\n\n"
+                "## D-001 · Pricing unit\n"
+                "source_type: user_provided\n"
+                "impact: high · reversibility: low · status: accepted\n"
+                "expires_when: when packaging changes\n"
+                "trace: input-log/pricing.md\n\n"
+                "Charge per seat.\n\n"
+                "## D-002 · Retry window\n"
+                "source_type: agent_proposed\n"
+                "impact: medium · reversibility: high · status: accepted_for_iteration\n"
+                "expires_when: operator picks a policy\n"
+                "trace: input-log/retries.md\n\n"
+                "Retry failed webhooks for 24 hours.\n"
+            ),
+        },
+    )
+    project = store.put(Project(name="ledger", spec_repo=str(origin)))
+
+    detail = client.get(f"/api/projects/{project.id}").json()
+
+    ledger = detail["decision_ledger"]
+    assert ledger["counts"] == {
+        "total": 2,
+        "operator_specified": 1,
+        "hive_assumed": 1,
+        "reopenable": 1,
+    }
+    assert ledger["source_types"] == ["agent_proposed", "user_provided"]
+    retry = next(d for d in ledger["decisions"] if d["id"] == "D-002")
+    assert retry["source_type"] == "agent_proposed"
+    assert retry["reversibility"] == "high"
+    assert retry["expires_when"] == "operator picks a policy"
+    assert retry["can_reopen"] is True
+    assert "launch pricing" in ledger["must_ask"]
+    assert "data migration timing" in ledger["must_ask"]
+
+
+def test_reopen_hive_assumption_creates_question_and_parks_work(harness, tmp_path):
+    """Re-opening an agent-proposed ledger entry turns it back into an inbox
+    question and stops active manual work that may depend on the assumption."""
+    client, store, _orch = harness
+    origin = _spec_origin(
+        tmp_path,
+        {
+            "mission.md": "# Mission\nBuild it.\n",
+            "iteration.md": "# Iteration\nShip it.\n",
+            "wiki/decisions.md": (
+                "# Decision ledger\n\n"
+                "## D-002 · Retry window\n"
+                "source_type: agent_proposed\n"
+                "impact: medium · reversibility: high · status: accepted_for_iteration\n"
+                "expires_when: operator picks a policy\n"
+                "trace: input-log/retries.md\n\n"
+                "Retry failed webhooks for 24 hours.\n"
+            ),
+        },
+    )
+    project = store.put(Project(name="ledger", spec_repo=str(origin)))
+    work = store.put(
+        Workstream(
+            project_id=project.id,
+            title="build retries",
+            description="depends on retry policy",
+            status=WorkstreamStatus.active,
+        )
+    )
+
+    assert client.get(f"/api/projects/{project.id}").json()["decision_ledger"]["counts"]["reopenable"] == 1
+    result = client.post(f"/api/projects/{project.id}/decisions/D-002/reopen", json={}).json()
+
+    assert result["decision"]["status"] == "needs_clarification"
+    assert result["question"]["status"] == "open"
+    assert "Retry failed webhooks for 24 hours" in result["question"]["text"]
+    assert result["parked_workstream_ids"] == [work.id]
+    saved_work = store.get(Workstream, work.id)
+    assert saved_work.status == WorkstreamStatus.parked
+    assert "D-002" in saved_work.parked_reason
+    detail = client.get(f"/api/projects/{project.id}").json()
+    assert detail["decision_ledger"]["decisions"][0]["status"] == "needs_clarification"
+
+    verify = tmp_path / "verify-ledger"
+    _git(["clone", str(origin), str(verify)], tmp_path)
+    assert "status: needs_clarification" in (verify / "wiki/decisions.md").read_text()
+    assert not (verify / ".hive-decision-read").exists()
 
 
 def test_start_requires_completed_intake(harness):
