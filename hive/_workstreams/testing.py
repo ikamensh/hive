@@ -913,11 +913,7 @@ def create_refresh_questions(
     }
     created: list[Question] = []
     for raw in summary.questions:
-        text = (
-            "Hive's testing refresh could not derive acceptance confidently without "
-            "this answer.\n\n"
-            f"{raw}"
-        )
+        text = _refresh_question_text(raw, workstream)
         if text in existing:
             continue
         existing.add(text)
@@ -932,6 +928,37 @@ def create_refresh_questions(
             )
         )
     return created
+
+
+def _refresh_question_text(raw: str, workstream: ProjectWorkstream) -> str:
+    raw = raw.strip()
+    if _looks_like_structured_question(raw):
+        return raw
+    scope = workstream.title or workstream.repo or "this testing workstream"
+    return (
+        "## Acceptance decision needed\n\n"
+        f"**Context:** Hive's testing refresh for `{scope}` could not derive "
+        "acceptance confidently from the current intention artifacts.\n\n"
+        f"**Gap:** {raw}\n\n"
+        "**Options:**\n"
+        "1. Provide the intended product rule or acceptance behavior so Hive can "
+        "write the story without guessing.\n"
+        "2. Say this ambiguity is not material and Hive should proceed with the "
+        "simplest reasonable acceptance rule.\n\n"
+        "**Recommendation:** Choose option 1 when the answer would affect user-visible "
+        "behavior, data handling, security, billing, or release scope; otherwise choose "
+        "option 2 so testing can continue."
+    )
+
+
+def _looks_like_structured_question(text: str) -> bool:
+    lower = text.lower()
+    return (
+        "context" in lower
+        and ("gap" in lower or "contradiction" in lower)
+        and "option" in lower
+        and "recommend" in lower
+    )
 
 
 def finalize_refresh(
