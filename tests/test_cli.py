@@ -852,11 +852,12 @@ def test_cli_cancel_and_dismiss(harness):
     assert cli(client, "dismiss", question.id)["status"] == "dismissed"
 
 
-def test_cli_test_run_and_cancel_map_to_endpoints():
+def test_cli_run_cancels_map_to_endpoints():
     rec = _Recorder()
     cli(rec, "test-run", "p1", "ws1", "--scope", "full", "--max", "3")
     cli(rec, "test-run", "p1", "ws1", "--story", "login", "--story", "signup")
     cli(rec, "test-cancel", "ep1")
+    cli(rec, "issue-cancel", "run1")
     assert rec.calls == [
         ("POST", "/api/projects/p1/workstreams/ws1/test-episodes",
          {"scope": "full", "story_keys": [], "max_stories": 3}),
@@ -864,6 +865,7 @@ def test_cli_test_run_and_cancel_map_to_endpoints():
         ("POST", "/api/projects/p1/workstreams/ws1/test-episodes",
          {"scope": "selected", "story_keys": ["login", "signup"], "max_stories": 0}),
         ("POST", "/api/test-episodes/ep1/cancel", None),
+        ("POST", "/api/issue-runs/run1/cancel", None),
     ]
 
 

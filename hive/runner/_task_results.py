@@ -309,6 +309,7 @@ class TaskResultProcessor:
             self._land_review(task, body)
         elif task.kind in (TaskKind.resolve, TaskKind.review) and body.cancelled:
             cancel_issue_work(self.store, task)
+            self._refresh_run(task)
 
         if (
             task.kind in (TaskKind.resolve, TaskKind.review)

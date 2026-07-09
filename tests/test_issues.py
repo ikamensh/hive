@@ -817,6 +817,46 @@ def test_cancel_issue_run_cancels_pending_run_task(app, monkeypatch):
     assert len(store.list(Task, project_id=project["id"])) == 1
 
 
+def test_cancel_issue_run_task_cancels_parent_run(app, monkeypatch):
+    """Cancelling a child resolve/review task is also a run cancellation.
+
+    Operators used the generic task-cancel surface before issue runs had their
+    own visible cancel control; the parent run must not stay active and later
+    dispatch more selected issues.
+    """
+    client, store = app
+    project = client.post("/api/projects", json={"name": "spec"}).json()
+    client.patch(f"/api/projects/{project['id']}", json={"spec_repo": "https://github.com/o/r.git"})
+    _pass_preflight(monkeypatch)
+    monkeypatch.setattr(
+        "hive.api.fetch_open_issues_full",
+        lambda repo, token: [issue(1, "first"), issue(2, "second"), issue(3, "third"), issue(4, "fourth")],
+    )
+
+    detail = client.get(f"/api/projects/{project['id']}").json()
+    stream = next(w for w in detail["workstreams"] if w["kind"] == "github_issues")
+    run = client.post(
+        f"/api/projects/{project['id']}/workstreams/{stream['id']}/issue-runs",
+        json={"scope": "selected", "issue_numbers": [1, 2, 3, 4]},
+    ).json()["run"]
+    task = store.list(Task, project_id=project["id"])[0]
+
+    cancelled_task = client.post(f"/api/tasks/{task.id}/cancel").json()
+    project_after = client.get(f"/api/projects/{project['id']}").json()
+    run_after = next(r for r in project_after["issue_runs"] if r["id"] == run["id"])
+
+    assert cancelled_task["status"] == TaskStatus.cancelled
+    assert run_after["status"] == IssueRunStatus.cancelled
+    assert run_after["counts"]["cancelled_tasks"] == 1
+    assert run_after["counts"]["running"] == 0
+    assert run_after["counts"]["queued"] == 4
+
+    project_model = store.get(Project, project["id"])
+    cancelled_run = store.get(IssueRun, run["id"])
+    assert advance_issues(store, project_model, run=cancelled_run) == 0
+    assert len(store.list(Task, project_id=project["id"])) == 1
+
+
 def test_cancel_issue_run_signals_delivered_running_task(app):
     client, store = app
     project = client.post("/api/projects", json={"name": "spec"}).json()
@@ -852,6 +892,58 @@ def test_cancel_issue_run_signals_delivered_running_task(app):
     assert task.cancel_requested is True
     assert cancelled["status"] == IssueRunStatus.cancelled
     assert cancelled["counts"]["cancelled_tasks"] == 1
+
+
+def test_cancelled_delivered_issue_task_result_refreshes_parent_run(app):
+    client, store = app
+    project = client.post("/api/projects", json={"name": "spec"}).json()
+    client.patch(f"/api/projects/{project['id']}", json={"spec_repo": "https://github.com/o/r.git"})
+    stream = next(w for w in client.get(f"/api/projects/{project['id']}").json()["workstreams"] if w["kind"] == "github_issues")
+    ws = store.put(
+        Workstream(
+            project_id=project["id"],
+            workstream_id=stream["id"],
+            repo="https://github.com/o/r.git",
+            title="#7 bug",
+            source=WorkstreamSource.issue,
+            issue_number=7,
+            status=WorkstreamStatus.resolving,
+        )
+    )
+    run = store.put(
+        IssueRun(
+            project_id=project["id"],
+            workstream_id=stream["id"],
+            repo="https://github.com/o/r.git",
+            scope=IssueRunScope.selected,
+            issue_numbers=[7],
+            status=IssueRunStatus.running,
+            counts={"running": 1, "queued": 0},
+        )
+    )
+    task = store.put(
+        Task(
+            project_id=project["id"],
+            workstream_id=ws.id,
+            work_item_id=ws.id,
+            run_id=run.id,
+            repo="https://github.com/o/r.git",
+            instructions="resolve",
+            status=TaskStatus.running,
+            kind=TaskKind.resolve,
+            runner_id="runner-1",
+            delivered=True,
+            issue_number=7,
+        )
+    )
+
+    client.post(f"/api/issue-runs/{run.id}/cancel")
+    client.post(f"/api/tasks/{task.id}/result", json={"text": "stopped", "cancelled": True}, headers=RUNNER_HEADERS)
+
+    run_after = store.get(IssueRun, run.id)
+    assert run_after.status == IssueRunStatus.cancelled
+    assert run_after.counts["running"] == 0
+    assert run_after.counts["queued"] == 1
 
 
 def test_cancel_issue_run_hard_cancels_undelivered_running_task(app):
