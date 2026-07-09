@@ -1,6 +1,7 @@
 """Runner reboot semantics: in-flight tasks are requeued on boot registration,
 left alone on heartbeat registration."""
 
+import json
 import subprocess
 import time
 
@@ -21,7 +22,7 @@ from hive.models import (
 )
 from hive.persistence.store import MemoryStore
 from hive._control.supervisor import Supervisor
-from hive.runner._daemon import checkout, validate_probe_result
+from hive.runner._daemon import checkout, run_preflight, validate_probe_result
 
 H = {"X-Hive-Token": "t"}
 CLAUDE_CODE_DISCOVERY = {
@@ -261,6 +262,43 @@ def test_codex_probe_explains_deprecated_wrapper(tmp_path):
 
     assert is_error
     assert "kodo Codex wrapper" in text
+
+
+def test_runner_preflight_visibly_checks_issue_commenting_auth(tmp_path, monkeypatch):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == ["gh", "auth", "status"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="Logged in\n", stderr="")
+        if cmd[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {
+                        "nameWithOwner": "o/r",
+                        "viewerPermission": "WRITE",
+                        "hasIssuesEnabled": True,
+                    }
+                ),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    def fake_git(args, cwd, timeout=120):
+        calls.append(["git", *args])
+        return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="ok")
+
+    monkeypatch.setattr("hive.runner._daemon.subprocess.run", fake_run)
+    monkeypatch.setattr("hive.runner._daemon._git", fake_git)
+    monkeypatch.setattr("hive.runner._daemon.time.time", lambda: 123)
+
+    result = run_preflight(tmp_path)
+
+    assert result["is_error"] is False
+    assert "PASS gh issue commenting auth: o/r permission=WRITE issues=enabled" in result["text"]
+    assert ["gh", "repo", "view", "--json", "nameWithOwner,viewerPermission,hasIssuesEnabled"] in calls
 
 
 def _git(args, cwd):

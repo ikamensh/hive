@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import importlib.util
+import json
 import logging
 import os
 import re
@@ -538,13 +539,38 @@ def run_preflight(project_dir: Path) -> dict:
     """Runner self-check for issue solving: prove this host can actually do the
     agent-facing GitHub work — push a branch to the repo and use `gh` — so a
     misconfigured runner is caught before a big run instead of mid-fix. Pushes a
-    throwaway branch and deletes it; runs `gh auth status`. Leaves no trace."""
+    throwaway branch and deletes it; checks `gh` auth plus repo issue-commenting
+    permission. Leaves no trace."""
     results: list[tuple[str, bool, str]] = []
 
     gh = subprocess.run(
         ["gh", "auth", "status"], cwd=project_dir, capture_output=True, text=True, timeout=30
     )
     results.append(("gh auth status", gh.returncode == 0, (gh.stderr or gh.stdout).strip()[-500:]))
+
+    gh_repo = subprocess.run(
+        ["gh", "repo", "view", "--json", "nameWithOwner,viewerPermission,hasIssuesEnabled"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    issue_comment_ok = False
+    issue_comment_detail = (gh_repo.stderr or gh_repo.stdout).strip()[-500:]
+    if gh_repo.returncode == 0:
+        try:
+            repo_info = json.loads(gh_repo.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            issue_comment_detail = f"could not parse gh repo view JSON: {exc}"
+        else:
+            permission = str(repo_info.get("viewerPermission") or "").upper()
+            has_issues = bool(repo_info.get("hasIssuesEnabled"))
+            issue_comment_ok = has_issues and permission in {"TRIAGE", "WRITE", "MAINTAIN", "ADMIN"}
+            issue_comment_detail = (
+                f"{repo_info.get('nameWithOwner') or 'repo'} permission={permission or 'unknown'} "
+                f"issues={'enabled' if has_issues else 'disabled'}"
+            )
+    results.append(("gh issue commenting auth", issue_comment_ok, issue_comment_detail))
 
     branch = f"hive/preflight-{int(time.time())}"
     push_ok, detail = False, ""
