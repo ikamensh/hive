@@ -113,6 +113,24 @@ budget uses, and it keeps one choke point.
   allowance section (grants + used/remaining today), next to the existing
   license-usage view.
 
+## Live findings (2026-07-09 lab run)
+
+A full new-project loop ran under `[{"sessions_per_day": 4}, {"backends":
+["claude"], "models": ["haiku"]}]` on a real runner (only claude usable):
+intake picked the granted scout, the planner chose the unlimited haiku pair
+for work/verify on its own (ALLOWANCE snapshot line), a directive's resolve
+task was remapped codex→claude and held at 0 headroom until the grants were
+loosened, then landed. Known gaps observed:
+
+- `goal_complete` wins in `compute_state`, so a grant-blocked pending issue
+  task hides behind `idle_goal_complete` — the stall is invisible.
+- Pipelines remap by *grants*, not by *fleet availability*: an any-backend
+  grant keeps the codex default even when no codex is usable, and the task
+  waits as `blocked_resources`. Restricting grants is the current workaround.
+- No web UI surface for grants yet (API/CLI/payload only), and `hive new`
+  starts intake before grants can be set (create → set → intake/start is the
+  restricted-from-birth sequence).
+
 ## Future (not now)
 
 - Grants as a share of a subscription window ("20% of the weekly Claude Max
