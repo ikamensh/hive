@@ -53,9 +53,14 @@ _ERRORISH = ("error", "fail", "not logged", "denied", "unauthorized", "authentic
 def _first_line(text: str) -> str:
     """The most actionable line of a probe/exhaustion message: agent CLIs often
     front-load banner noise, so prefer the first error-looking line and fall
-    back to the first non-empty one."""
+    back to the first non-empty one. Bare section headers ("HIVE PROBE
+    FAILED:") match the error markers but carry nothing — skip them, or the
+    note hides the real reason written on the line above (seen live: a
+    subscription-billing summary displaced by the empty header)."""
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     for line in lines:
+        if line.endswith(":"):
+            continue
         if any(marker in line.lower() for marker in _ERRORISH):
             return line
     return lines[0] if lines else ""

@@ -309,3 +309,20 @@ def test_existing_testing_workstream_row_carries_its_id():
     ))
     [row] = [j for j in _show(store)["autonomy"] if j["job"] == "testing_check"]
     assert row["workstream_id"] == stream.id
+
+
+def test_agent_note_prefers_the_reason_over_the_failure_header():
+    """Regression (seen live): a probe result whose first line is the human
+    summary ("cursor: Subscription/billing issue — ...") followed by the bare
+    "HIVE PROBE FAILED:" header must surface the summary, not the header —
+    the header matches the error-word heuristic but carries no information."""
+    from hive._control.show import _first_line
+
+    text = (
+        "cursor: Subscription/billing issue — check your account status.\n\n"
+        "HIVE PROBE FAILED:\n- probe marker 'HIVE_AGENT_PROBE_OK' was not found"
+    )
+    assert _first_line(text) == "cursor: Subscription/billing issue — check your account status."
+    # Banner noise before the real error still yields the error line.
+    banner = "YOLO mode is enabled.\nLoaded cached credentials.\nError authenticating: IneligibleTierError"
+    assert _first_line(banner) == "Error authenticating: IneligibleTierError"
