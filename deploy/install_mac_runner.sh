@@ -149,12 +149,23 @@ EOF
 echo "-> wrote $MENUBAR_PLIST"
 
 # --- (re)load -----------------------------------------------------------------
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
-launchctl enable "gui/$(id -u)/$LABEL"
-launchctl bootout "gui/$(id -u)/$MENUBAR_LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$MENUBAR_PLIST"
-launchctl enable "gui/$(id -u)/$MENUBAR_LABEL"
+reload_agent() {
+  # bootout returns before the old instance is fully torn down; an immediate
+  # bootstrap then fails with EIO (observed live). Retry briefly.
+  local label="$1" plist="$2" i
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  for i in 1 2 3 4 5; do
+    if launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null; then
+      launchctl enable "gui/$(id -u)/$label"
+      return 0
+    fi
+    sleep 2
+  done
+  echo "!! could not bootstrap $label — run: launchctl bootstrap gui/$(id -u) $plist" >&2
+  return 1
+}
+reload_agent "$LABEL" "$PLIST"
+reload_agent "$MENUBAR_LABEL" "$MENUBAR_PLIST"
 echo "-> loaded. logs: $LOG_DIR/runner.log ($LOG_DIR/menubar.log for the menu bar)"
 echo "   the 🐝 in the menu bar pauses/resumes this runner"
 echo "   status:    launchctl print gui/$(id -u)/$LABEL | grep -E 'state|pid'"
