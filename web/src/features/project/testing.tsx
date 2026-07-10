@@ -1,7 +1,16 @@
 import { Fragment, useEffect, useState } from "react";
 import { ago, api, repoShort } from "../../api";
 import { Markdown } from "../../components/shared";
-import type { Finding, Project, Story, TestEpisode, TestingHealth, Workstream } from "../../types";
+import type {
+  Finding,
+  Project,
+  Question,
+  Story,
+  TestEpisode,
+  TestabilityView,
+  TestingHealth,
+  Workstream,
+} from "../../types";
 
 const STORY_GROUPS: { label: string; statuses: Story["status"][] }[] = [
   { label: "priority", statuses: ["untested", "stale", "failing", "blocked"] },
@@ -147,6 +156,139 @@ export function TestingToolbar({
           )}
         </div>
       )}
+    </section>
+  );
+}
+
+/** The guided-setup surface for the testability contract: one glance says
+ * whether Hive knows how to stand the app up, what Hive offers to do next
+ * (one click), and which decisions only the human can make — answerable
+ * right here. Everything else (drafting, probing, folding answers in) is
+ * agent work chained server-side. */
+export function TestabilityPanel({
+  project,
+  stream,
+  view,
+  decisions,
+  onChanged,
+}: {
+  project: Project;
+  stream?: Workstream;
+  view?: TestabilityView;
+  decisions: Question[];
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState<"draft" | "probe" | "answer" | "">("");
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [showContract, setShowContract] = useState(false);
+  if (!stream || !view) return null;
+  const health = view.health;
+  const contract = view.contract;
+
+  const act = async (action: "draft" | "probe") => {
+    setBusy(action);
+    setError("");
+    setMessage("");
+    try {
+      await (action === "draft"
+        ? api.draftTestability(project.id, stream.id)
+        : api.probeTestability(project.id, stream.id));
+      setMessage(action === "draft" ? "draft task queued" : "probe task queued");
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message || `${action} failed`);
+    }
+    setBusy("");
+  };
+
+  const answer = async (question: Question) => {
+    const text = (answers[question.id] ?? "").trim();
+    if (!text) return;
+    setBusy("answer");
+    setError("");
+    try {
+      await api.answerQuestion(question.id, text);
+      setMessage("answered — Hive folds it into the contract");
+      setAnswers((prev) => ({ ...prev, [question.id]: "" }));
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message || "answer failed");
+    }
+    setBusy("");
+  };
+
+  return (
+    <section className={`testability-panel reveal testability-${health.state}`}>
+      <div className="testability-head">
+        <h3>
+          Testability contract <span className={`chip chip-testability-${health.state}`}>{health.state}</span>
+        </h3>
+        <div className="scan-buttons">
+          {contract && contract.content && (
+            <button className="ghost" onClick={() => setShowContract((v) => !v)}>
+              {showContract ? "hide contract" : "view contract"}
+            </button>
+          )}
+          {(health.action === "draft" || health.state === "verified") && (
+            <button className="ghost" onClick={() => act("draft")} disabled={busy !== ""}>
+              {busy === "draft"
+                ? "queueing..."
+                : health.state === "missing"
+                  ? "let Hive draft it"
+                  : health.state === "broken"
+                    ? "let Hive repair it"
+                    : "re-draft"}
+            </button>
+          )}
+          {health.action === "probe" && (
+            <button className="ghost" onClick={() => act("probe")} disabled={busy !== ""}>
+              {busy === "probe" ? "queueing..." : "prove it on a runner"}
+            </button>
+          )}
+        </div>
+      </div>
+      <p className="testability-summary">
+        {health.summary}
+        {health.offer && <span className="muted"> {health.offer}</span>}
+      </p>
+      {contract && contract.status === "broken" && contract.probe_problems.length > 0 && (
+        <ul className="testability-problems">
+          {contract.probe_problems.map((problem) => (
+            <li key={problem}>
+              <code>{problem}</code>
+            </li>
+          ))}
+        </ul>
+      )}
+      {decisions.length > 0 && (
+        <div className="testability-decisions">
+          <p className="muted">
+            {decisions.length === 1 ? "This decision needs" : "These decisions need"} you — everything else is
+            Hive's job:
+          </p>
+          {decisions.map((question) => (
+            <div className="testability-decision" key={question.id}>
+              <Markdown className="issue-detail" text={question.text} />
+              <div className="testability-answer">
+                <input
+                  placeholder="your decision (e.g. option A)"
+                  value={answers[question.id] ?? ""}
+                  onChange={(e) => setAnswers((prev) => ({ ...prev, [question.id]: e.target.value }))}
+                  onKeyDown={(e) => e.key === "Enter" && answer(question)}
+                />
+                <button onClick={() => answer(question)} disabled={busy !== "" || !(answers[question.id] ?? "").trim()}>
+                  {busy === "answer" ? "sending..." : "answer"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {showContract && contract && <Markdown className="issue-detail testability-contract" text={contract.content} />}
+      {error && <span className="form-error">{error}</span>}
+      {message && !error && <span className="scan-summary">{message}</span>}
     </section>
   );
 }

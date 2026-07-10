@@ -179,6 +179,16 @@ const realApi = {
       body: JSON.stringify(body),
     }),
   cancelTestEpisode: (id: string) => http<TestEpisode>(`/api/test-episodes/${id}/cancel`, { method: "POST" }),
+  draftTestability: (projectId: string, workstreamId: string) =>
+    http<{ task: Task }>(`/api/projects/${projectId}/workstreams/${workstreamId}/testability-draft`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  probeTestability: (projectId: string, workstreamId: string) =>
+    http<{ task: Task }>(`/api/projects/${projectId}/workstreams/${workstreamId}/testability-probe`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
   answerQuestion: (id: string, answer: string) =>
     http<Question>(`/api/questions/${id}/answer`, { method: "POST", body: JSON.stringify({ answer }) }),
   feedback: async (project_id: string, target_id: string, verdict: "up" | "down", comment: string) => {

@@ -25,7 +25,7 @@ import {
   type JobTile,
 } from "../features/project/launchpad";
 import { ProjectSetup } from "../features/project/setup";
-import { StoriesView, TestingToolbar } from "../features/project/testing";
+import { StoriesView, TestabilityPanel, TestingToolbar } from "../features/project/testing";
 import { projectViewModel } from "../features/project/viewModel";
 import type { ProjectPatch } from "../types";
 
@@ -418,6 +418,18 @@ export default function ProjectPage() {
                   selectedStoryKeys={selectedStoryKeys}
                   activityVersion={testingActivityVersion}
                   health={activeTestingStream ? data.testing_health?.[activeTestingStream.id] : undefined}
+                  onChanged={refresh}
+                />
+                <TestabilityPanel
+                  project={project}
+                  stream={activeTestingStream}
+                  view={activeTestingStream ? data.testability?.[activeTestingStream.id] : undefined}
+                  decisions={data.questions.filter(
+                    (q) =>
+                      q.workstream_id === (activeTestingStream?.id ?? "") &&
+                      (q.dedup_key ?? "").startsWith("testability:") &&
+                      q.status === "open",
+                  )}
                   onChanged={refresh}
                 />
                 <h2 className="col-title issues-title">

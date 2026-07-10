@@ -28,6 +28,7 @@ import type {
   Story,
   Subscription,
   SubscriptionCandidate,
+  TestabilityView,
   TestingHealth,
   Task,
   TestEpisode,
@@ -749,6 +750,17 @@ const questions: Question[] = [
     created_at: now - 86400 * 2,
     answered_at: now - 86400 * 2 + 5400,
   },
+  {
+    id: "q-testability-stripe",
+    project_id: "p-beacon",
+    workstream_id: "stream-beacon-testing",
+    dedup_key: "testability:stream-beacon-testing:stripe-sandbox",
+    text: "Hive needs a decision to finish the testability contract for `acme/beacon`.\n\n**May test sweeps exercise the Stripe integration?**\n\nOptions:\n- A) Create a Stripe sandbox key and store it as `STRIPE_TEST_KEY` on the runners\n- B) Skip payment stories in sweeps; mark them human-demo-only\n\nHive recommends: A\n\nAnswer here — Hive updates `testability.md` itself and re-proves it.",
+    status: "open",
+    answer: "",
+    created_at: now - 900,
+    answered_at: 0,
+  },
 ];
 
 const tasks: Task[] = [
@@ -1426,9 +1438,36 @@ export const api = {
             },
           }
         : {};
+    const testability: Record<string, TestabilityView> =
+      id === "p-beacon"
+        ? {
+            "stream-beacon-testing": {
+              contract: {
+                id: "contract-beacon",
+                workstream_id: "stream-beacon-testing",
+                repo: "acme/beacon",
+                content:
+                  "# testability: beacon\n\n## Run\n### local\n    npm install\n    PORT=4310 npm run dev\n\n## Health\nGET http://localhost:4310/healthz returns 200 within 60s.\n\n## Reset\n`npm run seed` restores the demo dataset; state lives only in ./data.\n\n## Credentials & accounts\n- STRIPE_TEST_KEY — pending decision `stripe-sandbox`.\n\n## Constraints\n- Never touch production or real customer accounts.",
+                fidelities: ["local"],
+                status: "draft",
+                probed_fidelity: "",
+                probe_problems: [],
+                probed_at: 0,
+              },
+              health: {
+                state: "decisions",
+                summary: "1 testability decision(s) need you — everything else is Hive's job.",
+                offer: "Answer them below; Hive folds the answers into the contract and re-proves it.",
+                action: "decide",
+              },
+              open_decisions: 1,
+            },
+          }
+        : {};
     return structuredClone({
       project,
       testing_health: testingHealth,
+      testability,
       workstreams: projectWorkstreams.filter((w) => w.project_id === id),
       work_items: workItems.filter((w) => w.project_id === id),
       tasks: tasks.filter((t) => t.project_id === id),
@@ -1748,6 +1787,20 @@ export const api = {
     episode.status = "cancelled";
     episode.finished_at = Date.now() / 1000;
     return structuredClone(episode);
+  },
+
+  draftTestability: async (projectId: string, workstreamId: string): Promise<{ task: Task }> => {
+    const { task } = await api.refreshTests(projectId, workstreamId);
+    task.kind = "testability_draft";
+    task.instructions = "Explore the repo and draft testability.md.";
+    return structuredClone({ task });
+  },
+
+  probeTestability: async (projectId: string, workstreamId: string): Promise<{ task: Task }> => {
+    const { task } = await api.refreshTests(projectId, workstreamId);
+    task.kind = "testability_probe";
+    task.instructions = "Stand the app up per testability.md and report.";
+    return structuredClone({ task });
   },
 
   answerQuestion: async (id: string, answer: string): Promise<Question> => {

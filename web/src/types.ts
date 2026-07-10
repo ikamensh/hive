@@ -136,7 +136,9 @@ export interface Task {
     | "test_refresh"
     | "test_sweep"
     | "test_reproduce"
-    | "test_judge";
+    | "test_judge"
+    | "testability_draft"
+    | "testability_probe";
   instructions: string;
   conversation_id: string;
   conversation_turn: string;
@@ -188,6 +190,9 @@ export interface Question {
   project_id: string;
   workstream_id: string;
   text: string;
+  /** stable identity for machine-generated questions; testability decisions
+   *  use "testability:<workstream>:<decision key>" */
+  dedup_key?: string;
   status: "open" | "answered" | "dismissed" | "withdrawn";
   answer: string;
   created_at: number;
@@ -204,9 +209,39 @@ export interface TestingHealth {
   counts: Record<string, number>;
 }
 
+/** Mirror of the spec home's testability.md — how to stand the product up for
+ *  testing, proven by probe tasks (server: TestabilityContract). */
+export interface TestabilityContract {
+  id: string;
+  workstream_id: string;
+  repo: string;
+  content: string;
+  fidelities: string[];
+  status: "missing" | "draft" | "verified" | "broken";
+  probed_fidelity: string;
+  probe_problems: string[];
+  probed_at: number;
+}
+
+/** Deterministic contract verdict with Hive's standing offer
+ *  (server: testability_health). */
+export interface TestabilityHealth {
+  state: "missing" | "drafting" | "decisions" | "draft" | "probing" | "broken" | "verified";
+  summary: string;
+  offer: string;
+  action: "draft" | "probe" | "decide" | "";
+}
+
+export interface TestabilityView {
+  contract: TestabilityContract | null;
+  health: TestabilityHealth;
+  open_decisions: number;
+}
+
 export interface ProjectDetail {
   project: Project;
   testing_health?: Record<string, TestingHealth>;
+  testability?: Record<string, TestabilityView>;
   workstreams: Workstream[];
   work_items: WorkItem[];
   tasks: Task[];

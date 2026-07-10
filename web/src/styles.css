@@ -2492,6 +2492,83 @@ textarea:focus {
 .chip-health-refreshing {
   color: var(--ink-dim);
 }
+.testability-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: var(--panel-soft);
+  font-size: 13px;
+}
+.testability-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.testability-head h3 {
+  margin: 0;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.testability-summary {
+  margin: 0;
+}
+.chip-testability-missing,
+.chip-testability-draft,
+.chip-testability-decisions {
+  color: var(--amber);
+  border-color: #f0b35033;
+}
+.chip-testability-broken {
+  color: var(--red);
+  border-color: #f0786133;
+}
+.chip-testability-verified {
+  color: var(--green);
+  border-color: #7bd88f33;
+}
+.chip-testability-drafting,
+.chip-testability-probing {
+  color: var(--ink-dim);
+}
+.testability-problems {
+  margin: 0;
+  padding-left: 18px;
+}
+.testability-decisions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 10px;
+}
+.testability-decisions > .muted {
+  margin: 0;
+}
+.testability-decision {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
+  background: var(--panel);
+}
+.testability-answer {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.testability-answer input {
+  flex: 1;
+}
+.testability-contract {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 10px;
+}
 .offer-row {
   display: flex;
   align-items: baseline;
