@@ -16,7 +16,6 @@ import time
 import pytest
 from fastapi import HTTPException
 
-from hive._control import allowances
 from hive._control.allowances import (
     admits,
     allowance_view,
@@ -44,8 +43,6 @@ from hive.models import (
     TaskKind,
     TaskStatus,
     Workstream,
-    WorkstreamSource,
-    WorkstreamStatus,
 )
 from hive.persistence.store import MemoryStore
 
