@@ -15,6 +15,27 @@ export type ProjectState =
   | "idle"
   | "idle_no_workstreams";
 
+/** One additive agent permission (hive.models.AgentGrant): which (backend,
+ * model) pairs may run and how many sessions per UTC day. Empty lists are
+ * wildcards; sessions_per_day null = unlimited. */
+export interface AgentGrant {
+  backends: string[];
+  models: string[];
+  sessions_per_day: number | null;
+}
+
+export interface AllowanceGrant extends AgentGrant {
+  remaining_today: number | null;
+}
+
+/** Read-side allowance view from the project payload. */
+export interface Allowance {
+  limited: boolean;
+  sessions_today: number;
+  grants: AllowanceGrant[];
+  summary: string;
+}
+
 export interface Project {
   id: string;
   workspace_id?: string;
@@ -30,6 +51,7 @@ export interface Project {
   paused: boolean;
   archived: boolean;
   daily_budget_usd: number;
+  agent_grants?: AgentGrant[];
   goal_complete: boolean;
   goal_complete_note: string;
   intake_conversation_id: string;
@@ -198,6 +220,7 @@ export interface ProjectDetail {
   directives?: Directive[];
   checkouts?: Checkout[];
   decision_ledger?: DecisionLedger;
+  allowance?: Allowance;
 }
 
 export type DecisionSourceType = "user_provided" | "agent_proposed" | "code_derived" | "inferred" | string;
@@ -711,6 +734,7 @@ export interface ProjectPatch {
   testing_auto?: boolean;
   paused?: boolean;
   daily_budget_usd?: number;
+  agent_grants?: AgentGrant[];
   member_repos?: string[];
   new_iteration_note?: string;
 }

@@ -107,6 +107,10 @@ const projects: Project[] = [
     goal_complete: false,
     goal_complete_note: "",
     daily_budget_usd: 0,
+    agent_grants: [
+      { backends: [], models: [], sessions_per_day: 5 },
+      { backends: ["claude"], models: ["haiku"], sessions_per_day: null },
+    ],
     intake_conversation_id: "conv-atlas",
     state: "needs_attention",
     created_at: now - 86400 * 6,
@@ -127,6 +131,10 @@ const projects: Project[] = [
     goal_complete: false,
     goal_complete_note: "",
     daily_budget_usd: 0,
+    agent_grants: [
+      { backends: [], models: [], sessions_per_day: 5 },
+      { backends: ["codex"], models: ["gpt-5.4-mini"], sessions_per_day: null },
+    ],
     intake_conversation_id: "",
     state: "working",
     created_at: now - 86400 * 2,
@@ -1377,6 +1385,35 @@ export const api = {
   project: async (id: string): Promise<ProjectDetail> => {
     const project = projects.find((p) => p.id === id);
     if (!project) throw new Error("not found");
+    // Mirrors hive._control.allowances.allowance_view: pretend 2 sessions ran
+    // today against the first capped grant so the settings page shows headroom.
+    const grants = project.agent_grants ?? [];
+    const usedToday = grants.length > 0 ? 2 : 0;
+    let charged = false;
+    const allowanceGrants = grants.map((g) => {
+      const charge = !charged && g.sessions_per_day !== null;
+      if (charge) charged = true;
+      return {
+        ...g,
+        remaining_today:
+          g.sessions_per_day === null ? null : Math.max(g.sessions_per_day - (charge ? usedToday : 0), 0),
+      };
+    });
+    const allowance = {
+      limited: grants.length > 0,
+      sessions_today: usedToday,
+      grants: allowanceGrants,
+      summary:
+        allowanceGrants.length === 0
+          ? "no limits"
+          : allowanceGrants
+              .map(
+                (g) =>
+                  `${g.backends.join(",") || "any backend"} × ${g.models.join(",") || "any model"}: ` +
+                  (g.sessions_per_day === null ? "unlimited" : `${g.remaining_today}/${g.sessions_per_day} left today`),
+              )
+              .join("; "),
+    };
     const testingHealth: Record<string, TestingHealth> =
       id === "p-beacon"
         ? {
@@ -1404,6 +1441,7 @@ export const api = {
       test_episodes: testEpisodes.filter((e) => e.project_id === id),
       directives: directives.filter((d) => d.project_id === id),
       checkouts: checkoutsForProject(id),
+      allowance,
       decision_ledger: decisionLedgers[id] ?? {
         decisions: [],
         counts: { total: 0, operator_specified: 0, hive_assumed: 0, reopenable: 0 },

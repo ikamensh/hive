@@ -9,9 +9,168 @@ import {
   MODE_OPTIONS,
   SegPicker,
 } from "../../components/shared";
-import type { Project, ProjectPatch, WorkItem, Workstream } from "../../types";
+import type { AgentGrant, Allowance, Project, ProjectPatch, WorkItem, Workstream } from "../../types";
 
 type ProjectPatchHandler = (p: ProjectPatch) => void | Promise<void>;
+
+// Mirrors hive.agents.BACKEND_NAMES; the server rejects unknown names.
+const GRANT_BACKENDS = ["claude", "codex", "cursor", "gemini-cli"];
+
+/** Editable form row for one grant: models as comma text, blank cap = unlimited. */
+interface GrantRow {
+  backends: string[];
+  models: string;
+  sessions: string;
+}
+
+const toRow = (g: AgentGrant): GrantRow => ({
+  backends: g.backends,
+  models: g.models.join(", "),
+  sessions: g.sessions_per_day === null ? "" : String(g.sessions_per_day),
+});
+
+const fromRow = (r: GrantRow): AgentGrant => ({
+  backends: r.backends,
+  models: r.models.split(",").map((s) => s.trim()).filter(Boolean),
+  sessions_per_day: r.sessions.trim() === "" ? null : Math.max(0, Math.floor(Number(r.sessions))),
+});
+
+function AllowanceEditor({
+  project,
+  allowance,
+  onPatch,
+}: {
+  project: Project;
+  allowance?: Allowance;
+  onPatch: ProjectPatchHandler;
+}) {
+  const [rows, setRows] = useState<GrantRow[]>((project.agent_grants ?? []).map(toRow));
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    setRows((project.agent_grants ?? []).map(toRow));
+    setDirty(false);
+    setError("");
+    // Fresh form per project; polling must not clobber in-progress edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
+
+  const edit = (i: number, patch: Partial<GrantRow>) => {
+    setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+    setDirty(true);
+    setSaved(false);
+  };
+  const toggleBackend = (i: number, backend: string) => {
+    const current = rows[i].backends;
+    edit(i, {
+      backends: current.includes(backend) ? current.filter((b) => b !== backend) : [...current, backend],
+    });
+  };
+  const addRow = () => {
+    setRows((rs) => [...rs, { backends: [], models: "", sessions: "" }]);
+    setDirty(true);
+    setSaved(false);
+  };
+  const removeRow = (i: number) => {
+    setRows((rs) => rs.filter((_, j) => j !== i));
+    setDirty(true);
+    setSaved(false);
+  };
+
+  const save = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await onPatch({ agent_grants: rows.map(fromRow) });
+      setDirty(false);
+      setSaved(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "save failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Live headroom is only meaningful while the form mirrors what's saved.
+  const remaining = (i: number): string => {
+    if (dirty || !allowance || allowance.grants.length !== rows.length) return "";
+    const left = allowance.grants[i]?.remaining_today;
+    return left === null ? "unlimited" : `${Math.max(left ?? 0, 0)} left today`;
+  };
+
+  return (
+    <div className="settings-section">
+      <h2 className="col-title">agent allowance</h2>
+      <p className="muted allowance-hint">
+        Grants are additive permissions on agent sessions per day (counts are what meter subscription
+        plans). No grants = any agent may run. Empty backends/models = any; blank sessions = unlimited.
+        {allowance && allowance.limited && (
+          <>
+            {" "}
+            Used today: <strong>{allowance.sessions_today}</strong> session
+            {allowance.sessions_today === 1 ? "" : "s"}.
+          </>
+        )}
+      </p>
+      {rows.length === 0 && <p className="muted">no limits — every backend and model is allowed</p>}
+      <div className="grant-rows">
+        {rows.map((row, i) => (
+          <div className="grant-row" key={i}>
+            <div className="grant-backends" role="group" aria-label="backends">
+              {GRANT_BACKENDS.map((backend) => (
+                <button
+                  key={backend}
+                  type="button"
+                  className={`grant-chip ${row.backends.includes(backend) ? "on" : ""}`}
+                  onClick={() => toggleBackend(i, backend)}
+                  aria-pressed={row.backends.includes(backend)}
+                >
+                  {backend}
+                </button>
+              ))}
+              {row.backends.length === 0 && <span className="muted grant-any">any backend</span>}
+            </div>
+            <input
+              className="grant-models"
+              value={row.models}
+              onChange={(e) => edit(i, { models: e.target.value })}
+              placeholder="any model (or e.g. haiku, gpt-5.4-mini)"
+              aria-label="models (comma-separated)"
+            />
+            <input
+              className="grant-sessions"
+              type="number"
+              min={0}
+              step={1}
+              value={row.sessions}
+              onChange={(e) => edit(i, { sessions: e.target.value })}
+              placeholder="∞"
+              aria-label="sessions per day"
+              title="sessions per day (blank = unlimited)"
+            />
+            <span className="muted grant-remaining">{remaining(i)}</span>
+            <button type="button" className="ghost grant-remove" onClick={() => removeRow(i)} title="remove grant">
+              <i className="ti ti-x" aria-hidden />
+            </button>
+          </div>
+        ))}
+      </div>
+      {error && <p className="form-error">{error}</p>}
+      <div className="settings-actions">
+        <button type="button" className="ghost" onClick={addRow}>
+          <i className="ti ti-plus" aria-hidden /> add grant
+        </button>
+        {saved && !dirty && <span className="muted">saved</span>}
+        <button type="button" onClick={save} disabled={busy || !dirty}>
+          {busy ? "saving..." : "save allowance"}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function OverlayPortal({ children }: { children: ReactNode }) {
   return createPortal(children, document.body);
@@ -317,12 +476,14 @@ export function ProjectActions({
 export function ProjectSettings({
   project,
   workstreams,
+  allowance,
   onPatch,
   onPatchWorkstream,
 }: {
   project: Project;
   onPatch: ProjectPatchHandler;
   workstreams: Workstream[];
+  allowance?: Allowance;
   onPatchWorkstream: (workstreamId: string, patch: { enabled?: boolean }) => Promise<void>;
 }) {
   const [memberRepos, setMemberRepos] = useState(project.member_repos);
@@ -388,6 +549,8 @@ export function ProjectSettings({
           </div>
         </form>
       </div>
+
+      <AllowanceEditor project={project} allowance={allowance} onPatch={onPatch} />
 
       <div className="settings-section">
         <h2 className="col-title">policy</h2>

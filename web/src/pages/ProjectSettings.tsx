@@ -60,6 +60,7 @@ export default function ProjectSettingsPage() {
       <ProjectSettings
         project={project}
         workstreams={workstreams}
+        allowance={data.allowance}
         onPatch={patch}
         onPatchWorkstream={patchWorkstream}
       />

@@ -3545,3 +3545,79 @@ a.needs-scope:hover { color: var(--accent); }
 .enroll-command { overflow-x: auto; padding: 0.7rem 0.9rem; border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--bg-raise); }
 .enroll-command code { font-family: var(--mono); font-size: 12px; white-space: pre; }
 .enroll-actions { display: flex; gap: 0.6rem; margin: 0.6rem 0; }
+
+/* --- agent allowance (session grants) ------------------------------------ */
+.allowance-hint {
+  margin: 10px 0 0;
+  max-width: 68ch;
+}
+.grant-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.grant-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+.grant-backends {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.grant-chip {
+  padding: 3px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.grant-chip.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: inherit;
+}
+.grant-any {
+  font-size: 11px;
+  font-family: var(--mono);
+}
+.grant-models {
+  flex: 1 1 220px;
+  min-width: 160px;
+}
+.grant-sessions {
+  width: 72px;
+  text-align: center;
+}
+.grant-remaining {
+  font-family: var(--mono);
+  font-size: 11px;
+  min-width: 90px;
+  text-align: right;
+}
+.grant-remove {
+  padding: 4px 8px;
+}
+.allowance-line {
+  font-family: var(--mono);
+  font-size: 11px;
+  margin-left: auto;
+  margin-right: 12px;
+  max-width: 55%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.allowance-line .ti {
+  margin-right: 6px;
+}

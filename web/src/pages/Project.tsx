@@ -240,6 +240,14 @@ export default function ProjectPage() {
       <div className="launch-console">
         <div className="launch-console-head">
           <h2>Start work</h2>
+          {data.allowance?.limited && (
+            <span
+              className="muted allowance-line"
+              title={`agent allowance (sessions/day) — ${data.allowance.sessions_today} used today`}
+            >
+              <i className="ti ti-ticket" aria-hidden /> {data.allowance.summary}
+            </span>
+          )}
           <span className="muted">{project.paused ? "paused" : "ready"}</span>
         </div>
         <div className="launch-row">
