@@ -796,6 +796,34 @@ def test_cli_cancel_and_dismiss(harness):
     assert cli(client, "dismiss", question.id)["status"] == "dismissed"
 
 
+class _Recorder:
+    """A minimal httpx-shaped client that records the call instead of sending it
+    — enough to assert a CLI command maps to the documented API request."""
+
+    base_url = "http://rec"
+
+    def __init__(self):
+        self.calls: list[tuple[str, str, dict | None]] = []
+
+    def _send(self, method: str, url: str, json=None):
+        self.calls.append((method, url, json))
+
+        class _Resp:
+            def raise_for_status(self):
+                return self
+
+            def json(self):
+                return {"task": {"id": "t1"}}
+
+        return _Resp()
+
+    def get(self, url, **kw):
+        return self._send("GET", url, kw.get("json"))
+
+    def post(self, url, **kw):
+        return self._send("POST", url, kw.get("json"))
+
+
 def test_cli_run_cancels_map_to_endpoints():
     rec = _Recorder()
     cli(rec, "test-run", "p1", "ws1", "--scope", "full", "--max", "3")

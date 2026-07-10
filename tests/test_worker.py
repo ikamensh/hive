@@ -27,6 +27,7 @@ class FakeChief:
         self.tasks = list(tasks or [])
         self.registers: list[dict] = []
         self.results: list[tuple[str, dict]] = []
+        self.polls = 0
         self.forget_worker_once = False
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -38,6 +39,7 @@ class FakeChief:
                 200, json={"runner_id": f"{self.name}-w1", "chief_urls": self.advertised}
             )
         if path.endswith("/poll"):
+            self.polls += 1
             if self.forget_worker_once:
                 self.forget_worker_once = False
                 return httpx.Response(404)
@@ -136,6 +138,44 @@ def test_between_tasks_reason_ends_loop_before_taking_work(tmp_path):
 
     assert reason == "self-update"
     assert loop.executed == []  # exited between tasks, never took the queued one
+
+
+def test_before_poll_reason_ends_loop_without_polling(tmp_path):
+    """A pause present from the start means the worker never asks for work:
+    the queued task stays with the chief for another worker."""
+    chief = FakeChief(tasks=[{"id": "t1"}])
+    loop = make_loop(
+        tmp_path, {"http://a": chief}, ["http://a"], before_poll=lambda: "paused by operator"
+    )
+
+    reason = loop.run()
+
+    assert reason == "paused by operator"
+    assert chief.polls == 0
+    assert loop.executed == []
+    assert chief.tasks == [{"id": "t1"}]  # still queued, never claimed by us
+
+
+def test_before_poll_drain_lets_an_assigned_task_finish(tmp_path):
+    """The drain contract: a pause that lands while a task is in flight takes
+    effect only after that task executed *and reported* — before_poll exits
+    before the next poll, so pausing never abandons assigned work (which is
+    exactly what between_tasks, firing after the poll, cannot guarantee)."""
+    chief = FakeChief(tasks=[{"id": "t1"}])
+    answers = ["", "paused by operator"]  # the flag appears during the first cycle
+    loop = make_loop(
+        tmp_path,
+        {"http://a": chief},
+        ["http://a"],
+        before_poll=lambda: answers.pop(0) if answers else "paused by operator",
+    )
+
+    reason = loop.run()
+
+    assert reason == "paused by operator"
+    assert [t["id"] for t in loop.executed] == ["t1"]
+    assert [tid for tid, _ in chief.results] == [("t1")]
+    assert chief.polls == 1  # the drain exit happened before a second poll
 
 
 def test_report_result_retries_transient_chief_outage(tmp_path, monkeypatch):

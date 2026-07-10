@@ -36,6 +36,7 @@ from hive.agents import (
     run_agent,
     validate_probe_result,
 )
+from hive.runner import control
 from hive.runner._agent_results import result_spec_for_task
 from hive.worker import WorkerConfig, WorkerLoop, parse_urls, update_available
 from hive.fleet import machine_metadata
@@ -798,6 +799,12 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    if control.is_paused():
+        # The operator switched this runner off (menu bar / CLI). launchd's
+        # KeepAlive is conditioned on the flag, so exiting stays exited.
+        log.info("runner paused (%s exists) — exiting", control.pause_path())
+        control.write_status("paused")
+        return
     headers = {"X-Hive-Token": RUNNER_TOKEN, "X-Hive-Workspace": WORKSPACE_ID}
     auth = tuple(HIVE_BASIC_AUTH.split(":", 1)) if HIVE_BASIC_AUTH else None
 
@@ -826,12 +833,29 @@ def main(argv: list[str] | None = None) -> None:
     def on_connected(url: str) -> None:
         global HIVE_URL
         HIVE_URL = url  # task-execution and cancel-watch clients follow the winner
+        control.write_status("idle", chief=url)
 
     def run_task(task: dict) -> dict:
         log.info("executing %s task %s on %s", task["kind"], task["id"], task["repo"])
-        result = execute(task, headers, auth)
+        control.write_status(
+            "task",
+            task={k: task.get(k, "") for k in ("id", "kind", "repo", "backend")},
+            chief=HIVE_URL,
+        )
+        try:
+            result = execute(task, headers, auth)
+        finally:
+            control.write_status("idle", chief=HIVE_URL)
         log.info("task %s done (error=%s)", task["id"], result.get("is_error"))
         return result
+
+    def before_poll() -> str:
+        # The drain hook: a pause requested mid-task takes effect here, after
+        # that task reported but before we ask the chief for another.
+        if control.is_paused():
+            control.write_status("paused", chief=HIVE_URL)
+            return "paused by operator — runner.paused is set"
+        return ""
 
     last_update_check = time.monotonic()
     update_checked_for = ""  # chief version we already fetched for, to fetch once per skew
@@ -870,6 +894,7 @@ def main(argv: list[str] | None = None) -> None:
         execute=run_task,
         on_connected=on_connected,
         between_tasks=between_tasks,
+        before_poll=before_poll,
     ).run()
 
 

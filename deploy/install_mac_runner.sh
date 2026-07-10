@@ -14,9 +14,12 @@
 set -euo pipefail
 
 LABEL="com.hive.runner"
+MENUBAR_LABEL="com.hive.menubar"
 SERVICE_REPO="${HIVE_SERVICE_REPO:-$HOME/.local/share/hive-runner}"
 ENV_FILE="$HOME/.config/hive/runner.env"
+PAUSE_FILE="$HOME/.config/hive/runner.paused"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+MENUBAR_PLIST="$HOME/Library/LaunchAgents/$MENUBAR_LABEL.plist"
 LOG_DIR="$HOME/Library/Logs/hive"
 UV="$(command -v uv || echo "$HOME/.local/bin/uv")"
 GIT_REMOTE="github.com/ikamensh/hive.git"
@@ -80,7 +83,7 @@ else
   git clone --quiet "$AUTH_REMOTE" "$SERVICE_REPO"
 fi
 chmod 700 "$SERVICE_REPO"
-"$UV" sync --directory "$SERVICE_REPO" --frozen --no-dev
+"$UV" sync --directory "$SERVICE_REPO" --frozen --no-dev --extra mac
 echo "-> service clone at $(git -C "$SERVICE_REPO" rev-parse --short HEAD)"
 
 # --- the LaunchAgent ----------------------------------------------------------
@@ -102,7 +105,14 @@ cat > "$PLIST" <<EOF
     <key>PATH</key><string>$(dirname "$UV"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <!-- Respawn only while the pause flag is absent: the menu bar toggle writes
+       $PAUSE_FILE, the daemon drains and exits, launchd leaves it down.
+       Removing the flag makes launchd start it again. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>PathState</key>
+    <dict><key>$PAUSE_FILE</key><false/></dict>
+  </dict>
   <key>ThrottleInterval</key><integer>10</integer>
   <key>StandardOutPath</key><string>$LOG_DIR/runner.log</string>
   <key>StandardErrorPath</key><string>$LOG_DIR/runner.log</string>
@@ -111,10 +121,42 @@ cat > "$PLIST" <<EOF
 EOF
 echo "-> wrote $PLIST"
 
+# --- the menu bar control (its own agent: pausing the runner must not kill the switch)
+cat > "$MENUBAR_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$MENUBAR_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$SERVICE_REPO/deploy/mac_menubar.sh</string>
+  </array>
+  <key>WorkingDirectory</key><string>$SERVICE_REPO</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>$(dirname "$UV"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>$LOG_DIR/menubar.log</string>
+  <key>StandardErrorPath</key><string>$LOG_DIR/menubar.log</string>
+</dict>
+</plist>
+EOF
+echo "-> wrote $MENUBAR_PLIST"
+
 # --- (re)load -----------------------------------------------------------------
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 launchctl enable "gui/$(id -u)/$LABEL"
-echo "-> loaded. logs: $LOG_DIR/runner.log"
+launchctl bootout "gui/$(id -u)/$MENUBAR_LABEL" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$MENUBAR_PLIST"
+launchctl enable "gui/$(id -u)/$MENUBAR_LABEL"
+echo "-> loaded. logs: $LOG_DIR/runner.log ($LOG_DIR/menubar.log for the menu bar)"
+echo "   the 🐝 in the menu bar pauses/resumes this runner"
 echo "   status:    launchctl print gui/$(id -u)/$LABEL | grep -E 'state|pid'"
 echo "   uninstall: launchctl bootout gui/$(id -u)/$LABEL && rm '$PLIST'"
+echo "              launchctl bootout gui/$(id -u)/$MENUBAR_LABEL && rm '$MENUBAR_PLIST'"

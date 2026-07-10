@@ -70,7 +70,10 @@ class WorkerLoop:
     a dead predecessor dropped). `execute(task)` does the actual work.
     `on_connected(url)` fires whenever a chief accepts registration at `url`;
     `between_tasks(poll_data)` may return a reason string to end the loop
-    gracefully (self-update, drain, ...).
+    gracefully (self-update, ...). `before_poll()` may do the same, but is
+    consulted before each poll rather than after: exiting there never abandons
+    an already-assigned task, which makes it the drain hook — a task handed to
+    us while the drain was requested still gets executed and reported.
     """
 
     def __init__(
@@ -81,12 +84,14 @@ class WorkerLoop:
         execute: Callable[[dict], dict],
         on_connected: Callable[[str], None] | None = None,
         between_tasks: Callable[[dict], str] | None = None,
+        before_poll: Callable[[], str] | None = None,
     ) -> None:
         self.config = config
         self.payload = payload
         self.execute = execute
         self.on_connected = on_connected
         self.between_tasks = between_tasks
+        self.before_poll = before_poll
         self.roster = ChiefRoster(list(config.urls), config.state_path)
         self.worker_id = ""
         self.current_url = ""
@@ -200,6 +205,9 @@ class WorkerLoop:
         done = 0
         try:
             while not self._stop.is_set():
+                if self.before_poll is not None and (reason := self.before_poll()):
+                    log.info("exiting worker loop: %s", reason)
+                    return reason
                 try:
                     if client is None:
                         client = self._connect()

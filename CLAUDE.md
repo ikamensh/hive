@@ -50,6 +50,10 @@ clean env, auto-start on login, KeepAlive restart, reconnect after sleep). Stabl
 runner name → deterministic machine id, so restarts reuse the same machine row.
 Dispatch is backend-aware, so subscription-bound backends (Claude Max on the
 laptop) are only ever assigned to the machine where they probed usable.
+The Mac install also adds a 🐝 menu-bar switch (`hive/runner/menubar.py`) to
+pause/resume the runner locally: pause drains (the current task finishes and
+reports first) and launchd keeps the runner down until resumed — the flag is
+`~/.config/hive/runner.paused`, the shared contract `hive/runner/control.py`.
 
 ## Remote VM (chief + runner on GCE)
 
