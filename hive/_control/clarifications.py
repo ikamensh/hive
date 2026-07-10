@@ -16,7 +16,12 @@ from pathlib import Path
 from hive.config.settings import Config
 from hive._control.escalation import escalate
 from hive._integrations.specrepo import SpecRepo
-from hive.models import HumanTaskKind, Project, Question, QuestionStatus
+from hive._workstreams.testability import (
+    active_contract_task,
+    is_decision_question,
+    queue_draft_task,
+)
+from hive.models import HumanTaskKind, Project, ProjectWorkstream, Question, QuestionStatus
 
 log = logging.getLogger("hive._control.clarifications")
 
@@ -83,6 +88,27 @@ def _escalate_log_failure(store, project: Project, question: Question, exc: Exce
     )
 
 
+def _fold_testability_answer(store, config: Config, project: Project, question: Question) -> str:
+    """The user answered a testability decision — the editing is Hive's job:
+    queue a draft task that folds every settled answer into `testability.md`
+    (and re-proves it via the draft→probe chain)."""
+    if not is_decision_question(question) or not question.workstream_id:
+        return ""
+    workstream = store.get(ProjectWorkstream, question.workstream_id)
+    if not workstream:
+        return ""
+    if active_contract_task(store, project, workstream):
+        return "A testability task is already in flight; the answer folds in on the next draft.\n"
+    task = queue_draft_task(
+        store,
+        project,
+        workstream,
+        backend=config.test_refresh_backend,
+        model=config.test_refresh_model,
+    )
+    return f"Queued testability draft {task.id} to fold the answer into testability.md.\n"
+
+
 def apply_answer(
     store, supervisor, config: Config, project: Project, question: Question, answer: str
 ) -> Question:
@@ -107,10 +133,11 @@ def apply_answer(
     question.answer = answer
     question.answered_at = answered_at
     store.put(question)
+    redraft_note = _fold_testability_answer(store, config, project, question)
     supervisor.wake(
         question.project_id,
         f"User answered question {question.id}.\nQ: {question.text}\nA: {answer}\n"
-        f"{input_log_note}"
+        f"{input_log_note}{redraft_note}"
         "Distill this into the wiki/spec and continue.",
     )
     return question

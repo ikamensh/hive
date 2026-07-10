@@ -82,6 +82,28 @@ class TestReproduceResult(AgentResultBase):
     evidence_blobs: list[str] = Field(default_factory=list)
 
 
+class TestabilityDecision(BaseModel):
+    key: str
+    question: str
+    options: list[str] = Field(default_factory=list)
+    recommendation: str = ""
+
+
+class TestabilityDraftResult(AgentResultBase):
+    outcome: Literal["done", "blocked"]
+    changed_files: list[str] = Field(default_factory=list)
+    commit_sha: str = ""
+    fidelities: list[str] = Field(default_factory=list)
+    decisions: list[TestabilityDecision] = Field(default_factory=list)
+
+
+class TestabilityProbeResult(AgentResultBase):
+    outcome: Literal["ok", "fail"]
+    fidelity: Literal["local", "docker"] = "local"
+    problems: list[str] = Field(default_factory=list)
+    evidence_blobs: list[str] = Field(default_factory=list)
+
+
 class TestJudgeResult(AgentResultBase):
     outcome: Literal["improvable", "constrained", "disagree"]
     evidence_blobs: list[str] = Field(default_factory=list)
@@ -95,6 +117,8 @@ RESULT_SPECS: dict[TaskKind, ResultSpec] = {
     TaskKind.test_sweep: ResultSpec(TestSweepResult),
     TaskKind.test_reproduce: ResultSpec(TestReproduceResult),
     TaskKind.test_judge: ResultSpec(TestJudgeResult),
+    TaskKind.testability_draft: ResultSpec(TestabilityDraftResult),
+    TaskKind.testability_probe: ResultSpec(TestabilityProbeResult),
 }
 
 
@@ -140,6 +164,16 @@ def verdict_from_structured(kind: str | TaskKind, payload: dict) -> Verdict:
         if outcome == "improvable":
             return Verdict.accept
         if outcome in {"constrained", "disagree"}:
+            return Verdict.reject
+    if task_kind == TaskKind.testability_draft:
+        if outcome == "done":
+            return Verdict.accept
+        if outcome == "blocked":
+            return Verdict.reject
+    if task_kind == TaskKind.testability_probe:
+        if outcome == "ok":
+            return Verdict.accept
+        if outcome == "fail":
             return Verdict.reject
     return Verdict.none
 

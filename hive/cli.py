@@ -279,6 +279,21 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("stories", help="testing coverage: stories x status, plus Hive's standing offer")
     p.add_argument("project_id")
 
+    p = sub.add_parser("testability", help="testability contract: state, decisions needing you, Hive's offer")
+    p.add_argument("project_id")
+
+    p = sub.add_parser("testability-draft", help="have Hive explore the repo and draft/repair testability.md")
+    p.add_argument("project_id")
+    p.add_argument("workstream_id")
+    p.add_argument("--backend", default="", help="agent backend (default: server config)")
+    p.add_argument("--model", default="", help="model (default: backend default)")
+
+    p = sub.add_parser("testability-probe", help="prove the contract: stand the app up per testability.md")
+    p.add_argument("project_id")
+    p.add_argument("workstream_id")
+    p.add_argument("--backend", default="", help="agent backend (default: server config)")
+    p.add_argument("--model", default="", help="model (default: backend default)")
+
     p = sub.add_parser("test-cancel", help="cancel a testing episode (dequeues pending, stops running tasks)")
     p.add_argument("episode_id")
 
@@ -925,6 +940,39 @@ def stories_report(detail: dict) -> dict:
     return {"testing": report}
 
 
+def testability_report(detail: dict) -> dict:
+    """Condense a project payload into the testability view: per testing
+    workstream, the contract state with Hive's standing offer, plus every open
+    decision question waiting on the human."""
+    views = detail.get("testability", {})
+    questions = detail.get("questions", [])
+    report = []
+    for stream in detail.get("workstreams", []):
+        if stream["kind"] != "testing":
+            continue
+        view = views.get(stream["id"], {})
+        contract = view.get("contract") or {}
+        report.append(
+            {
+                "workstream_id": stream["id"],
+                "repo": stream["repo"],
+                "health": view.get("health", {}),
+                "status": contract.get("status", "missing"),
+                "fidelities": contract.get("fidelities", []),
+                "probed_fidelity": contract.get("probed_fidelity", ""),
+                "probe_problems": contract.get("probe_problems", []),
+                "decisions": [
+                    {"question_id": q["id"], "text": q["text"]}
+                    for q in questions
+                    if q["workstream_id"] == stream["id"]
+                    and q.get("dedup_key", "").startswith("testability:")
+                    and q["status"] == "open"
+                ],
+            }
+        )
+    return {"testability": report}
+
+
 def run(args: argparse.Namespace, client) -> dict | list:
     """Execute one command against an httpx-compatible client and return the
     response payload. Non-2xx responses raise (clear failure over silence)."""
@@ -1064,6 +1112,19 @@ def run(args: argparse.Namespace, client) -> dict | list:
     elif c == "stories":
         detail = client.get(f"/api/projects/{args.project_id}").raise_for_status().json()
         return stories_report(detail)
+    elif c == "testability":
+        detail = client.get(f"/api/projects/{args.project_id}").raise_for_status().json()
+        return testability_report(detail)
+    elif c == "testability-draft":
+        r = client.post(
+            f"/api/projects/{args.project_id}/workstreams/{args.workstream_id}/testability-draft",
+            json={"backend": args.backend, "model": args.model},
+        )
+    elif c == "testability-probe":
+        r = client.post(
+            f"/api/projects/{args.project_id}/workstreams/{args.workstream_id}/testability-probe",
+            json={"backend": args.backend, "model": args.model},
+        )
     elif c == "test-cancel":
         r = client.post(f"/api/test-episodes/{args.episode_id}/cancel")
     elif c == "issue-cancel":

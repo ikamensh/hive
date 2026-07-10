@@ -846,8 +846,9 @@ def test_project_payload_offers_story_generation(tmp_path):
 
 def test_auto_testing_action_respects_the_autonomy_envelope(tmp_path):
     """The autonomous tick only acts for an opted-in, budgeted project with an
-    enabled workstream — and then follows the health verdict: refresh for a
-    missing backlog, episode for unproven stories."""
+    enabled workstream — and then follows the health verdicts: refresh for a
+    missing backlog, a testability draft before any sweeping, and an episode
+    for unproven stories once the contract is verified."""
     from hive.models import TestEpisodeStatus
 
     store = MemoryStore()
@@ -880,8 +881,17 @@ def test_auto_testing_action_respects_the_autonomy_envelope(tmp_path):
     assert auto_testing_action(store, project, stream) == ""
     assert auto_testing_action(store, project, stream, now_epoch=task.created_at + AUTO_TESTING_INTERVAL_S + 1) == "refresh"
 
-    # Stories exist but are unproven -> sweep them (episodes have their own cooldown).
+    # Stories exist but are unproven -> the testability contract comes first:
+    # an auto-episode without a proven run recipe is a BLOCKED-noise generator.
+    from hive._workstreams.testability import reconcile_contract, record_probe_result
+
     reconcile_story_backlog(store, project, stream, repo)
+    assert auto_testing_action(store, project, stream) == "testability_draft"
+
+    # A verified contract unlocks the episode (episodes have their own cooldown).
+    (repo / "testability.md").write_text("# testability: p\n\n## Run\n### local\n    make run\n")
+    contract = reconcile_contract(store, project, stream, repo)
+    record_probe_result(store, contract, ok=True, fidelity="local")
     assert auto_testing_action(store, project, stream) == "episode"
     episode = store.put(
         EpisodeModel(

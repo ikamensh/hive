@@ -21,6 +21,12 @@ import httpx
 
 from hive._control.allowances import resolve_agent
 from hive._integrations.github_repos import _GH_HEADERS, parse_repo_ref
+from hive._workstreams.testability import (
+    CONTRACT_TASK_KINDS,
+    auto_contract_action,
+    contract_context,
+    get_contract,
+)
 from hive.llm._parsing import extract_json
 from hive.models import (
     Finding,
@@ -39,6 +45,7 @@ from hive.models import (
     Task,
     TaskKind,
     TaskStatus,
+    TestabilityStatus,
     TestEpisode,
     TestEpisodeScope,
     TestEpisodeStatus,
@@ -557,16 +564,21 @@ def auto_testing_decision(
     store, project: Project, workstream: ProjectWorkstream, *, now_epoch: float = 0.0
 ) -> tuple[str, str]:
     """What Hive should do for this testing workstream on its own, right now,
-    and why: ("refresh", …) to draft/repair the backlog, ("episode", …) to
-    sweep unproven stories, or ("", reason) when nothing would fire.
+    and why: ("refresh", …) to draft/repair the backlog,
+    ("testability_draft"|"testability_probe", …) to establish the testability
+    contract, ("episode", …) to sweep unproven stories, or ("", reason) when
+    nothing would fire.
 
-    Acts on the `story_health` verdict, but only inside the autonomy envelope:
-    the project opted in (`testing_auto`) *and* set a positive daily budget
-    (no auto-spend on unbudgeted projects), intake is behind it (drafting
-    stories from an unapproved spec would test unvetted intention), the
-    workstream is enabled, nothing testing-related is in flight, and the last
-    same-kind activity is older than `AUTO_TESTING_INTERVAL_S`. All gates are
-    store facts, so a chief restart never re-fires work.
+    Acts on the `story_health` and `testability_health` verdicts, but only
+    inside the autonomy envelope: the project opted in (`testing_auto`) *and*
+    set a positive daily budget (no auto-spend on unbudgeted projects), intake
+    is behind it (drafting stories from an unapproved spec would test unvetted
+    intention), the workstream is enabled, nothing testing-related is in
+    flight, and the last same-kind activity is older than
+    `AUTO_TESTING_INTERVAL_S`. Auto-episodes additionally require a verified
+    contract — an episode without a proven run recipe is a BLOCKED-noise
+    generator (wiki/testability-contract.md). All gates are store facts, so a
+    chief restart never re-fires work.
 
     The reason string is what `hive show autonomy` surfaces, so it names the
     specific gate rather than a generic "no".
@@ -594,20 +606,43 @@ def auto_testing_decision(
         project_id=project.id,
         workstream_id=workstream.id,
     )
-    health = story_health(
-        stories,
-        refresh_active=any(t.status in (TaskStatus.pending, TaskStatus.running) for t in refresh_tasks),
-    )
+    refresh_active = any(t.status in (TaskStatus.pending, TaskStatus.running) for t in refresh_tasks)
+    health = story_health(stories, refresh_active=refresh_active)
     if health.action == "refresh":
+        action, summary = "refresh", health.summary
         last = max((t.created_at for t in refresh_tasks), default=0.0)
-    elif health.action == "episode":
-        last = max((e.created_at for e in episodes), default=0.0)
     else:
-        return "", f"backlog needs nothing ({health.state})"
+        if refresh_active:
+            return "", "a story refresh is already in flight"
+        contract_action, contract_reason = auto_contract_action(store, project, workstream)
+        if contract_action:
+            action, summary = f"testability_{contract_action}", contract_reason
+            last = max(
+                (
+                    t.created_at
+                    for kind in CONTRACT_TASK_KINDS
+                    for t in store.list(
+                        Task,
+                        workspace_id=project.workspace_id,
+                        project_id=project.id,
+                        workstream_id=workstream.id,
+                        kind=kind,
+                    )
+                ),
+                default=0.0,
+            )
+        elif health.action == "episode":
+            contract = get_contract(store, project, workstream)
+            if contract is None or contract.status != TestabilityStatus.verified:
+                return "", "waiting for a verified testability contract before sweeping"
+            action, summary = "episode", health.summary
+            last = max((e.created_at for e in episodes), default=0.0)
+        else:
+            return "", f"backlog needs nothing ({health.state})"
     if now_epoch - last < AUTO_TESTING_INTERVAL_S:
         hours_ago = (now_epoch - last) / 3600
-        return "", f"{health.action} on daily cooldown (last one {hours_ago:.1f}h ago)"
-    return health.action, health.summary
+        return "", f"{action} on daily cooldown (last one {hours_ago:.1f}h ago)"
+    return action, summary
 
 
 def auto_testing_action(store, project: Project, workstream: ProjectWorkstream, *, now_epoch: float = 0.0) -> str:
@@ -684,9 +719,15 @@ def refresh_instructions(project: Project) -> tuple[str, dict[str, str]]:
     return f"{header}\n{prompt}", {"test_refresh": version}
 
 
-def story_task_instructions(story: Story, prompt_name: str) -> tuple[str, dict[str, str]]:
+def story_task_instructions(
+    story: Story, prompt_name: str, contract_block: str = ""
+) -> tuple[str, dict[str, str]]:
     prompt, version = load_prompt(prompt_name)
-    return f"{_story_header(story)}\n\n{prompt}", {prompt_name: version}
+    parts = [_story_header(story)]
+    if contract_block:
+        parts.append(contract_block)
+    parts.append(prompt)
+    return "\n\n".join(parts), {prompt_name: version}
 
 
 def queue_refresh_task(
@@ -725,8 +766,9 @@ def queue_sweep_tasks(
     stories: list[Story],
 ) -> list[Task]:
     queued = []
+    contract_block = contract_context(get_contract(store, project, workstream))
     for story in stories:
-        instructions, versions = story_task_instructions(story, "test_sweep")
+        instructions, versions = story_task_instructions(story, "test_sweep", contract_block)
         queued.append(
             store.put(
                 Task(
@@ -756,8 +798,9 @@ def queue_confirm_task(
     episode: TestEpisode,
 ) -> Task:
     prompt = "test_reproduce" if finding.kind == FindingKind.bug else "test_judge"
-    instructions, versions = story_task_instructions(story, prompt)
     workstream = store.get(ProjectWorkstream, story.workstream_id)
+    contract_block = contract_context(get_contract(store, project, workstream)) if workstream else ""
+    instructions, versions = story_task_instructions(story, prompt, contract_block)
     required_capabilities = _required_capabilities(story, workstream) if workstream else []
     finding_context = "\n".join(
         [

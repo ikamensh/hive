@@ -210,10 +210,11 @@ set in scope so the run is auditable even if the spec changes afterward. Phases:
    chosen story keys onto the episode.
 3. **Sweep (cheap models, parallel, `test_sweep`).** One task per story (grouping
    is Iteration 2). The agent stands the app up in a **fresh Docker container**
-   (or runs it locally) using the run recipe from the project's
-   `wiki/infrastructure.md`, drives it through the acceptance examples **as a
-   user** via the browser/CLI, and judges against acceptance + FEW HICCUPPS
-   oracles. It uploads evidence, records the **fidelity** it achieved (`local` |
+   (or runs it locally) using the run recipe from the project's **testability
+   contract** (`testability.md`, embedded into the task instructions — see
+   `wiki/testability-contract.md`), drives it through the acceptance examples
+   **as a user** via the browser/CLI, and judges against acceptance +
+   FEW HICCUPPS oracles. It uploads evidence, records the **fidelity** it achieved (`local` |
    `docker`) on the result, and ends with `SWEEP: PASS` or `SWEEP: FINDINGS` plus
    a JSON findings block (parsed by the existing `hive/llm` `extract_json`, as
    critique already does). Each finding is `bug` (spec violation) or `ux_smell`
@@ -288,11 +289,12 @@ up. Resources generalize from `(runner, backend)` to a bundle.
   extending `supervisor.compute_state`'s backend-availability check to a
   capability check.
 - **Environment recipe.** How to stand the app up comes from the project's
-  `wiki/infrastructure.md` (deployed services, run/deploy procedure). Iteration 1
-  uses its Docker / docker-compose / local-run instructions for a fresh install.
-  If there is no usable way to stand the app up, the sweep is `BLOCKED` → a
-  `Question`/`HumanTodo`, not a fake pass. (Distributed/cloud recipes are
-  Iteration 2.)
+  testability contract — `testability.md` in the spec home, agent-drafted,
+  probe-proven, human-decided where only a human can decide
+  (`wiki/testability-contract.md`). Autonomous episodes require a verified
+  contract; if there is no usable way to stand the app up, the sweep is
+  `BLOCKED` → a `Question`/`HumanTodo`, not a fake pass. (Distributed/cloud
+  recipes are Iteration 2.)
 - **Perception constraint (kodo is text-only).** UI assertions must be
   **text-observable** — role/test-id/text selectors, visible text, console/network
   status, accessibility tree. Screenshots and video are captured as **human

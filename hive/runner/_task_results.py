@@ -70,6 +70,7 @@ from hive.models import (
     Task,
     TaskKind,
     TaskStatus,
+    TestabilityContract,
     TestEpisode,
     TestEpisodeStatus,
     TestReproOutcome,
@@ -85,6 +86,8 @@ from hive.models import (
     parse_test_repro,
     parse_test_sweep,
     parse_test_ux,
+    parse_testability_draft,
+    parse_testability_probe,
     parse_verdict,
 )
 from hive._integrations.specrepo import SpecRepo
@@ -97,6 +100,14 @@ from hive._workstreams.testing import (
     queue_confirm_task,
     refresh_episode_counts,
     result_payload as test_payload,
+)
+from hive._workstreams.testability import (
+    DraftResultSummary,
+    create_decision_questions,
+    get_contract,
+    queue_probe_task,
+    reconcile_contract,
+    record_probe_result,
 )
 
 log = logging.getLogger("hive.runner._task_results")
@@ -115,6 +126,8 @@ TEST_TASK_KINDS = (
     TaskKind.test_sweep,
     TaskKind.test_reproduce,
     TaskKind.test_judge,
+    TaskKind.testability_draft,
+    TaskKind.testability_probe,
 )
 LANDING_INTEGRATION_PROMPT = "landing_integration"
 
@@ -368,6 +381,18 @@ class TaskResultProcessor:
                 Verdict.accept
                 if _test_ux_outcome(body) == TestUxOutcome.improvable
                 else Verdict.reject
+            )
+        elif task.kind == TaskKind.testability_draft:
+            task.verdict = _structured_or_legacy_verdict(
+                task.kind,
+                body,
+                parse_testability_draft(body.text),
+            )
+        elif task.kind == TaskKind.testability_probe:
+            task.verdict = _structured_or_legacy_verdict(
+                task.kind,
+                body,
+                parse_testability_probe(body.text),
             )
 
     def _account_resources(
@@ -1343,6 +1368,138 @@ class TaskResultProcessor:
             self._handle_test_sweep_result(task, body)
         elif task.kind in (TaskKind.test_reproduce, TaskKind.test_judge):
             self._handle_test_confirm_result(task, body)
+        elif task.kind == TaskKind.testability_draft:
+            self._handle_testability_draft_result(task, body)
+        elif task.kind == TaskKind.testability_probe:
+            self._handle_testability_probe_result(task, body)
+
+    def _handle_testability_draft_result(self, task: Task, body: TaskResult) -> None:
+        project = self.store.get(Project, task.project_id)
+        workstream = self.store.get(ProjectWorkstream, task.workstream_id)
+        if not project or not workstream or body.cancelled:
+            return
+        if body.is_error or task.verdict != Verdict.accept:
+            escalate(
+                self.store,
+                f"Repair testability draft for {project.name}",
+                instructions=(
+                    "Hive's testability-draft task did not produce a usable contract.\n\n"
+                    f"Task: `{task.id}`\n\nAgent report (tail):\n\n```\n{body.text[-1500:]}\n```"
+                ),
+                project_id=project.id,
+                workspace_id=project.workspace_id,
+                kind=HumanTaskKind.repair,
+                dedup_key=f"repair:testability:{workstream.id}",
+            )
+            return
+        try:
+            spec = SpecRepo(
+                project.spec_repo,
+                Path(self.config.data_dir or "/tmp/hive-data") / "specs",
+                self.config.gh_token,
+            )
+            spec.sync()
+            summary = DraftResultSummary.from_payload(body.structured_result)
+            contract = reconcile_contract(self.store, project, workstream, spec.path)
+            questions = create_decision_questions(self.store, project, workstream, summary.decisions)
+        except Exception as exc:
+            log.exception("testability draft finalization failed for task %s", task.id)
+            escalate(
+                self.store,
+                f"Repair testability draft for {project.name}",
+                instructions=(
+                    "Hive's testability-draft task finished, but the chief could not "
+                    "sync/reconcile `testability.md` afterward.\n\n"
+                    f"Task: `{task.id}`\n\nError:\n\n```\n{type(exc).__name__}: {str(exc)[:1500]}\n```"
+                ),
+                project_id=project.id,
+                workspace_id=project.workspace_id,
+                kind=HumanTaskKind.repair,
+                dedup_key=f"repair:testability:{workstream.id}",
+            )
+            return
+        if not contract.content:
+            escalate(
+                self.store,
+                f"Repair testability draft for {project.name}",
+                instructions=(
+                    "The testability-draft task reported DONE, but the spec home has no "
+                    f"`testability.md` after syncing.\n\nTask: `{task.id}`"
+                ),
+                project_id=project.id,
+                workspace_id=project.workspace_id,
+                kind=HumanTaskKind.repair,
+                dedup_key=f"repair:testability:{workstream.id}",
+            )
+            return
+        resolve_todo(
+            self.store,
+            project.workspace_id,
+            f"repair:testability:{workstream.id}",
+            "a later testability draft finalized cleanly",
+        )
+        # Proving the contract is Hive's job, not a user step: chain the probe.
+        probe = queue_probe_task(
+            self.store,
+            project,
+            workstream,
+            contract,
+            backend=self.config.test_confirm_backend,
+            model=self.config.test_confirm_model,
+        )
+        self.supervisor.wake(
+            task.project_id,
+            f"Testability contract drafted for {workstream.repo}; probe task {probe.id} queued"
+            + (f"; {len(questions)} decision question(s) filed." if questions else "."),
+        )
+
+    def _handle_testability_probe_result(self, task: Task, body: TaskResult) -> None:
+        project = self.store.get(Project, task.project_id)
+        workstream = self.store.get(ProjectWorkstream, task.workstream_id)
+        if not project or not workstream or body.cancelled:
+            return
+        contract = self.store.get(TestabilityContract, task.work_item_id) or get_contract(
+            self.store, project, workstream
+        )
+        if not contract:
+            return
+        payload = body.structured_result or test_payload(body.text)
+        ok = not body.is_error and task.verdict == Verdict.accept
+        problems = [str(p).strip() for p in payload.get("problems") or [] if str(p).strip()]
+        if not ok and not problems:
+            problems = [body.text.strip()[-500:] or "probe failed without a report"]
+        record_probe_result(
+            self.store,
+            contract,
+            ok=ok,
+            fidelity=str(payload.get("fidelity") or "local"),
+            problems=problems,
+            task_id=task.id,
+        )
+        if ok:
+            resolve_todo(
+                self.store,
+                project.workspace_id,
+                f"env:testability:{workstream.id}",
+                "a later probe proved the testability contract",
+            )
+            return
+        listed = "\n".join(f"- {p}" for p in problems[:6])
+        escalate(
+            self.store,
+            f"Testability contract failed its probe for {project.name}",
+            instructions=(
+                f"Hive tried to stand `{workstream.repo}` up exactly as `testability.md` "
+                "says and failed. If this is an environment gap (daemon down, missing "
+                "tool), fix it on the runner; if the contract is wrong, Hive will "
+                "repair it on the next draft.\n\n"
+                f"Problems:\n{listed}\n\nTask: `{task.id}`"
+            ),
+            project_id=project.id,
+            workspace_id=project.workspace_id,
+            kind=HumanTaskKind.env,
+            dedup_key=f"env:testability:{workstream.id}",
+        )
 
     def _wake_default(self, task: Task, body: TaskResult) -> None:
         outcome = "cancelled" if body.cancelled else ("failed" if body.is_error else "finished")

@@ -71,6 +71,14 @@ from hive._workstreams.testing import (
     start_episode,
     story_health,
 )
+from hive._workstreams.testability import (
+    get_contract,
+    is_decision_question,
+    queue_draft_task as queue_testability_draft,
+    queue_probe_task as queue_testability_probe,
+    reconcile_contract,
+    testability_health,
+)
 from hive.models import (
     AgentConversation,
     AgentGrant,
@@ -96,6 +104,7 @@ from hive.models import (
     ProjectWorkstreamStatus,
     ProjectState,
     Question,
+    QuestionStatus,
     Resource,
     ROLE_ADMIN,
     ROLE_RESOURCE_PROVIDER,
@@ -473,6 +482,20 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         except Exception as exc:
             log.exception("testing backlog sync failed for project %s", project.id)
             raise HTTPException(400, f"could not read acceptance stories from spec repo: {exc}") from exc
+
+    def sync_testability(project: Project, workstream: ProjectWorkstream):
+        """Mirror the spec home's testability.md before acting on the contract."""
+        try:
+            spec = SpecRepo(
+                project.spec_repo,
+                Path(config.data_dir or "/tmp/hive-data") / "specs",
+                config.gh_token,
+            )
+            spec.sync()
+            return reconcile_contract(store, project, workstream, spec.path)
+        except Exception as exc:
+            log.exception("testability sync failed for project %s", project.id)
+            raise HTTPException(400, f"could not read testability.md from spec repo: {exc}") from exc
 
     @contextlib.asynccontextmanager
     async def lifespan(_app):
@@ -1128,6 +1151,51 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         supervisor.wake(project_id, f"Testing episode {episode.id} was created.")
         return {"episode": episode.model_dump(), "refresh_task": task.model_dump()}
 
+    @app.post("/api/projects/{project_id}/workstreams/{workstream_id}/testability-draft")
+    def draft_testability(
+        project_id: str,
+        workstream_id: str,
+        body: TestRefreshCreate = TestRefreshCreate(),
+        ctx: AuthContext = Depends(editor),
+    ):
+        project = require_project(project_id, ctx)
+        workstream = require_project_workstream(project, workstream_id, ctx)
+        require_testing_workstream(workstream)
+        sync_testability(project, workstream)
+        task = queue_testability_draft(
+            store,
+            project,
+            workstream,
+            backend=body.backend or config.test_refresh_backend,
+            model=body.model or config.test_refresh_model,
+        )
+        supervisor.wake(project_id, f"Testability draft task {task.id} was queued.")
+        return {"task": task.model_dump()}
+
+    @app.post("/api/projects/{project_id}/workstreams/{workstream_id}/testability-probe")
+    def probe_testability(
+        project_id: str,
+        workstream_id: str,
+        body: TestRefreshCreate = TestRefreshCreate(),
+        ctx: AuthContext = Depends(editor),
+    ):
+        project = require_project(project_id, ctx)
+        workstream = require_project_workstream(project, workstream_id, ctx)
+        require_testing_workstream(workstream)
+        contract = sync_testability(project, workstream)
+        if not contract.content:
+            raise HTTPException(400, "no testability.md to probe — draft the contract first")
+        task = queue_testability_probe(
+            store,
+            project,
+            workstream,
+            contract,
+            backend=body.backend or config.test_confirm_backend,
+            model=body.model or config.test_confirm_model,
+        )
+        supervisor.wake(project_id, f"Testability probe task {task.id} was queued.")
+        return {"task": task.model_dump()}
+
     @app.post("/api/test-episodes/{episode_id}/cancel")
     def cancel_test_episode(episode_id: str, ctx: AuthContext = Depends(editor)):
         episode = store.get(TestEpisode, episode_id)
@@ -1165,22 +1233,46 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         ]
         streams = project_workstreams(store, project)
         stories = store.list(Story, workspace_id=ctx.workspace_id, project_id=project_id)
+        questions = store.list(Question, workspace_id=ctx.workspace_id, project_id=project_id)
 
-        def testing_health(workstream: ProjectWorkstream) -> dict:
-            refresh_active = any(
+        def _active_task(workstream_id: str, kind: TaskKind) -> bool:
+            return any(
                 t.status in (TaskStatus.pending, TaskStatus.running)
                 for t in store.list(
                     Task,
                     workspace_id=ctx.workspace_id,
                     project_id=project_id,
-                    workstream_id=workstream.id,
-                    kind=TaskKind.test_refresh,
+                    workstream_id=workstream_id,
+                    kind=kind,
                 )
             )
+
+        def testing_health(workstream: ProjectWorkstream) -> dict:
             return story_health(
                 (s for s in stories if s.workstream_id == workstream.id),
-                refresh_active=refresh_active,
+                refresh_active=_active_task(workstream.id, TaskKind.test_refresh),
             ).as_dict()
+
+        def testability_view(workstream: ProjectWorkstream) -> dict:
+            contract = get_contract(store, project, workstream)
+            open_decisions = sum(
+                1
+                for q in questions
+                if q.workstream_id == workstream.id
+                and is_decision_question(q)
+                and q.status == QuestionStatus.open
+            )
+            health = testability_health(
+                contract,
+                open_decisions=open_decisions,
+                draft_active=_active_task(workstream.id, TaskKind.testability_draft),
+                probe_active=_active_task(workstream.id, TaskKind.testability_probe),
+            )
+            return {
+                "contract": contract.model_dump() if contract else None,
+                "health": health.as_dict(),
+                "open_decisions": open_decisions,
+            }
 
         return {
             "project": project.model_dump(),
@@ -1190,6 +1282,11 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             ],
             "testing_health": {
                 w.id: testing_health(w)
+                for w in streams
+                if w.kind == ProjectWorkstreamKind.testing
+            },
+            "testability": {
+                w.id: testability_view(w)
                 for w in streams
                 if w.kind == ProjectWorkstreamKind.testing
             },
@@ -1203,10 +1300,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                     Task, workspace_id=ctx.workspace_id, project_id=project_id, limit=50
                 )
             ],
-            "questions": [
-                q.model_dump()
-                for q in store.list(Question, workspace_id=ctx.workspace_id, project_id=project_id)
-            ],
+            "questions": [q.model_dump() for q in questions],
             "human_todos": human_todos,
             "conversations": [
                 c.model_dump()
@@ -2054,6 +2148,11 @@ def make_testing_check(store, config: Config) -> Callable[[str], None]:
             reconcile_story_backlog,
             start_episode,
         )
+        from hive._workstreams.testability import (
+            queue_draft_task,
+            queue_probe_task,
+            reconcile_contract,
+        )
 
         repos = dict.fromkeys(
             r.strip() for r in (project.member_repos or [project.spec_repo]) if r.strip()
@@ -2064,8 +2163,9 @@ def make_testing_check(store, config: Config) -> Callable[[str], None]:
                 workstream = ensure_testing_workstream(store, project, repo=repo)
                 if autonomy_envelope_reason(store, project, workstream):
                     continue  # outside the envelope: no action could fire, skip the spec sync
-                # Mirror acceptance/ into Story rows first, so a freshly registered
-                # project with authored stories is judged on them, not on empty rows.
+                # Mirror acceptance/ + testability.md into store rows first, so a
+                # freshly registered project with authored spec files is judged on
+                # them, not on empty rows.
                 spec = SpecRepo(
                     project.spec_repo,
                     Path(config.data_dir or "/tmp/hive-data") / "specs",
@@ -2073,6 +2173,7 @@ def make_testing_check(store, config: Config) -> Callable[[str], None]:
                 )
                 spec.sync()
                 reconcile_story_backlog(store, project, workstream, spec.path)
+                contract = reconcile_contract(store, project, workstream, spec.path)
                 action = auto_testing_action(store, project, workstream)
                 if action == "refresh":
                     task = queue_refresh_task(
@@ -2083,6 +2184,26 @@ def make_testing_check(store, config: Config) -> Callable[[str], None]:
                         model=config.test_refresh_model,
                     )
                     log_.info("auto-testing: queued story refresh %s for %s", task.id, repo)
+                elif action == "testability_draft":
+                    task = queue_draft_task(
+                        store,
+                        project,
+                        workstream,
+                        backend=config.test_refresh_backend,
+                        model=config.test_refresh_model,
+                        probe_problems=contract.probe_problems,
+                    )
+                    log_.info("auto-testing: queued testability draft %s for %s", task.id, repo)
+                elif action == "testability_probe":
+                    task = queue_probe_task(
+                        store,
+                        project,
+                        workstream,
+                        contract,
+                        backend=config.test_confirm_backend,
+                        model=config.test_confirm_model,
+                    )
+                    log_.info("auto-testing: queued testability probe %s for %s", task.id, repo)
                 elif action == "episode":
                     episode, _ = start_episode(
                         store,

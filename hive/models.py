@@ -286,6 +286,8 @@ class TaskKind(StrEnum):
     test_sweep = "test_sweep"  # testing: exploratory black-box sweep for one story
     test_reproduce = "test_reproduce"  # testing: independent bug reproduction
     test_judge = "test_judge"  # testing: UX-smell adjudication
+    testability_draft = "testability_draft"  # testing: explore the repo, write/repair testability.md
+    testability_probe = "testability_probe"  # testing: prove the contract by standing the app up
 
 
 class TestSweepOutcome(StrEnum):
@@ -396,6 +398,16 @@ def parse_test_ux(text: str) -> TestUxOutcome:
     )
 
 
+def parse_testability_draft(text: str) -> Verdict:
+    """A testability draft's `TESTABILITY: DONE|BLOCKED`."""
+    return _last_marker(text, "TESTABILITY", {"DONE": Verdict.accept, "BLOCK": Verdict.reject}, Verdict.none)
+
+
+def parse_testability_probe(text: str) -> Verdict:
+    """A testability probe's `TESTABILITY_PROBE: OK|FAIL`."""
+    return _last_marker(text, "TESTABILITY_PROBE", {"OK": Verdict.accept, "FAIL": Verdict.reject}, Verdict.none)
+
+
 class Task(BaseModel):
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
@@ -450,6 +462,7 @@ class Question(BaseModel):
     project_id: str
     workstream_id: str = ""  # empty = project-level
     text: str  # markdown: context, the gap, options, recommendation
+    dedup_key: str = ""  # stable identity for machine-generated questions (e.g. testability decisions)
     status: QuestionStatus = QuestionStatus.open
     answer: str = ""
     created_at: float = Field(default_factory=now)
@@ -783,6 +796,36 @@ class TestEpisode(BaseModel):
     finished_at: float = 0.0
 
 
+class TestabilityStatus(StrEnum):
+    missing = "missing"
+    draft = "draft"  # file exists, unproven against its current content digest
+    verified = "verified"  # last probe passed against the current digest
+    broken = "broken"  # last probe failed against the current digest
+
+
+class TestabilityContract(BaseModel):
+    """Mirror of the spec home's `testability.md` — how to stand the product up
+    for testing, proven by probe tasks (wiki/testability-contract.md)."""
+
+    id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    project_id: str
+    workstream_id: str
+    repo: str = ""
+    spec_ref: str = "testability.md"
+    content: str = ""
+    baseline: str = ""  # content digest of the mirrored file
+    fidelities: list[str] = []  # declared run fidelities: local | docker
+    status: TestabilityStatus = TestabilityStatus.missing
+    probed_baseline: str = ""  # digest the last finished probe ran against
+    probed_fidelity: str = ""  # fidelity the last green probe achieved
+    probe_problems: list[str] = []
+    probe_task_id: str = ""
+    probed_at: float = 0.0
+    created_at: float = Field(default_factory=now)
+    updated_at: float = Field(default_factory=now)
+
+
 class FindingKind(StrEnum):
     bug = "bug"
     ux_smell = "ux_smell"
@@ -924,6 +967,7 @@ ALL_MODELS: tuple[type[BaseModel], ...] = (
     Story,
     Subscription,
     Task,
+    TestabilityContract,
     TestEpisode,
     User,
     Workspace,
