@@ -39,7 +39,7 @@ from hive._workstreams.testability import (
     testability_health as contract_health,
 )
 from hive._workstreams.testing import ensure_testing_workstream, queue_sweep_tasks
-from tests.test_api_e2e import RUNNER_HEADERS, _pump, _register_usable_runner
+from tests.test_api_e2e import _pump, _register_usable_runner
 from tests.test_testing import _poll, _report, app, spec_repo
 
 

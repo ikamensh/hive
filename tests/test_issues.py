@@ -33,7 +33,6 @@ from hive.models import (
     Task,
     TaskKind,
     TaskStatus,
-    Verdict,
     Workstream,
     WorkstreamSource,
     WorkstreamStatus,
