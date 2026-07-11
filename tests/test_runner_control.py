@@ -95,6 +95,12 @@ def test_ago_and_last_task_line_render_human_lines():
         now=30.0,
     )
     assert failed == "resolve ✗ just now"
+    # Probe tasks carry the sentinel repo "probe:local" — not a path, not shown.
+    probe = control.last_task_line(
+        {"last_task": {"kind": "probe", "repo": "probe:local", "is_error": True, "finished_at": 0.0}},
+        now=30.0,
+    )
+    assert probe == "probe ✗ just now"
 
 
 def test_missing_or_corrupt_status_reads_empty(tmp_path):

@@ -140,7 +140,9 @@ class RunnerView:
 
 
 def _repo_name(url: str) -> str:
-    return url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
+    """The repo's short name, or "" for non-repo sentinels (probe:local)."""
+    url = url.rstrip("/").removesuffix(".git")
+    return url.rsplit("/", 1)[-1] if "/" in url else ""
 
 
 def chief_host(url: str) -> str:
