@@ -68,17 +68,28 @@ def write_status(
     *,
     task: dict | None = None,
     chief: str = "",
+    backends: list[str] | None = None,
+    last_task: dict | None = None,
     state_dir: Path | None = None,
 ) -> None:
     """Record what this daemon process is doing right now. Atomic replace so a
-    concurrent reader never sees a torn file."""
+    concurrent reader never sees a torn file.
+
+    `state`/`task`/`pid`/`since` describe this very moment and are always
+    replaced. `chief`/`backends`/`last_task` are slower facts (who we report
+    to, which agent CLIs discovery found, what we finished most recently):
+    when omitted they carry over from the previous status, so every write
+    doesn't have to re-state them."""
     path = status_path(state_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
+    previous = read_status(state_dir)
     payload = {
         "pid": os.getpid(),
         "state": state,  # "idle" | "task" | "paused"
         "task": task or {},
-        "chief": chief,
+        "chief": chief or previous.get("chief", ""),
+        "backends": backends if backends is not None else previous.get("backends", []),
+        "last_task": last_task or previous.get("last_task", {}),
         "since": time.time(),
     }
     tmp = path.with_suffix(".json.tmp")
@@ -130,6 +141,38 @@ class RunnerView:
 
 def _repo_name(url: str) -> str:
     return url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
+
+
+def chief_host(url: str) -> str:
+    """The human-readable part of a chief URL (scheme and path stripped)."""
+    from urllib.parse import urlparse
+
+    return urlparse(url).netloc or url
+
+
+def ago(seconds: float) -> str:
+    minutes = int(max(0.0, seconds) // 60)
+    if minutes < 1:
+        return "just now"
+    if minutes < 60:
+        return f"{minutes}m ago"
+    if minutes < 24 * 60:
+        return f"{minutes // 60}h ago"
+    return f"{minutes // (24 * 60)}d ago"
+
+
+def last_task_line(status: dict, *, now: float | None = None) -> str:
+    """One line about the most recently finished task ("review on rust-td ✓
+    18m ago"), or "" when this daemon hasn't finished any yet."""
+    last = status.get("last_task") or {}
+    if not last:
+        return ""
+    now = time.time() if now is None else now
+    what = last.get("kind") or "task"
+    if repo := _repo_name(last.get("repo", "")):
+        what += f" on {repo}"
+    mark = "✗" if last.get("is_error") else "✓"
+    return f"{what} {mark} {ago(now - float(last.get('finished_at') or now))}"
 
 
 def _task_line(status: dict, now: float) -> str:

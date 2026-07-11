@@ -52,6 +52,51 @@ def test_status_roundtrips_and_carries_this_pid(tmp_path):
     assert status["chief"] == "http://chief"
 
 
+def test_status_slow_facts_carry_over_between_writes(tmp_path):
+    """chief/backends/last_task persist across writes that omit them, so the
+    'task started' write can't erase what discovery and the previous task
+    established; state/task/since always describe the newest write."""
+    control.write_status("idle", chief="http://chief", backends=["claude"], state_dir=tmp_path)
+    control.write_status(
+        "idle",
+        last_task={"kind": "review", "repo": "r", "is_error": False, "finished_at": 1.0},
+        state_dir=tmp_path,
+    )
+    control.write_status("task", task={"id": "t2"}, state_dir=tmp_path)
+
+    status = control.read_status(tmp_path)
+    assert status["state"] == "task" and status["task"] == {"id": "t2"}
+    assert status["chief"] == "http://chief"
+    assert status["backends"] == ["claude"]
+    assert status["last_task"]["kind"] == "review"
+
+
+def test_ago_and_last_task_line_render_human_lines():
+    assert control.ago(30) == "just now"
+    assert control.ago(5 * 60) == "5m ago"
+    assert control.ago(3 * 3600) == "3h ago"
+    assert control.ago(2 * 24 * 3600) == "2d ago"
+
+    assert control.last_task_line({}) == ""
+    line = control.last_task_line(
+        {
+            "last_task": {
+                "kind": "review",
+                "repo": "https://github.com/o/rust-td.git",
+                "is_error": False,
+                "finished_at": 900.0,
+            }
+        },
+        now=900.0 + 18 * 60,
+    )
+    assert line == "review on rust-td ✓ 18m ago"
+    failed = control.last_task_line(
+        {"last_task": {"kind": "resolve", "repo": "", "is_error": True, "finished_at": 0.0}},
+        now=30.0,
+    )
+    assert failed == "resolve ✗ just now"
+
+
 def test_missing_or_corrupt_status_reads_empty(tmp_path):
     assert control.read_status(tmp_path) == {}
     control.status_path(tmp_path).write_text("{not json")

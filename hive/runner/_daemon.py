@@ -808,8 +808,11 @@ def main(argv: list[str] | None = None) -> None:
     headers = {"X-Hive-Token": RUNNER_TOKEN, "X-Hive-Workspace": WORKSPACE_ID}
     auth = tuple(HIVE_BASIC_AUTH.split(":", 1)) if HIVE_BASIC_AUTH else None
 
+    detected_backends: list[str] = []  # latest discovery, mirrored into the status file
+
     def payload(boot: bool) -> dict:
         backends, discoveries = discovery_payload()
+        detected_backends[:] = backends
         if boot and not backends:
             log.warning("no supported agents on PATH — registering anyway for visibility")
         return {
@@ -833,7 +836,7 @@ def main(argv: list[str] | None = None) -> None:
     def on_connected(url: str) -> None:
         global HIVE_URL
         HIVE_URL = url  # task-execution and cancel-watch clients follow the winner
-        control.write_status("idle", chief=url)
+        control.write_status("idle", chief=url, backends=list(detected_backends))
 
     def run_task(task: dict) -> dict:
         log.info("executing %s task %s on %s", task["kind"], task["id"], task["repo"])
@@ -844,8 +847,19 @@ def main(argv: list[str] | None = None) -> None:
         )
         try:
             result = execute(task, headers, auth)
-        finally:
+        except BaseException:
             control.write_status("idle", chief=HIVE_URL)
+            raise
+        control.write_status(
+            "idle",
+            chief=HIVE_URL,
+            last_task={
+                "kind": task.get("kind", ""),
+                "repo": task.get("repo", ""),
+                "is_error": bool(result.get("is_error")),
+                "finished_at": time.time(),
+            },
+        )
         log.info("task %s done (error=%s)", task["id"], result.get("is_error"))
         return result
 

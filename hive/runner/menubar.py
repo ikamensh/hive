@@ -6,13 +6,21 @@ KeepAlive is conditioned on the flag being absent, so pausing means "the
 daemon drains and launchd leaves it down", resuming means "remove the flag and
 kick launchd". The menu app itself never supervises the daemon.
 
+Besides the switch, the menu answers the three glance questions about this
+machine's runner: which chief it reports to (and as whom), which agent CLIs
+discovery found, and what it finished most recently — all read from the local
+status file, no chief round-trip.
+
 Run standalone with `uv run python -m hive.runner.menubar`; installed as the
-`com.hive.menubar` LaunchAgent by `deploy/install_mac_runner.sh`.
+`com.hive.menubar` LaunchAgent by `deploy/install_mac_runner.sh` (KeepAlive,
+so "quit" would be a lie — the escape hatch is Hide, which boots the agent
+out until the next login).
 """
 
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 import webbrowser
 from pathlib import Path
@@ -23,8 +31,10 @@ from hive.runner import control
 from hive.runner.control import RunnerMode
 
 RUNNER_LABEL = "com.hive.runner"
+MENUBAR_LABEL = "com.hive.menubar"
 LOG_PATH = Path.home() / "Library/Logs/hive/runner.log"
 ENV_FILE = Path(os.environ.get("HIVE_RUNNER_ENV", "~/.config/hive/runner.env")).expanduser()
+RUNNER_NAME = os.environ.get("HIVE_RUNNER_NAME") or socket.gethostname().split(".")[0]
 REFRESH_S = 3
 
 TITLES = {
@@ -74,7 +84,11 @@ def dashboard_url() -> str:
 
 class HiveMenuBar(rumps.App):
     def __init__(self) -> None:
-        self.status_item = rumps.MenuItem("Starting…")  # no callback: gray info line
+        # Callback-less items render gray: the standard macOS info-line look.
+        self.status_item = rumps.MenuItem("Starting…")
+        self.chief_item = rumps.MenuItem("")
+        self.agents_item = rumps.MenuItem("")
+        self.last_item = rumps.MenuItem("")
         self.toggle_item = rumps.MenuItem("Pause runner", callback=self.on_toggle)
         self.stop_item = rumps.MenuItem("Stop now (kills current task)")
         super().__init__(
@@ -83,6 +97,9 @@ class HiveMenuBar(rumps.App):
             quit_button=None,
             menu=[
                 self.status_item,
+                self.chief_item,
+                self.agents_item,
+                self.last_item,
                 None,
                 self.toggle_item,
                 self.stop_item,
@@ -90,7 +107,10 @@ class HiveMenuBar(rumps.App):
                 rumps.MenuItem("Open dashboard", callback=self.on_dashboard),
                 rumps.MenuItem("Show logs", callback=self.on_logs),
                 None,
-                rumps.MenuItem("Quit menu (runner keeps its state)", callback=rumps.quit_application),
+                # Under launchd KeepAlive a plain quit would respawn in
+                # seconds and read as "does nothing" — Hide boots the agent
+                # out instead; RunAtLoad brings the icon back at next login.
+                rumps.MenuItem("Hide menu bar icon (back at login)", callback=self.on_hide),
             ],
         )
         # Not @rumps.timer: that registers the *unbound* method at class-definition
@@ -100,8 +120,16 @@ class HiveMenuBar(rumps.App):
 
     def refresh(self, _timer) -> None:
         view = control.runner_view()
+        status = control.read_status()
         self.title = TITLES[view.mode]
         self.status_item.title = view.detail
+        chief = control.chief_host(status.get("chief") or dashboard_url()) or "—"
+        self.chief_item.title = f"Runner {RUNNER_NAME} → {chief}"
+        backends = status.get("backends") or []
+        self.agents_item.title = "Agents: " + (", ".join(backends) if backends else "—")
+        last_line = control.last_task_line(status)
+        self.last_item.title = f"Last: {last_line}"
+        self.last_item._menuitem.setHidden_(not last_line)
         self.toggle_item.title = TOGGLE_LABELS[view.mode]
         # A gray (callback-less) item can't be clicked; only offer the hard
         # stop while something is actually running.
@@ -134,6 +162,12 @@ class HiveMenuBar(rumps.App):
     def on_logs(self, _item) -> None:
         if LOG_PATH.exists():
             subprocess.run(["open", str(LOG_PATH)], timeout=15)
+
+    def on_hide(self, _item) -> None:
+        # bootout SIGTERMs this very process; the fallback quit only runs when
+        # we're not under launchd (dev invocation from a terminal).
+        if _launchctl("bootout", f"gui/{os.getuid()}/{MENUBAR_LABEL}").returncode != 0:
+            rumps.quit_application()
 
 
 def main() -> None:
