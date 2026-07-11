@@ -1446,6 +1446,53 @@ def _register_usable_runner(client, name: str = "fake-runner", backend: str = "c
     return rid
 
 
+def test_fleet_pause_gates_dispatch_until_resume(harness):
+    """The master off-switch (`PATCH /api/workspace`): while paused, a pending
+    task is never handed to a ready runner — the quota stays untouched — and
+    the state travels on /api/workspace + /api/overview for every UI. Resume
+    releases exactly the same queued task on the next pump."""
+    client, store, _ = harness
+    project = store.put(Project(name="demo", spec_repo="https://example.com/s.git"))
+    ws = store.put(Workstream(project_id=project.id, title="w"))
+    rid = _register_usable_runner(client)
+    store.put(
+        Task(
+            project_id=project.id,
+            workstream_id=ws.id,
+            repo="https://example.com/s.git",
+            backend="cursor",
+            instructions="queued work",
+        )
+    )
+
+    assert client.patch("/api/workspace", json={"paused": True}).json()["paused"] is True
+    _pump(client, store)
+    assert store.list(Task, project_id=project.id, status=TaskStatus.pending)
+    assert client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"] is None
+    assert client.get("/api/workspace").json()["paused"] is True
+    assert client.get("/api/overview").json()["paused"] is True
+
+    assert client.patch("/api/workspace", json={"paused": False}).json()["paused"] is False
+    _pump(client, store)
+    assert not store.list(Task, project_id=project.id, status=TaskStatus.pending)
+    assert client.get("/api/overview").json()["paused"] is False
+
+
+def test_register_response_reports_usable_backends(harness):
+    """The register response carries the chief's dispatch verdict (probed
+    usable, not cooling down), so runner-local UIs can say "ready" instead of
+    merely "installed"."""
+    client, _, _ = harness
+    body = {"name": "lap", "backends": ["cursor"]}
+    first = client.post("/api/runners/register", json=body, headers=RUNNER_HEADERS).json()
+    assert first["usable_backends"] == []  # installed, but no probe has proven it
+
+    _register_usable_runner(client, name="lap")  # same runner: probe proves cursor
+
+    again = client.post("/api/runners/register", json=body, headers=RUNNER_HEADERS).json()
+    assert again["usable_backends"] == ["cursor"]
+
+
 def test_overview_reflects_project_and_capacity(harness):
     """The home overview is one request that sees a started project and a
     probed-usable agent on its machine."""

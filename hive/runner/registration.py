@@ -272,7 +272,17 @@ def register(store, body: RunnerRegister, workspace_id: str) -> dict:
 
     upsert_checkouts(store, workspace_id, machine.id, body.checkouts)
 
-    return {"runner_id": runner.id, "machine_id": machine.id}
+    # Tell the runner which of its backends the fleet would actually use right
+    # now (probed usable, enabled, not cooling down) — local discovery can only
+    # see "installed", so honest local UIs need the chief's verdict.
+    usable = sorted(
+        {
+            backend
+            for (owner_id, backend), resource in resources_by_pair.items()
+            if owner_id in (machine.id, runner.id) and resource.available()
+        }
+    )
+    return {"runner_id": runner.id, "machine_id": machine.id, "usable_backends": usable}
 
 
 def _requeue_dropped_work(store, workspace_id: str, runner: Runner) -> None:

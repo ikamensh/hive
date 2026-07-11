@@ -823,6 +823,21 @@ class _Recorder:
     def post(self, url, **kw):
         return self._send("POST", url, kw.get("json"))
 
+    def patch(self, url, **kw):
+        return self._send("PATCH", url, kw.get("json"))
+
+
+def test_cli_pause_resume_map_to_workspace_patch():
+    """`hive pause` / `hive resume` are the fleet-wide off-switch: one PATCH
+    to /api/workspace, nothing project-scoped."""
+    rec = _Recorder()
+    cli(rec, "pause")
+    cli(rec, "resume")
+    assert rec.calls == [
+        ("PATCH", "/api/workspace", {"paused": True}),
+        ("PATCH", "/api/workspace", {"paused": False}),
+    ]
+
 
 def test_cli_run_cancels_map_to_endpoints():
     rec = _Recorder()

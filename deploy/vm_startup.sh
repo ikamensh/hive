@@ -1,10 +1,23 @@
 #!/bin/bash
-# GCE startup script: provisions the hive VM (chief in docker + bare runner).
-# Idempotent — safe to re-run on every boot. Logs: /var/log/hive-startup.log
+# Scaleway VM provisioner: chief + runner, bare via systemd.
+# Idempotent — re-run by deploy/create_vm.sh and by hive-startup.service on
+# every boot. Logs: /var/log/hive-startup.log
+#
+# Needs /etc/hive/scw.env (SCW_SECRET_KEY, SCW_PROJECT_ID, SCW_REGION) — placed
+# once by deploy/create_vm.sh. Secrets live in Scaleway Secret Manager; the
+# doc/blob stores stay on GCP (Firestore + GCS) reached via the hive-scw
+# service-account key (secret hive-gcp-sa-key).
 set -euxo pipefail
 exec >>/var/log/hive-startup.log 2>&1
 echo "=== hive startup $(date -Is) ==="
-export HOME=/root  # startup-script env has no HOME; git/gh need it
+export HOME=/root  # boot-time env has no HOME; git/gh need it
+
+source /etc/hive/scw.env
+
+# The public hostname is derived from the VM's own IP (Scaleway metadata), so
+# nothing here needs editing when the instance is recreated with a new IP.
+PUBLIC_IP=$(curl -s http://169.254.42.42/conf | grep ^PUBLIC_IP_ADDRESS= | cut -d= -f2)
+HOST_SSLIP="hive.${PUBLIC_IP//./-}.sslip.io"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
@@ -47,19 +60,30 @@ if ! command -v /usr/local/bin/uv >/dev/null; then
   curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
 fi
 
-# --- secrets -> /etc/hive/env ---
-secret() { gcloud secrets versions access latest --secret="$1"; }
-secret_optional() { gcloud secrets versions access latest --secret="$1" 2>/dev/null || true; }
+# --- secrets (Scaleway Secret Manager) -> /etc/hive/env ---
+SM="https://api.scaleway.com/secret-manager/v1beta1/regions/${SCW_REGION}/secrets-by-path/versions/latest/access?project_id=${SCW_PROJECT_ID}&secret_path=/"
+secret() {
+  curl -fsS -H "X-Auth-Token: ${SCW_SECRET_KEY}" "${SM}&secret_name=$1" \
+    | python3 -c 'import json,sys,base64; sys.stdout.buffer.write(base64.b64decode(json.load(sys.stdin)["data"]))'
+}
+secret_optional() { secret "$1" 2>/dev/null || true; }
 mkdir -p /etc/hive
+
+# Firestore + GCS credential (the only remaining GCP dependency).
+secret hive-gcp-sa-key > /etc/hive/gcp-sa.json
+chmod 600 /etc/hive/gcp-sa.json
+
 # CLAUDE_CODE_OAUTH_TOKEN / CURSOR_API_KEY are the headless tokens for the
 # subscription backends (mint with `claude setup-token` / a Cursor dashboard API
-# key, then `gcloud secrets create …`). Empty until those secrets exist, which
-# just leaves the backend non-usable — the runner's probe gates it.
+# key, then `scw secret secret create` + `scw secret version create`). Empty until
+# those secrets exist, which just leaves the backend non-usable — the runner's
+# probe gates it.
 cat > /etc/hive/env <<EOF
 HIVE_GCP_PROJECT=hive-ikamen
 HIVE_GCS_BUCKET=hive-ikamen-blobs
+GOOGLE_APPLICATION_CREDENTIALS=/etc/hive/gcp-sa.json
 HIVE_ORCH_PROVIDER=auto
-HIVE_ADVERTISED_URLS=https://hive.tachyon-ai.eu,https://hive.34-62-218-54.sslip.io
+HIVE_ADVERTISED_URLS=https://hive.tachyon-ai.eu,https://${HOST_SSLIP}
 # First login is the dev-mode identity — keep ikamensh first.
 HIVE_ALLOWED_GITHUB_USERS=ikamensh,eidemiurge
 GEMINI_API_KEY=$(secret_optional hive-gemini-api-key)
@@ -109,7 +133,7 @@ fi
 WEB_PASS=$(secret hive-web-password)
 WEB_HASH=$(caddy hash-password --plaintext "$WEB_PASS")
 cat > /etc/caddy/Caddyfile <<EOF
-hive.tachyon-ai.eu, hive.34-62-218-54.sslip.io {
+hive.tachyon-ai.eu, ${HOST_SSLIP} {
     # The CI webhook is its own bearer-authed endpoint (HIVE_GITHUB_WEBHOOK_SECRET),
     # so GitHub can reach it without the site's basic-auth password.
     @protected not path /api/ci/webhook

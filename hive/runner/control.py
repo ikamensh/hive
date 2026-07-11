@@ -69,6 +69,7 @@ def write_status(
     task: dict | None = None,
     chief: str = "",
     backends: list[str] | None = None,
+    usable: list[str] | None = None,
     last_task: dict | None = None,
     state_dir: Path | None = None,
 ) -> None:
@@ -76,10 +77,11 @@ def write_status(
     concurrent reader never sees a torn file.
 
     `state`/`task`/`pid`/`since` describe this very moment and are always
-    replaced. `chief`/`backends`/`last_task` are slower facts (who we report
-    to, which agent CLIs discovery found, what we finished most recently):
-    when omitted they carry over from the previous status, so every write
-    doesn't have to re-state them."""
+    replaced. `chief`/`backends`/`usable`/`last_task` are slower facts (who we
+    report to, which agent CLIs discovery found, which of them the chief would
+    actually dispatch to, what we finished most recently): when omitted they
+    carry over from the previous status, so every write doesn't have to
+    re-state them."""
     path = status_path(state_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     previous = read_status(state_dir)
@@ -89,6 +91,7 @@ def write_status(
         "task": task or {},
         "chief": chief or previous.get("chief", ""),
         "backends": backends if backends is not None else previous.get("backends", []),
+        "usable": usable if usable is not None else previous.get("usable", []),
         "last_task": last_task or previous.get("last_task", {}),
         "since": time.time(),
     }

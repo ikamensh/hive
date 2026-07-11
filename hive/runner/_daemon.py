@@ -809,6 +809,21 @@ def main(argv: list[str] | None = None) -> None:
     auth = tuple(HIVE_BASIC_AUTH.split(":", 1)) if HIVE_BASIC_AUTH else None
 
     detected_backends: list[str] = []  # latest discovery, mirrored into the status file
+    usable_backends: list[str] = []  # the chief's dispatch verdict, from register responses
+    written_facts: dict = {}  # what the status file last saw, to skip no-op writes
+
+    def sync_status_facts(state: str) -> None:
+        facts = {"backends": list(detected_backends), "usable": list(usable_backends)}
+        if facts != written_facts:
+            control.write_status(state, chief=HIVE_URL, **facts)
+            written_facts.update(facts)
+
+    def on_registered(data: dict) -> None:
+        # Heartbeat thread included — only stash; the status file is written
+        # from the main loop (sync_status_facts) so a concurrent read-modify-
+        # write can't clobber a task-state transition.
+        if isinstance(data.get("usable_backends"), list):
+            usable_backends[:] = [str(b) for b in data["usable_backends"]]
 
     def payload(boot: bool) -> dict:
         backends, discoveries = discovery_payload()
@@ -836,7 +851,8 @@ def main(argv: list[str] | None = None) -> None:
     def on_connected(url: str) -> None:
         global HIVE_URL
         HIVE_URL = url  # task-execution and cancel-watch clients follow the winner
-        control.write_status("idle", chief=url, backends=list(detected_backends))
+        written_facts.clear()
+        sync_status_facts("idle")
 
     def run_task(task: dict) -> dict:
         log.info("executing %s task %s on %s", task["kind"], task["id"], task["repo"])
@@ -869,6 +885,9 @@ def main(argv: list[str] | None = None) -> None:
         if control.is_paused():
             control.write_status("paused", chief=HIVE_URL)
             return "paused by operator — runner.paused is set"
+        # Idle housekeeping on the main thread: mirror facts the heartbeat
+        # stashed (fresh probe verdicts) into the status file.
+        sync_status_facts("idle")
         return ""
 
     last_update_check = time.monotonic()
@@ -909,6 +928,7 @@ def main(argv: list[str] | None = None) -> None:
         on_connected=on_connected,
         between_tasks=between_tasks,
         before_poll=before_poll,
+        on_registered=on_registered,
     ).run()
 
 

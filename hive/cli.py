@@ -167,6 +167,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub.add_parser("version", help="show the local CLI version and the target chief version")
 
+    sub.add_parser("pause", help="pause all of hive: nothing new starts, running tasks finish")
+    sub.add_parser("resume", help="undo `hive pause`; queued work dispatches again")
     p = sub.add_parser("projects", help="list projects")
 
     p = sub.add_parser("create", help="create a project (name only; configure in project view)")
@@ -988,6 +990,8 @@ def run(args: argparse.Namespace, client) -> dict | list:
             payload["chief"] = None
             payload["chief_error"] = str(exc)
         return payload
+    elif c in ("pause", "resume"):
+        r = client.patch("/api/workspace", json={"paused": c == "pause"})
     elif c == "projects":
         r = client.get("/api/projects")
     elif c == "create":

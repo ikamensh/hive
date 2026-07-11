@@ -254,11 +254,32 @@ export default function Home() {
     .filter(Boolean)
     .join(" · ");
 
+  const togglePause = async () => {
+    await api.setFleetPaused(!data.paused);
+    refresh();
+  };
+
   return (
     <div className="page page-home">
       <div className="home-head">
-        <h1>{summary || "the hive is quiet"}</h1>
+        <h1>{data.paused ? "hive is paused" : summary || "the hive is quiet"}</h1>
+        <button
+          type="button"
+          className={data.paused ? "" : "ghost"}
+          title="Nothing new starts anywhere; running tasks finish and report."
+          onClick={togglePause}
+        >
+          {data.paused ? "Resume hive" : "Pause hive"}
+        </button>
       </div>
+
+      {data.paused ? (
+        <div className="fleet-paused-banner">
+          <i className="ti ti-player-pause" aria-hidden />{" "}
+          Hive is paused — no new tasks, scans, or agent sessions start anywhere.
+          Running tasks finish and report. Resume to let queued work continue.
+        </div>
+      ) : null}
 
       <div className="kpi-row">
         <Kpi icon="bolt" label="running" value={t.tasks_running} sub="tasks now" />

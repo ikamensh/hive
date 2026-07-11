@@ -10,40 +10,37 @@
 set -euo pipefail
 
 VM=${HIVE_VM:-hive-vm}
-ZONE=${HIVE_VM_ZONE:-europe-west1-b}
-PROJECT=${HIVE_VM_PROJECT:-hive-ikamen}
-ACCOUNT=${HIVE_VM_ACCOUNT:-ikamenshchikov@gmail.com}
+ZONE=${HIVE_VM_ZONE:-fr-par-1}
 cd "$(cd "$(dirname "$0")/.." && pwd)"
 
-IP=$(gcloud compute instances describe "$VM" --zone="$ZONE" --project="$PROJECT" \
-  --account="$ACCOUNT" --format='value(networkInterfaces[0].accessConfigs[0].natIP)')
-SSH="ssh -i $HOME/.ssh/google_compute_engine -o IdentitiesOnly=yes \
-  -o UserKnownHostsFile=$HOME/.ssh/google_compute_known_hosts -o StrictHostKeyChecking=accept-new"
-REMOTE="ikamen@$IP"
+IP=$(scw instance server list zone=$ZONE name=$VM -o json \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["public_ip"]["address"])')
+SSH="ssh -o StrictHostKeyChecking=accept-new"
+REMOTE="root@$IP"
 VERSION=$(uv run python -m hive.version)
 
-# --rsync-path=sudo rsync: /opt/hive is root-owned. Excluded paths are also
-# protected from --delete, so the VM's .venv / web/dist / .git survive.
+# Excluded paths are also protected from --delete, so the VM's .venv /
+# web/dist / .git survive.
 echo "-> rsync sources to $VM ($IP):/opt/hive (version $VERSION)"
-rsync -az --delete --rsync-path="sudo rsync" -e "$SSH" \
+rsync -az --delete -e "$SSH" \
   --exclude '.git' --exclude '.venv' --exclude 'node_modules' --exclude 'web/dist' \
   --exclude '__pycache__' --exclude '.pytest_cache' --exclude '.ruff_cache' --exclude '.idea' \
   ./ "$REMOTE:/opt/hive/"
 
 if [[ " $* " == *" --deps "* ]]; then
   echo "-> uv sync (deps changed)"
-  $SSH "$REMOTE" "cd /opt/hive && sudo /usr/local/bin/uv sync --frozen --no-dev"
+  $SSH "$REMOTE" "cd /opt/hive && /usr/local/bin/uv sync --frozen --no-dev"
 fi
 
 echo "-> stamp version fallback ($VERSION)"
-$SSH "$REMOTE" "cd /opt/hive && sudo HIVE_VERSION='$VERSION' /opt/hive/.venv/bin/python -m hive.version --write-fallback >/dev/null"
+$SSH "$REMOTE" "cd /opt/hive && HIVE_VERSION='$VERSION' /opt/hive/.venv/bin/python -m hive.version --write-fallback >/dev/null"
 
 if [[ " $* " == *" --web "* ]]; then
   echo "-> build + ship web/dist"
   (cd web && npm run build)
-  rsync -az --delete --rsync-path="sudo rsync" -e "$SSH" web/dist/ "$REMOTE:/opt/hive/web/dist/"
+  rsync -az --delete -e "$SSH" web/dist/ "$REMOTE:/opt/hive/web/dist/"
 fi
 
 echo "-> restart chief + runner"
-$SSH "$REMOTE" "sudo systemctl restart hive-chief hive-runner"
+$SSH "$REMOTE" "systemctl restart hive-chief hive-runner"
 echo "OK: deployed in-place. Chief: http://$IP:8000 (behind Caddy basic-auth)"

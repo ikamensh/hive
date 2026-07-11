@@ -178,6 +178,19 @@ def test_before_poll_drain_lets_an_assigned_task_finish(tmp_path):
     assert chief.polls == 1  # the drain exit happened before a second poll
 
 
+def test_on_registered_sees_every_register_response(tmp_path):
+    """Chief-owned facts ride the register channel: the hook fires with the
+    full response body on the boot registration (workers mirror these facts
+    locally, e.g. which backends the chief considers usable)."""
+    chief = FakeChief(tasks=[{"id": "t1"}])
+    seen: list[dict] = []
+    loop = make_loop(tmp_path, {"http://a": chief}, ["http://a"], on_registered=seen.append)
+
+    loop.run(max_tasks=1)
+
+    assert seen and all(d["runner_id"] == "chief-w1" for d in seen)
+
+
 def test_report_result_retries_transient_chief_outage(tmp_path, monkeypatch):
     """A finished task's result survives a chief restart window: transient
     transport/5xx failures are retried (the chief records results

@@ -99,6 +99,11 @@ const realApi = {
     await http("/api/auth/logout", { method: "POST" });
   },
   overview: () => http<Overview>("/api/overview"),
+  setFleetPaused: (paused: boolean) =>
+    http<{ paused: boolean }>("/api/workspace", {
+      method: "PATCH",
+      body: JSON.stringify({ paused }),
+    }),
   projects: () => http<Project[]>("/api/projects"),
   createProject: (body: ProjectCreate) =>
     http<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),

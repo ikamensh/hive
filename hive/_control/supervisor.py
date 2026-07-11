@@ -18,7 +18,7 @@ import time
 from collections import defaultdict
 from typing import Callable
 
-from hive._control import allowances
+from hive._control import allowances, pause
 from hive._control.allowances import utc_day_start
 from hive._control.escalation import escalate, resolve_open_todos
 from hive.fleet import DEFAULT_LIVENESS, Liveness
@@ -188,6 +188,11 @@ class Supervisor:
 
     def wake(self, project_id: str, event: str) -> None:
         self._events[project_id].append(event)
+        self._wakeup.set()
+
+    def poke(self) -> None:
+        """Run a step soon without queueing an orchestrator event — for changes
+        (like a fleet resume) where dispatch should react but no LLM should."""
         self._wakeup.set()
 
     def acquire_leadership(self) -> None:
@@ -432,6 +437,8 @@ class Supervisor:
         }
 
     def _dispatch_unlocked(self, project: Project) -> int:
+        if pause.fleet_paused(self.store, self.workspace_id):
+            return 0  # hive is paused: queued tasks wait, running ones finish
         if self.over_budget(project):
             return 0  # daily soft cap reached; no new spend until UTC midnight
         tasks = self.store.list(Task, workspace_id=self.workspace_id, project_id=project.id)
@@ -658,6 +665,11 @@ class Supervisor:
         self.fail_orphaned_tasks()
         self.check_dark_machines()
         resolve_open_todos(self.store, self.workspace_id)
+        if pause.fleet_paused(self.store, self.workspace_id):
+            # The master off-switch: bookkeeping above still ran, but nothing
+            # below may start or spend — no triage/scans, no dispatch, no
+            # orchestrator invocations. Queued events wait for the resume.
+            return
         if self._todo_triage_due():
             self._last_todo_triage = time.time()
             self._triage_busy = True

@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Callable
 
+from hive._control import pause
 from hive._control.capacity import capacity_summary, group_machines
 from hive._workstreams.testing import story_health
 from hive.models import (
@@ -231,6 +232,7 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
     ]
 
     return {
+        "paused": pause.fleet_paused(store, workspace_id),
         "projects": project_rows,
         "capacity": capacity,
         "live_tasks": live_tasks,

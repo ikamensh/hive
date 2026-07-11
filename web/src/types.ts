@@ -734,6 +734,8 @@ export interface OverviewTotals {
 }
 
 export interface Overview {
+  /** Fleet-wide pause: nothing new starts anywhere; running tasks finish. */
+  paused: boolean;
   projects: OverviewProject[];
   capacity: OverviewCapacity;
   live_tasks: OverviewLiveTask[];

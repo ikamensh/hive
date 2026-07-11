@@ -39,6 +39,11 @@ class User(BaseModel):
 class Workspace(BaseModel):
     id: str = DEFAULT_WORKSPACE_ID
     name: str = "personal"
+    # The master off-switch: while paused, nothing new starts anywhere — no
+    # task dispatch, no orchestrator/LLM invocations, no scans. Running tasks
+    # finish and report normally. For "hive is eating quota I need right now".
+    paused: bool = False
+    paused_at: float = 0.0
     created_at: float = Field(default_factory=now)
 
 

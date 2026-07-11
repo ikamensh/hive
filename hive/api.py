@@ -30,7 +30,7 @@ from hive._integrations.auth import (
     AuthManager,
 )
 from hive.config.settings import Config
-from hive._control import allowances, clarifications, decisions, intake
+from hive._control import allowances, clarifications, decisions, intake, pause
 from hive.agents import BACKEND_NAMES
 from hive._integrations.github_repos import all_repos as list_github_repos
 from hive._integrations.github_repos import create_repo as create_github_repo
@@ -113,6 +113,7 @@ from hive.models import (
     Story,
     Subscription,
     User,
+    Workspace,
     WorkspaceMembership,
     Task,
     TaskKind,
@@ -282,6 +283,10 @@ class ResourcePatch(BaseModel):
 
 class LocalRunnerPatch(BaseModel):
     autostart: bool
+
+
+class WorkspacePatch(BaseModel):
+    paused: bool  # the fleet-wide pause switch (hive/_control/pause.py)
 
 
 class MachinePatch(BaseModel):
@@ -648,6 +653,24 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def overview(ctx: AuthContext = Depends(current)):
         refresh_project_states_for_view(ctx.workspace_id)
         return build_overview(store, ctx.workspace_id, supervisor.spend_today)
+
+    @app.get("/api/workspace")
+    def get_workspace(ctx: AuthContext = Depends(current)):
+        workspace = store.get(Workspace, ctx.workspace_id)
+        return {
+            "paused": bool(workspace and workspace.paused),
+            "paused_at": workspace.paused_at if workspace else 0.0,
+        }
+
+    @app.patch("/api/workspace")
+    def patch_workspace(body: WorkspacePatch, ctx: AuthContext = Depends(editor)):
+        """The fleet-wide pause switch: while paused nothing new starts anywhere
+        (no dispatch, no orchestrator/scan spend); running tasks finish and
+        report. Resume wakes the supervisor so queued work moves immediately."""
+        workspace = pause.set_fleet_paused(store, ctx.workspace_id, body.paused)
+        if not body.paused:
+            supervisor.poke()  # dispatch queued work now, without an LLM event
+        return {"paused": workspace.paused, "paused_at": workspace.paused_at}
 
     @app.get("/api/show")
     def show(ctx: AuthContext = Depends(current)):

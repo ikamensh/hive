@@ -1,5 +1,5 @@
 #!/bin/bash
-# Operate the remote hive VM (chief + runner). One place for the gcloud
+# Operate the remote hive VM (chief + runner). One place for the Scaleway
 # coordinates so ops are short and repeatable. Override with HIVE_VM* env vars.
 #
 #   deploy/vm.sh status              # chief + runner health
@@ -10,24 +10,24 @@
 set -euo pipefail
 
 VM=${HIVE_VM:-hive-vm}
-ZONE=${HIVE_VM_ZONE:-europe-west1-b}
-PROJECT=${HIVE_VM_PROJECT:-hive-ikamen}
-ACCOUNT=${HIVE_VM_ACCOUNT:-ikamenshchikov@gmail.com}
+ZONE=${HIVE_VM_ZONE:-fr-par-1}
 
-gssh() { gcloud compute ssh "$VM" --zone="$ZONE" --project="$PROJECT" --account="$ACCOUNT" "$@"; }
+IP=$(scw instance server list zone=$ZONE name=$VM -o json \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["public_ip"]["address"])')
+vssh() { ssh -o StrictHostKeyChecking=accept-new "root@$IP" "$@"; }
 
 cmd=${1:-status}; shift || true
 case "$cmd" in
   status)
-    gssh --command 'echo "chief: $(systemctl is-active hive-chief) | runner: $(systemctl is-active hive-runner)"; curl -s -o /dev/null -w "health -> %{http_code}\n" localhost:8000' ;;
+    vssh 'echo "chief: $(systemctl is-active hive-chief) | runner: $(systemctl is-active hive-runner)"; curl -s -o /dev/null -w "health -> %{http_code}\n" localhost:8000' ;;
   logs)
-    svc=${1:-chief}; n=${2:-50}; gssh --command "sudo journalctl -u hive-$svc --no-pager -n $n" ;;
+    svc=${1:-chief}; n=${2:-50}; vssh "journalctl -u hive-$svc --no-pager -n $n" ;;
   restart)
-    gssh --command 'sudo systemctl restart hive-chief hive-runner && echo restarted' ;;
+    vssh 'systemctl restart hive-chief hive-runner && echo restarted' ;;
   tunnel)
-    port=${1:-8000}; echo "-> http://localhost:$port (Ctrl-C to stop)"; gssh -- -L "$port:localhost:8000" -N ;;
+    port=${1:-8000}; echo "-> http://localhost:$port (Ctrl-C to stop)"; vssh -L "$port:localhost:8000" -N ;;
   ssh)
-    if [ "$#" -gt 0 ]; then gssh --command "$*"; else gssh; fi ;;
+    if [ "$#" -gt 0 ]; then vssh "$*"; else vssh; fi ;;
   *)
     echo "usage: deploy/vm.sh {status|logs|restart|tunnel|ssh}" >&2; exit 2 ;;
 esac

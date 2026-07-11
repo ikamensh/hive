@@ -25,6 +25,7 @@ import subprocess
 import webbrowser
 from pathlib import Path
 
+import httpx
 import rumps
 
 from hive.runner import control
@@ -36,6 +37,7 @@ LOG_PATH = Path.home() / "Library/Logs/hive/runner.log"
 ENV_FILE = Path(os.environ.get("HIVE_RUNNER_ENV", "~/.config/hive/runner.env")).expanduser()
 RUNNER_NAME = os.environ.get("HIVE_RUNNER_NAME") or socket.gethostname().split(".")[0]
 REFRESH_S = 3
+FLEET_POLL_TICKS = 5  # chief round-trips every ~15s; local files every tick
 
 TITLES = {
     RunnerMode.idle: "🐝",
@@ -70,16 +72,45 @@ def terminate_runner() -> None:
     _launchctl("kill", "SIGTERM", f"gui/{os.getuid()}/{RUNNER_LABEL}")
 
 
-def dashboard_url() -> str:
-    """The chief this runner reports to, from the environment or its env file."""
-    urls = os.environ.get("HIVE_URL", "")
-    if not urls and ENV_FILE.exists():
+def _env_value(name: str) -> str:
+    """A runner.env value, preferring the ambient environment."""
+    if value := os.environ.get(name, ""):
+        return value
+    if ENV_FILE.exists():
         for line in ENV_FILE.read_text().splitlines():
             key, _, value = line.partition("=")
-            if key.strip() == "HIVE_URL":
-                urls = value.strip()
-                break
-    return urls.split(",")[0].strip()
+            if key.strip() == name:
+                return value.strip()
+    return ""
+
+
+def dashboard_url() -> str:
+    """The chief this runner reports to, from the environment or its env file."""
+    return _env_value("HIVE_URL").split(",")[0].strip()
+
+
+def chief_client() -> httpx.Client | None:
+    """A client for the chief's web API, authed like the CLI: the Caddy
+    perimeter's basic auth from runner.env (inside, this deploy runs
+    auth_mode=dev). None when no chief URL is configured."""
+    url = dashboard_url()
+    if not url:
+        return None
+    basic = _env_value("HIVE_BASIC_AUTH")
+    auth = tuple(basic.split(":", 1)) if ":" in basic else None
+    return httpx.Client(base_url=url, auth=auth, timeout=5.0)
+
+
+def agents_line(status: dict) -> str:
+    """Only agents the chief would actually dispatch to count as ready;
+    installed-but-unusable CLIs are a parenthetical, not a claim."""
+    usable = status.get("usable") or []
+    installed = status.get("backends") or []
+    if usable:
+        return "Agents ready: " + ", ".join(usable)
+    if installed:
+        return f"Agents ready: none ({len(installed)} installed, not usable)"
+    return "Agents ready: none detected"
 
 
 class HiveMenuBar(rumps.App):
@@ -91,6 +122,9 @@ class HiveMenuBar(rumps.App):
         self.last_item = rumps.MenuItem("")
         self.toggle_item = rumps.MenuItem("Pause runner", callback=self.on_toggle)
         self.stop_item = rumps.MenuItem("Stop now (kills current task)")
+        self.fleet_item = rumps.MenuItem("Pause all of hive")
+        self.fleet_paused: bool | None = None  # None = chief not asked/reachable yet
+        self._tick = 0
         super().__init__(
             "Hive Runner",
             title=TITLES[RunnerMode.offline],
@@ -103,6 +137,8 @@ class HiveMenuBar(rumps.App):
                 None,
                 self.toggle_item,
                 self.stop_item,
+                None,
+                self.fleet_item,
                 None,
                 rumps.MenuItem("Open dashboard", callback=self.on_dashboard),
                 rumps.MenuItem("Show logs", callback=self.on_logs),
@@ -125,8 +161,7 @@ class HiveMenuBar(rumps.App):
         self.status_item.title = view.detail
         chief = control.chief_host(status.get("chief") or dashboard_url()) or "—"
         self.chief_item.title = f"Runner {RUNNER_NAME} → {chief}"
-        backends = status.get("backends") or []
-        self.agents_item.title = "Agents: " + (", ".join(backends) if backends else "—")
+        self.agents_item.title = agents_line(status)
         last_line = control.last_task_line(status)
         self.last_item.title = f"Last: {last_line}"
         self.last_item._menuitem.setHidden_(not last_line)
@@ -135,6 +170,34 @@ class HiveMenuBar(rumps.App):
         # stop while something is actually running.
         can_stop = view.mode in (RunnerMode.working, RunnerMode.draining)
         self.stop_item.set_callback(self.on_stop_now if can_stop else None)
+        if self._tick % FLEET_POLL_TICKS == 0:
+            self.poll_fleet()
+        self._tick += 1
+        self.render_fleet_item()
+
+    def poll_fleet(self) -> None:
+        client = chief_client()
+        if client is None:
+            self.fleet_paused = None
+            return
+        try:
+            with client:
+                self.fleet_paused = bool(
+                    client.get("/api/workspace").raise_for_status().json()["paused"]
+                )
+        except (httpx.HTTPError, KeyError, ValueError):
+            self.fleet_paused = None
+
+    def render_fleet_item(self) -> None:
+        if self.fleet_paused is None:
+            self.fleet_item.title = "Hive: chief unreachable"
+            self.fleet_item.set_callback(None)
+        elif self.fleet_paused:
+            self.fleet_item.title = "Resume hive (paused — nothing new starts)"
+            self.fleet_item.set_callback(self.on_fleet_toggle)
+        else:
+            self.fleet_item.title = "Pause all of hive (running tasks finish)"
+            self.fleet_item.set_callback(self.on_fleet_toggle)
 
     def on_toggle(self, _item) -> None:
         view = control.runner_view()
@@ -154,6 +217,21 @@ class HiveMenuBar(rumps.App):
         control.request_pause()
         terminate_runner()
         self.refresh(None)
+
+    def on_fleet_toggle(self, _item) -> None:
+        client = chief_client()
+        if client is None or self.fleet_paused is None:
+            return
+        try:
+            with client:
+                self.fleet_paused = bool(
+                    client.patch("/api/workspace", json={"paused": not self.fleet_paused})
+                    .raise_for_status()
+                    .json()["paused"]
+                )
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            rumps.alert("Could not reach the hive chief", str(exc))
+        self.render_fleet_item()
 
     def on_dashboard(self, _item) -> None:
         if url := dashboard_url():

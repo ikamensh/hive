@@ -3449,7 +3449,19 @@ a.needs-scope:hover { color: var(--accent); }
 .page-home { display: flex; flex-direction: column; gap: 16px; }
 
 .home-head { display: flex; align-items: center; gap: 18px; }
-.home-head h1 { font-size: 22px; letter-spacing: 0.01em; font-weight: 600; }
+.home-head h1 { font-size: 22px; letter-spacing: 0.01em; font-weight: 600; flex: 1; }
+
+/* Fleet-wide pause: loud enough that a paused hive can't be mistaken for a quiet one. */
+.fleet-paused-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px;
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--line));
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  border-radius: var(--r-md);
+  color: var(--ink);
+  font-size: 14px;
+}
+.fleet-paused-banner .ti { color: var(--amber); font-size: 18px; }
 
 /* --- vital-signs tiles --- */
 .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }

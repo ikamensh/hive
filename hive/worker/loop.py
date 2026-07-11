@@ -74,6 +74,9 @@ class WorkerLoop:
     consulted before each poll rather than after: exiting there never abandons
     an already-assigned task, which makes it the drain hook — a task handed to
     us while the drain was requested still gets executed and reported.
+    `on_registered(data)` sees every register response body (boot, 404
+    re-register, and 30s heartbeats — so also from the heartbeat thread): the
+    channel for chief-owned facts the worker wants to mirror locally.
     """
 
     def __init__(
@@ -85,6 +88,7 @@ class WorkerLoop:
         on_connected: Callable[[str], None] | None = None,
         between_tasks: Callable[[dict], str] | None = None,
         before_poll: Callable[[], str] | None = None,
+        on_registered: Callable[[dict], None] | None = None,
     ) -> None:
         self.config = config
         self.payload = payload
@@ -92,6 +96,7 @@ class WorkerLoop:
         self.on_connected = on_connected
         self.between_tasks = between_tasks
         self.before_poll = before_poll
+        self.on_registered = on_registered
         self.roster = ChiefRoster(list(config.urls), config.state_path)
         self.worker_id = ""
         self.current_url = ""
@@ -107,6 +112,8 @@ class WorkerLoop:
             .json()
         )
         self.roster.merge_advertised(data.get("chief_urls", []))
+        if self.on_registered is not None:
+            self.on_registered(data)
         return data["runner_id"]
 
     def _connect(self, *, boot: bool = False) -> httpx.Client:

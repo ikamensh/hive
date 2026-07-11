@@ -56,7 +56,13 @@ def test_status_slow_facts_carry_over_between_writes(tmp_path):
     """chief/backends/last_task persist across writes that omit them, so the
     'task started' write can't erase what discovery and the previous task
     established; state/task/since always describe the newest write."""
-    control.write_status("idle", chief="http://chief", backends=["claude"], state_dir=tmp_path)
+    control.write_status(
+        "idle",
+        chief="http://chief",
+        backends=["claude", "cursor"],
+        usable=["claude"],
+        state_dir=tmp_path,
+    )
     control.write_status(
         "idle",
         last_task={"kind": "review", "repo": "r", "is_error": False, "finished_at": 1.0},
@@ -67,7 +73,8 @@ def test_status_slow_facts_carry_over_between_writes(tmp_path):
     status = control.read_status(tmp_path)
     assert status["state"] == "task" and status["task"] == {"id": "t2"}
     assert status["chief"] == "http://chief"
-    assert status["backends"] == ["claude"]
+    assert status["backends"] == ["claude", "cursor"]
+    assert status["usable"] == ["claude"]
     assert status["last_task"]["kind"] == "review"
 
 

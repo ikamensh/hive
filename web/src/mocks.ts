@@ -42,6 +42,8 @@ import type {
 } from "./types";
 
 const now = Date.now() / 1000;
+
+let fleetPaused = false; // the fleet-wide pause switch (PATCH /api/workspace)
 const version: VersionInfo = {
   version: "0.1.150+mock",
   base_version: "0.1",
@@ -1132,6 +1134,11 @@ export const api = {
   }),
   logout: async (): Promise<void> => {},
 
+  setFleetPaused: async (paused: boolean): Promise<{ paused: boolean }> => {
+    fleetPaused = paused;
+    return { paused };
+  },
+
   overview: async (): Promise<Overview> => {
     const projectName = (id: string) => projects.find((p) => p.id === id)?.name ?? "";
     const openQuestions = questions
@@ -1157,6 +1164,7 @@ export const api = {
       }));
 
     return structuredClone({
+      paused: fleetPaused,
       projects: [
         { id: "p-relay", name: "relay", spec_repo: "git@github.com:acme/relay.git", state: "working", paused: false, created_at: now - 86400 * 5, daily_budget_usd: 40, spend_today: 8.2, counts: { active: 2, running: 1, questions: 0, blockers: 0, streams: 3 } },
         { id: "p-atlas", name: "atlas", spec_repo: "git@github.com:acme/atlas-spec.git", state: "needs_attention", paused: false, created_at: now - 86400 * 9, daily_budget_usd: 25, spend_today: 3.1, counts: { active: 1, running: 0, questions: 1, blockers: 1, streams: 4 } },
