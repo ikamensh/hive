@@ -265,23 +265,23 @@ Built on primitives from [kodo](https://github.com/ikamensh/kodo) (agent/session
 
 ## The deployed instance (maintainer notes)
 
-This repo is also hive's own **spec home** (dogfooding the spec format it defines). The MVP is deployed and demo-verified: chief (FastAPI + Firestore + GCS) and a runner live on a GCE VM (`hive-vm`, project `hive-ikamen`); a greenfield demo project ([wordfreq-demo](https://github.com/ikamensh/wordfreq-demo)) was planned, built, verified, and completed autonomously end-to-end.
+This repo is also hive's own **spec home** (dogfooding the spec format it defines). The MVP is deployed and demo-verified: chief (FastAPI + Firestore + GCS) and a runner live on a Scaleway instance (`hive-vm`, `fr-par-1`); a greenfield demo project ([wordfreq-demo](https://github.com/ikamensh/wordfreq-demo)) was planned, built, verified, and completed autonomously end-to-end.
 
-- **Reaching it (UI + CLI).** The chief serves its own web UI same-origin, so you just open its URL in a browser — there's no separate/local UI to run, and no tunnel needed for normal use. Two routes to the same chief: the public HTTPS URL below (Caddy basic-auth) works from any device incl. phone; `deploy/vm.sh tunnel` → `http://localhost:8000` is *only* for bypassing Caddy auth or developing against it (that's all the SSH forward is for). The `hive` CLI targets the same URL. Caveat: today's address is IP-based (`sslip.io` encodes the VM's *ephemeral* public IP), so it changes if the VM is recreated — a stable name (Tailscale or static-IP+domain) is a deferred decision, see [TODO.md](TODO.md).
-- Web UI: https://hive.34-62-218-54.sslip.io, user `ilya`, password in Secret Manager `hive-web-password`. (`hive.ilyakamen.com` awaits a manual GoDaddy A record → 34.62.218.54; Caddy already serves both names.)
+- **Reaching it (UI + CLI).** The chief serves its own web UI same-origin, so you just open its URL in a browser — there's no separate/local UI to run, and no tunnel needed for normal use. Two routes to the same chief: the public HTTPS URLs below (Caddy basic-auth) work from any device incl. phone; `deploy/vm.sh tunnel` → `http://localhost:8000` is *only* for bypassing Caddy auth or developing against it (that's all the SSH forward is for). The `hive` CLI targets the same URL.
+- Web UI: https://hive.tachyon-ai.eu (stable name) or https://hive.51-15-203-117.sslip.io (IP-encoded, changes if the VM is recreated), user `ilya`, password in Scaleway Secret Manager `hive-web-password`.
 - Drive it from the laptop CLI (the [laptop-off workflow](#keep-hive-working-while-your-laptop-is-off)):
   ```bash
-  hive config set HIVE_URL https://hive.34-62-218-54.sslip.io
-  hive config set HIVE_BASIC_AUTH "ilya:$(gcloud secrets versions access latest --secret=hive-web-password --project=hive-ikamen)"
+  hive config set HIVE_URL https://hive.tachyon-ai.eu
+  hive config set HIVE_BASIC_AUTH "ilya:$(scw secret version access-by-path secret-path=/ secret-name=hive-web-password revision=latest region=fr-par -o json | python3 -c 'import json,sys,base64; print(base64.b64decode(json.load(sys.stdin)["data"]).decode())')"
   hive whoami
   ```
   The VM's always-on runner serves **codex + gemini-cli** out of the box. To make it *also* serve the subscription backends unattended (so claude/cursor work continues with your laptop off), give it headless tokens once — the VM startup installs both CLIs and reads these secrets into the runner's env:
   ```bash
   claude setup-token        # on your laptop; mints a long-lived subscription token
-  gcloud secrets create hive-claude-oauth-token --data-file=- --project=hive-ikamen   # paste the token
-  gcloud secrets create hive-cursor-api-key      --data-file=- --project=hive-ikamen   # a Cursor dashboard API key
+  scw secret secret create name=hive-claude-oauth-token region=fr-par   # then a `scw secret version create ... data=<token>`
+  scw secret secret create name=hive-cursor-api-key region=fr-par      # a Cursor dashboard API key
   # then refresh the VM so it picks them up: bash deploy/create_vm.sh
   ```
-  Don't copy your desktop login files — those access tokens expire and their refresh tokens rotate, so a copied blob 401s (tested). `scripts/laptop_runner.sh` still adds your laptop's claude + cursor while it's attached.
-- Attach your laptop as a runner to the deployed instance: `bash scripts/laptop_runner.sh`.
-- Secrets live in GCP Secret Manager (`hive-gemini-api-key`, `hive-gh-token`, `hive-runner-token`, `hive-openai-api-key`, `hive-web-password`); the VM startup script materializes `/etc/hive/env`. GCP project `hive-ikamen`, Firestore `(default)` + bucket `hive-ikamen-blobs`, both `europe-west1`.
+  Don't copy your desktop login files — those access tokens expire and their refresh tokens rotate, so a copied blob 401s (tested).
+- Attach your laptop as a runner to the deployed instance: `bash deploy/install_mac_runner.sh`.
+- Secrets live in Scaleway Secret Manager, region `fr-par` (`hive-gemini-api-key`, `hive-gh-token`, `hive-runner-token`, `hive-github-webhook-secret`, `hive-web-password`, `hive-gcp-sa-key`); the VM startup script materializes `/etc/hive/env`. The data plane is still GCP (project `hive-ikamen`, Firestore `(default)` + bucket `hive-ikamen-blobs`, `europe-west1`), reached via the `hive-scw` service-account key.

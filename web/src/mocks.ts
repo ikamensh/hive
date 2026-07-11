@@ -2103,7 +2103,7 @@ const humanTodos: HumanTodo[] = [
     assignee_user_id: "github:ikamensh",
     title: "Log in codex on hive-vm",
     instructions:
-      "Run on your laptop:\n\n```\ngcloud compute ssh hive-vm -- -L 1455:localhost:1455\nsudo HOME=/root codex login\n```\n\nOpen the printed URL in your local browser.",
+      "Run on your laptop:\n\n```\nssh -t -L 1455:localhost:1455 root@hive.tachyon-ai.eu codex login\n```\n\nOpen the printed URL in your local browser.",
     kind: "access",
     dedup_key: "access:codex:hive-vm",
     resolution: { check: "resource_usable", backend: "codex", runner_name: "hive-vm" },

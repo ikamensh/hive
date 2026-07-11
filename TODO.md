@@ -84,7 +84,7 @@ today, but the story has friction worth smoothing:
   cursor-agent and reads `hive-claude-oauth-token` / `hive-cursor-api-key` from Secret
   Manager (`deploy/vm_startup.sh`), so the always-on runner serves them once those
   secrets exist — the manual step is minting the tokens (`claude setup-token`, Cursor
-  dashboard) and `gcloud secrets create`. Tested why *copying* the desktop login fails:
+  dashboard) and `scw secret secret create` + `scw secret version create`. Tested why *copying* the desktop login fails:
   claude's stored OAuth blob (Keychain on mac, `~/.claude/.credentials.json` on Linux)
   carries an access token that expires and a refresh token that rotates, so a copied
   blob 401s; cursor has no copyable token file and wants `CURSOR_API_KEY`. The durable
@@ -98,8 +98,6 @@ today, but the story has friction worth smoothing:
 - **No scheduled issue scan.** New GitHub issues are only ingested on a human-triggered
   `hive scan`. A periodic scan (chief cron) would make issue solving truly
   unattended; until then it relies on a remote trigger from any machine.
-- **`scripts/laptop_runner.sh` is hardcoded** to the sslip.io URL and a specific gcloud
-  account — fine for the maintainer, but generalize (env/args) before it's onboarding.
 
 ## Remote UI/CLI access — stable address (decision deferred)
 Today you reach the remote either by opening the public `sslip.io` URL (Caddy basic-auth,

@@ -31,8 +31,8 @@ For what each module does and how the pipelines wire together, see `wiki/code-ma
 ## Conventions
 
 - Tests use `MemoryStore` + scripted orchestrator; no network, no LLM. Real-LLM behavior is checked with `scripts/smoke_orchestrator.py` (needs `OPENAI_API_KEY` or `GEMINI_API_KEY`).
-- Secrets live in GCP Secret Manager (`hive-gemini-api-key`, `hive-gh-token`, `hive-runner-token`, `hive-openai-api-key`); the VM startup script materializes `/etc/hive/env`.
-- GCP project `hive-ikamen`, Firestore `(default)` + bucket `hive-ikamen-blobs`, both `europe-west1`.
+- Secrets live in Scaleway Secret Manager, region `fr-par` (`hive-gemini-api-key`, `hive-gh-token`, `hive-runner-token`, `hive-github-webhook-secret`, `hive-web-password`, `hive-gcp-sa-key`); the VM startup script materializes `/etc/hive/env`. Key for the `scw` CLI: `~/secrets/scaleway.md`.
+- The data plane is still GCP: project `hive-ikamen`, Firestore `(default)` + bucket `hive-ikamen-blobs`, both `europe-west1`, reached from anywhere via the `hive-scw` service-account key (`GOOGLE_APPLICATION_CREDENTIALS`, materialized from `hive-gcp-sa-key`).
 
 ## Running
 
@@ -55,16 +55,18 @@ pause/resume the runner locally: pause drains (the current task finishes and
 reports first) and launchd keeps the runner down until resumed — the flag is
 `~/.config/hive/runner.paused`, the shared contract `hive/runner/control.py`.
 
-## Remote VM (chief + runner on GCE)
+## Remote VM (chief + runner on Scaleway)
 
 The remote install runs both the chief (`hive-chief`) and the runner
 (`hive-runner`) **bare via systemd** — no Docker in the deploy loop (the image
 rebuild was the tax; `deploy/Dockerfile`/`compose.yaml` are kept for a future
-stability mode). Coordinates default to VM `hive-vm` / `hive-ikamen`; override
-with `HIVE_VM*` env vars.
+stability mode). Coordinates default to instance `hive-vm` in `fr-par-1`
+(PLAY2-NANO, public URL https://hive.51-15-203-117.sslip.io and
+https://hive.tachyon-ai.eu); override with `HIVE_VM*` env vars. SSH is plain
+`root@<ip>` with the IAM-registered key; the scripts resolve the IP via `scw`.
 
 ```bash
-bash deploy/create_vm.sh         # create or refresh the VM (resets -> re-runs vm_startup.sh)
+bash deploy/create_vm.sh         # create or refresh the VM (re-uploads + re-runs vm_startup.sh)
 deploy/push.sh                   # fast iterate: rsync working tree + restart services (~3s)
 deploy/push.sh --deps            #   ...also `uv sync` after a pyproject/uv.lock change
 deploy/push.sh --web             #   ...also rebuild + ship web/dist
@@ -74,7 +76,8 @@ deploy/vm.sh tunnel              # localhost:8000 -> chief (bypasses Caddy basic
 ```
 
 `deploy/push.sh` is the edit->test loop (ships local state in-place, no commit).
-On reboot the source of truth is git: `deploy/vm_startup.sh` pulls the tracked
-ref, `uv sync`s, builds `web/dist`, and starts the systemd units. A change is
-reboot-safe only once pushed to that ref. Requires `gcloud` auth for the VM's
-project (see `wiki/code-map.md` / memory for access details).
+On reboot the source of truth is git: `hive-startup.service` re-runs the
+uploaded `vm_startup.sh`, which pulls the tracked ref, `uv sync`s, builds
+`web/dist`, and starts the systemd units. A change is reboot-safe only once
+pushed to that ref. Requires the `scw` CLI configured with the Hive key
+(`~/.config/scw/config.yaml`; see `~/secrets/scaleway.md` / memory).

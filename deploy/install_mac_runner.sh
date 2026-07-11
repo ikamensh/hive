@@ -24,28 +24,32 @@ LOG_DIR="$HOME/Library/Logs/hive"
 UV="$(command -v uv || echo "$HOME/.local/bin/uv")"
 GIT_REMOTE="github.com/ikamensh/hive.git"
 
-# Defaults match the working laptop_runner.sh (sslip.io avoids any DNS dependency).
-PROJECT="${HIVE_GCP_PROJECT:-hive-ikamen}"
-ACCOUNT="${HIVE_GCLOUD_ACCOUNT:-ikamenshchikov@gmail.com}"
-HIVE_URL="${HIVE_URL:-https://hive.34-62-218-54.sslip.io}"
+# sslip.io avoids any DNS dependency; the IP is the Scaleway hive-vm's.
+HIVE_URL="${HIVE_URL:-https://hive.51-15-203-117.sslip.io}"
 RUNNER_NAME="${HIVE_RUNNER_NAME:-$(hostname -s)}"
+SCW_REGION="${HIVE_SCW_REGION:-fr-par}"
 
 echo "-> service repo: $SERVICE_REPO  (dedicated clone; self-updates from origin/main)"
 echo "-> runner name:  $RUNNER_NAME  (stable name => stable machine id on the chief)"
 echo "-> chief seed:   $HIVE_URL  (more candidates learned from the chief itself)"
 
-# --- credentials, materialized once (no gcloud dependency at runtime) ---------
-# Two sources: env vars (the `hive enroll` path — any member, no GCP access
-# needed) or GCP Secret Manager (the admin path). Basic auth is optional; a
-# chief without a Caddy perimeter has none.
+# --- credentials, materialized once (no cloud CLI dependency at runtime) ------
+# Two sources: env vars (the `hive enroll` path — any member, no cloud access
+# needed) or Scaleway Secret Manager via the scw CLI (the admin path). Basic
+# auth is optional; a chief without a Caddy perimeter has none.
 mkdir -p "$(dirname "$ENV_FILE")" "$LOG_DIR"
+secret() {
+  scw secret version access-by-path secret-path=/ secret-name="$1" revision=latest \
+    region="$SCW_REGION" -o json \
+    | python3 -c 'import json,sys,base64; sys.stdout.buffer.write(base64.b64decode(json.load(sys.stdin)["data"]))'
+}
 if [ -n "${HIVE_RUNNER_TOKEN:-}" ] && [ -n "${HIVE_GH_TOKEN:-}" ]; then
   TOKEN="$HIVE_RUNNER_TOKEN"; BASIC_AUTH="${HIVE_BASIC_AUTH:-}"; GH_TOKEN="$HIVE_GH_TOKEN"
 else
-  echo "-> fetching runner + gh tokens and web password from GCP Secret Manager ($PROJECT)"
-  TOKEN="$(gcloud secrets versions access latest --secret=hive-runner-token --project="$PROJECT" --account="$ACCOUNT")"
-  WEB_PASS="$(gcloud secrets versions access latest --secret=hive-web-password --project="$PROJECT" --account="$ACCOUNT")"
-  GH_TOKEN="$(gcloud secrets versions access latest --secret=hive-gh-token --project="$PROJECT" --account="$ACCOUNT")"
+  echo "-> fetching runner + gh tokens and web password from Scaleway Secret Manager ($SCW_REGION)"
+  TOKEN="$(secret hive-runner-token)"
+  WEB_PASS="$(secret hive-web-password)"
+  GH_TOKEN="$(secret hive-gh-token)"
   BASIC_AUTH="ilya:$WEB_PASS"
 fi
 

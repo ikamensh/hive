@@ -396,14 +396,14 @@ def _csv(value: str) -> list[str]:
 
 
 # How to run each machine-bound login on a remote runner. The runner services
-# run as root (deploy/vm_startup.sh: HOME=/root), so credentials must land in
-# root's home — hence `sudo -i`. The OAuth interaction itself stays on the
-# operator's machine: URLs print into the SSH'd terminal and are opened in the
-# LOCAL browser; codex additionally needs its localhost callback port
+# run as root (deploy/vm_startup.sh: HOME=/root) and the SSH lands as root, so
+# credentials go straight to root's home. The OAuth interaction itself stays on
+# the operator's machine: URLs print into the SSH'd terminal and are opened in
+# the LOCAL browser; codex additionally needs its localhost callback port
 # forwarded through the tunnel.
 LOGIN_RECIPES: dict[str, dict] = {
     "claude": {
-        "remote": "sudo -i claude auth login",
+        "remote": "claude auth login",
         "forwards": (),
         "coach": (
             "claude prints a login URL. Open it in your LOCAL browser, pick the "
@@ -412,7 +412,7 @@ LOGIN_RECIPES: dict[str, dict] = {
         ),
     },
     "codex": {
-        "remote": "sudo -i codex login",
+        "remote": "codex login",
         "forwards": ("-L", "1455:localhost:1455"),
         "coach": (
             "codex prints a http://localhost:1455/... URL. Open it in your "
@@ -420,7 +420,7 @@ LOGIN_RECIPES: dict[str, dict] = {
         ),
     },
     "cursor": {
-        "remote": "sudo -i cursor-agent login",
+        "remote": "cursor-agent login",
         "forwards": (),
         "coach": (
             "cursor-agent prints a login URL. Open it in your LOCAL browser "
@@ -431,17 +431,14 @@ LOGIN_RECIPES: dict[str, dict] = {
 
 
 def login_ssh_argv(backend: str, machine: str, env: dict[str, str]) -> list[str]:
-    """The gcloud SSH invocation for one login recipe. Coordinates default to
-    the hive VM and are overridable with the same HIVE_VM* vars deploy/vm.sh
-    uses; `-t` allocates the TTY the interactive login needs."""
+    """The SSH invocation for one login recipe. The hive VM is reached as root
+    at its stable DNS name (override with HIVE_VM_HOST; any other machine name
+    is used as the host directly); `-t` allocates the TTY the interactive
+    login needs."""
     recipe = LOGIN_RECIPES[backend]
-    return [
-        "gcloud", "compute", "ssh", machine,
-        f"--zone={env.get('HIVE_VM_ZONE', 'europe-west1-b')}",
-        f"--project={env.get('HIVE_VM_PROJECT', 'hive-ikamen')}",
-        f"--account={env.get('HIVE_VM_ACCOUNT', 'ikamenshchikov@gmail.com')}",
-        "--", "-t", *recipe["forwards"], recipe["remote"],
-    ]
+    default_host = "hive.tachyon-ai.eu" if machine == "hive-vm" else machine
+    host = env.get("HIVE_VM_HOST", default_host)
+    return ["ssh", "-t", *recipe["forwards"], f"root@{host}", recipe["remote"]]
 
 
 def _human_duration(seconds: float) -> str:
@@ -1243,8 +1240,8 @@ def _run_enroll(args: argparse.Namespace) -> None:
     response.raise_for_status()
     creds = response.json()
     if not creds["gh_token"]:
-        # Without it the mac installer would fall back to its gcloud path,
-        # which a non-admin laptop has no access to.
+        # Without it the mac installer would fall back to its Secret Manager
+        # path, which a non-admin laptop has no access to.
         raise SystemExit(
             "the chief has no GitHub token configured (HIVE_GH_TOKEN); "
             "ask the admin to set it, then enroll again."

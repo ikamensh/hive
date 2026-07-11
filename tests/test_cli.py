@@ -225,24 +225,25 @@ def test_format_show_renders_readable_summary():
 def test_login_ssh_argv_recipes():
     """Each recipe channels the interaction correctly: a TTY always (-t), the
     codex OAuth callback port forwarded, credentials landing in the runner's
-    user (sudo -i), and HIVE_VM* coordinates overridable like deploy/vm.sh."""
+    user (ssh as root), and the host overridable via HIVE_VM_HOST."""
     from hive.cli import LOGIN_RECIPES, login_ssh_argv
 
     for backend in LOGIN_RECIPES:
         argv = login_ssh_argv(backend, "hive-vm", {})
-        assert argv[:4] == ["gcloud", "compute", "ssh", "hive-vm"]
+        assert argv[0] == "ssh"
         assert "-t" in argv
-        assert argv[-1].startswith("sudo -i ")
+        assert "root@hive.tachyon-ai.eu" in argv
     codex = login_ssh_argv("codex", "hive-vm", {})
     assert "1455:localhost:1455" in codex  # OAuth callback rides the tunnel
     # regression: every recipe must run a dedicated login command, never launch
     # the agent's full interactive CLI (bare `claude` greeted the operator with
     # a workspace-trust dialog instead of the login flow)
     for backend in LOGIN_RECIPES:
-        assert LOGIN_RECIPES[backend]["remote"] != f"sudo -i {backend}"
+        assert LOGIN_RECIPES[backend]["remote"] != backend
         assert "login" in LOGIN_RECIPES[backend]["remote"]
-    custom = login_ssh_argv("claude", "other-vm", {"HIVE_VM_ZONE": "eu-x", "HIVE_VM_PROJECT": "p1"})
-    assert "--zone=eu-x" in custom and "--project=p1" in custom and custom[3] == "other-vm"
+    # a non-default machine name is used as the SSH host directly; HIVE_VM_HOST wins
+    assert "root@other-vm" in login_ssh_argv("claude", "other-vm", {})
+    assert "root@10.0.0.9" in login_ssh_argv("claude", "hive-vm", {"HIVE_VM_HOST": "10.0.0.9"})
 
 
 def test_login_flow_opens_ssh_then_probes(harness, monkeypatch):
@@ -257,7 +258,7 @@ def test_login_flow_opens_ssh_then_probes(harness, monkeypatch):
     monkeypatch.setattr("hive.cli.time.sleep", lambda s: None)
 
     result = cli(client, "login", "codex", "--machine", "fake")
-    assert calls and calls[0][3] == "fake" and "sudo -i codex login" in calls[0]
+    assert calls and "root@fake" in calls[0] and "codex login" in calls[0]
     # probe queued and polled; no fake runner executes it here, so it stays probing
     assert result["probe"] == "probing"
 
@@ -298,7 +299,7 @@ def test_unconfigured_cli_discovers_chief_from_runner_env(monkeypatch, tmp_path)
 
     runner_env = tmp_path / "runner.env"
     runner_env.write_text(
-        "HIVE_URL=https://hive.34-62-218-54.sslip.io\n"
+        "HIVE_URL=https://hive.51-15-203-117.sslip.io\n"
         "HIVE_BASIC_AUTH=ilya:secret\n"
         "HIVE_RUNNER_TOKEN=rt\n"
     )
@@ -306,7 +307,7 @@ def test_unconfigured_cli_discovers_chief_from_runner_env(monkeypatch, tmp_path)
 
     local, fleet = resolve_targets({}, {})
     assert local.base_url == DEFAULT_HIVE_URL
-    assert fleet.base_url == "https://hive.34-62-218-54.sslip.io"
+    assert fleet.base_url == "https://hive.51-15-203-117.sslip.io"
     assert fleet.auth == ("ilya", "secret")
     assert fleet.token == ""  # the runner token is protocol auth, not client auth
 
