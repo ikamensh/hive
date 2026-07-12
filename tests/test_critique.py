@@ -37,10 +37,7 @@ def test_critique_end_to_end():
         adjudicator_prompts.append(prompt)
         return ADJUDICATOR_REPLY
 
-    report = critique(
-        "THE-DIGEST", {"model-a": critic, "model-b": critic}, adjudicator,
-        guess_propensity="often",
-    )
+    report = critique("THE-DIGEST", {"model-a": critic, "model-b": critic}, adjudicator)
 
     # every model critiques through every lens, each prompt carrying the digest
     assert len(critic_prompts) == 2 * len(LENSES)
@@ -53,10 +50,9 @@ def test_critique_end_to_end():
     assert {f.model for f in report.findings} == {"model-a", "model-b"}
     assert report.findings[0].severity == 3
 
-    # adjudicator saw the findings, the digest, and the propensity
+    # adjudicator saw the findings and the digest
     [adj_prompt] = adjudicator_prompts
     assert "No latency target" in adj_prompt and "THE-DIGEST" in adj_prompt
-    assert "often" in adj_prompt
 
     assert [v.action for v in report.verdicts] == ["ask", "drop", "flag"]
     assert "p95<1s" in report.inbox_markdown

@@ -86,13 +86,11 @@ def run_adjudicator(
     digest: str,
     findings: list[Finding],
     llm: LLM,
-    guess_propensity: str,
     max_questions: int,
 ) -> tuple[list[Verdict], str, str]:
     template, _version = load_prompt("adjudicator")
     prompt = (
-        template.replace("<<PROPENSITY>>", guess_propensity)
-        .replace("<<MAX_QUESTIONS>>", str(max_questions))
+        template.replace("<<MAX_QUESTIONS>>", str(max_questions))
         .replace("<<FINDINGS>>", json.dumps([f.model_dump() for f in findings], indent=1))
         .replace("<<DIGEST>>", digest)
     )
@@ -105,14 +103,11 @@ def critique(
     digest: str,
     critic_llms: dict[str, LLM],
     adjudicator_llm: LLM,
-    guess_propensity: str = "sometimes",
     max_questions: int = 7,
 ) -> CritiqueReport:
     findings = run_critics(digest, critic_llms)
     if findings:
-        verdicts, inbox, flags = run_adjudicator(
-            digest, findings, adjudicator_llm, guess_propensity, max_questions
-        )
+        verdicts, inbox, flags = run_adjudicator(digest, findings, adjudicator_llm, max_questions)
     else:
         verdicts, inbox, flags = [], "", ""
     return CritiqueReport(

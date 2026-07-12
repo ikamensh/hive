@@ -273,7 +273,6 @@ def prompt(
                 f"Project name: {project.name}",
                 f"Spec/code repo: {project.spec_repo}",
                 f"Member repos: {', '.join(project.member_repos) or '(none)'}",
-                f"Guess propensity: {project.guess_propensity}",
                 "",
                 *handed_spec,
                 *prior_answers,

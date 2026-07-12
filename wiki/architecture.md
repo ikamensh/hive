@@ -15,7 +15,7 @@ Condensed current understanding of hive's design. Originated from a design inter
   - `input-log/` — raw user inputs (clarification answers, free-text feedback) preserved verbatim for later re-evaluation. The wiki is the distillation; the log is the source.
   - For a single-repo project, the spec home and the code repo may be the same repo (hive itself is the first example).
 - **Org context** — a "related resources" text document at the organization level (shared internal infra, conventions, org-wide facts), injected into orchestrator context for every project. Unstructured text in MVP.
-- **Modes** — per project: **Build** (work toward iteration goal; MVP) and **Maintain** (distill/refactor/test-suite care, drift repair; fast follow, designed-for but not in MVP). Finer-grained work-type toggles may come later.
+- **Modes** — deliberately not a setting today. Build (work toward the iteration goal) is the only mode; Maintain (distill/refactor/test-suite care, drift repair) is a designed-for fast follow and gets its toggle only when it exists. A knob that changes nothing is a UX bug.
 - **Workstreams** — issue solving is a triggerable GitHub issues workstream inside any project, not a separate project mode. See `wiki/unified-project-work.md` for the target design and remaining migration notes. Testing is a planned third workstream kind (deterministic, capability-aware, files GitHub issues on failure) — see `wiki/testing.md`.
 
 ## 2. The core loop
@@ -67,7 +67,7 @@ Upfront, batch-level ambiguity detection is the spec critique (`wiki/spec-critiq
 3. **Batch** — while blocked, prepare related questions so one human visit unblocks a maximally long stretch of independent work.
 4. Answers are stored raw in `input-log/` and distilled into the wiki/spec — clarifications accumulate; a fresh session doesn't re-ask.
 
-**Guess-propensity dial** (per project, never → always, usually in between): how much the agent guesses vs. asks. Modulated by **reversibility**: cheaply reversible choices (naming, internal structure) lean guess-and-flag; expensive-to-reverse ones (data models, external APIs, product behavior) lean ask.
+**Guess vs. ask is decided by reversibility, not a dial**: cheaply reversible choices (naming, internal structure) are guess-and-flag; expensive-to-reverse ones (data models, external APIs, product behavior) are ask. The rule lives in the prompts (intake, adjudicator, resolve) — a per-project propensity slider was tried and deleted: it seasoned prompts without changing behavior, at the cost of one more knob to understand.
 
 In MVP the only channel is the web UI inbox (user visits the page, sees work stalled on questions). Email/messenger channels later.
 
@@ -114,7 +114,7 @@ In MVP the only channel is the web UI inbox (user visits the page, sees work sta
 Screens, in priority order:
 
 1. **Project list** — one row per project with the supervisor state badge: `intake`, `working (+current task)`, `blocked: questions (3)`, `blocked: resources (resumes 16:40)`, `blocked: infra`, `idle: goal complete`. The "is hive healthy" glance.
-2. **Project page** — dedicated intake panel for spec-mode projects that are not yet active (repo picker / create private repo, trusted-scout resource status, latest brief, material questions, answer/correction composer, proceed-with-assumptions, approve-and-finalize), then workstream board (running / blocked / parked / done per stream), the **inbox** (clarification questions answered in place — **free-text-first with the agent's proposed options as accelerators** — plus escalations and infra alerts), activity feed (tasks with outcome, cost, links to commits/PRs and full traces), and the toggles panel: mode (build/maintain), autonomy (PR vs direct-push), guess-propensity dial, prod-deploy switch.
+2. **Project page** — dedicated intake panel for spec-mode projects that are not yet active (repo picker / create private repo, trusted-scout resource status, latest brief, material questions, answer/correction composer, proceed-with-assumptions, approve-and-finalize), then workstream board (running / blocked / parked / done per stream), the **inbox** (clarification questions answered in place — **free-text-first with the agent's proposed options as accelerators** — plus escalations and infra alerts), activity feed (tasks with outcome, cost, links to commits/PRs and full traces), and the toggles panel: autonomy (PR vs direct-push), CI auto-fix, auto testing, paused. Only knobs that change behavior earn a place here.
 3. **Resources page** — vault credentials, runners and status, quota estimates and cooldowns, spend today/this week.
 4. Deep trace inspection reuses kodo's JSONL viewer.
 

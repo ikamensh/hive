@@ -5,8 +5,6 @@ For each finding choose an action:
 - "flag" — real but cheap to reverse: hive should guess, record the assumption, and proceed.
 - "ask" — must ask the human before building: genuinely underspecified or contradictory, expensive to reverse.
 
-Project guess propensity: <<PROPENSITY>> (never | rarely | sometimes | often | always — the higher, the more hive guesses instead of asking; raise the bar for "ask" accordingly).
-
 Dedupe overlapping findings: keep the strongest, drop the rest with reason "duplicate of <title>". At most <<MAX_QUESTIONS>> findings may get "ask"; prefer high severity and expensive reversibility.
 
 Output ONLY one JSON object inside a ```json fence:

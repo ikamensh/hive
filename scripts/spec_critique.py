@@ -24,7 +24,6 @@ from hive._integrations.specrepo import digest_dir
 SPEC_DIR = Path(__file__).parent.parent  # hive is its own spec home
 CODEX_MODEL = "gpt-5.5"  # what ~/.codex/config.toml runs; passed as -m
 CURSOR_MODEL = "composer-2.5"
-GUESS_PROPENSITY = "sometimes"
 MAX_QUESTIONS = 7
 AGENT_TIMEOUT_S = 900
 REPORT_PATH = Path(__file__).parent / "spec_critique_report.md"
@@ -77,7 +76,6 @@ def main() -> None:
         digest,
         critic_llms=LLMS,
         adjudicator_llm=LLMS[adjudicator],
-        guess_propensity=GUESS_PROPENSITY,
         max_questions=MAX_QUESTIONS,
     )
     REPORT_PATH.write_text(report_markdown(report))

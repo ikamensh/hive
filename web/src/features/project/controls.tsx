@@ -2,13 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type R
 import { createPortal } from "react-dom";
 import { repoShort } from "../../api";
 import { RepoListEditor } from "../../components/RepoPicker";
-import {
-  AUTONOMY_OPTIONS,
-  GuessSlider,
-  Markdown,
-  MODE_OPTIONS,
-  SegPicker,
-} from "../../components/shared";
+import { AUTONOMY_OPTIONS, Markdown, SegPicker } from "../../components/shared";
 import type { AgentGrant, Allowance, Project, ProjectPatch, WorkItem, Workstream } from "../../types";
 
 type ProjectPatchHandler = (p: ProjectPatch) => void | Promise<void>;
@@ -556,33 +550,12 @@ export function ProjectSettings({
         <h2 className="col-title">policy</h2>
         <div className="project-policy-grid">
           <div className="toggle-cell">
-            <span className="toggle-label">mode</span>
-            <SegPicker value={project.mode} options={MODE_OPTIONS} onChange={(mode) => onPatch({ mode })} />
-          </div>
-          <div className="toggle-cell">
             <span className="toggle-label">autonomy</span>
             <SegPicker
               value={project.autonomy}
               options={AUTONOMY_OPTIONS}
               onChange={(autonomy) => onPatch({ autonomy })}
             />
-          </div>
-          <div className="toggle-cell grow">
-            <span className="toggle-label">guess propensity</span>
-            <GuessSlider
-              value={project.guess_propensity}
-              onChange={(guess_propensity) => onPatch({ guess_propensity })}
-            />
-          </div>
-          <div className="toggle-cell">
-            <span className="toggle-label">prod deploys</span>
-            <button
-              className={`switch ${project.prod_deploys ? "on" : ""}`}
-              onClick={() => onPatch({ prod_deploys: !project.prod_deploys })}
-              aria-pressed={project.prod_deploys}
-            >
-              <i />
-            </button>
           </div>
           <div className="toggle-cell">
             <span className="toggle-label" title="poll each repo's CI; file + auto-fix an issue when the build is red">

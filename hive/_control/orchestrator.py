@@ -376,9 +376,7 @@ class Tools:
         )
         return "\n".join(
             [
-                f"PROJECT {p.name} | mode={p.mode} "
-                f"autonomy={p.autonomy} guess_propensity={p.guess_propensity} "
-                f"goal_complete={p.goal_complete}",
+                f"PROJECT {p.name} | autonomy={p.autonomy} goal_complete={p.goal_complete}",
                 f"member repos: {', '.join(p.member_repos) or '(none)'}",
                 f"spec repo: {p.spec_repo}",
                 "AGENT ALLOWANCE (sessions/day; disallowed tasks cannot dispatch): "

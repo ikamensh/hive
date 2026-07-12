@@ -16,7 +16,7 @@ doing the fixing and makes the whole thing a thin, testable add-on.
 ## The toggle
 
 `Project.ci_autofix` (default off) is the per-project switch, shown in the policy
-grid next to *prod deploys* and *paused*. When on, all three triggers below run
+grid next to *auto testing* and *paused*. When on, all three triggers below run
 the same check; the toggle is the single "Hive reacts to red CI for this project"
 control.
 

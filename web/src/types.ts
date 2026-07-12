@@ -1,8 +1,6 @@
 // Mirrors hive/models.py (pydantic model_dump shapes).
 
-export type Mode = "build" | "maintain";
 export type Autonomy = "pr" | "direct_push";
-export type GuessPropensity = "never" | "rarely" | "sometimes" | "often" | "always";
 export type ProjectState =
   | "intake"
   | "working"
@@ -42,10 +40,7 @@ export interface Project {
   name: string;
   spec_repo: string;
   member_repos: string[];
-  mode: Mode;
   autonomy: Autonomy;
-  guess_propensity: GuessPropensity;
-  prod_deploys: boolean;
   ci_autofix: boolean;
   testing_auto: boolean;
   paused: boolean;
@@ -821,10 +816,7 @@ export interface ProjectPatch {
   name?: string;
   archived?: boolean;
   spec_repo?: string;
-  mode?: Mode;
   autonomy?: Autonomy;
-  guess_propensity?: GuessPropensity;
-  prod_deploys?: boolean;
   ci_autofix?: boolean;
   testing_auto?: boolean;
   paused?: boolean;

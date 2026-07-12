@@ -1,5 +1,5 @@
 import { marked } from "marked";
-import type { Autonomy, GuessPropensity, Mode, ProjectState } from "../types";
+import type { Autonomy, ProjectState } from "../types";
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -75,46 +75,7 @@ export function SegPicker<T extends string>({
   );
 }
 
-export const MODE_OPTIONS: { value: Mode; label: string }[] = [
-  { value: "build", label: "build" },
-  { value: "maintain", label: "maintain" },
-];
-
 export const AUTONOMY_OPTIONS: { value: Autonomy; label: string }[] = [
   { value: "pr", label: "via PR" },
   { value: "direct_push", label: "direct push" },
 ];
-
-export const GUESS_LEVELS: GuessPropensity[] = ["never", "rarely", "sometimes", "often", "always"];
-
-export function GuessSlider({
-  value,
-  onChange,
-  disabled,
-}: {
-  value: GuessPropensity;
-  onChange: (v: GuessPropensity) => void;
-  disabled?: boolean;
-}) {
-  const idx = GUESS_LEVELS.indexOf(value);
-  return (
-    <div className="guess-slider">
-      <input
-        type="range"
-        min={0}
-        max={4}
-        step={1}
-        value={idx}
-        disabled={disabled}
-        onChange={(e) => onChange(GUESS_LEVELS[Number(e.target.value)])}
-      />
-      <div className="guess-ticks">
-        {GUESS_LEVELS.map((l, i) => (
-          <span key={l} className={i === idx ? "on" : ""}>
-            {l}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}

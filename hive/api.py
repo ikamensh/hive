@@ -90,7 +90,6 @@ from hive.models import (
     DirectiveStatus,
     Feedback,
     Finding,
-    GuessPropensity,
     HumanTask,
     HumanTaskStatus,
     IssueRun,
@@ -98,7 +97,6 @@ from hive.models import (
     IssueRunStatus,
     LicensingMode,
     Machine,
-    Mode,
     Plan,
     PlanItem,
     PlanItemStatus,
@@ -188,10 +186,7 @@ class ProjectPatch(BaseModel):
     name: str | None = None
     archived: bool | None = None
     spec_repo: str | None = None
-    mode: Mode | None = None
     autonomy: Autonomy | None = None
-    guess_propensity: GuessPropensity | None = None
-    prod_deploys: bool | None = None
     ci_autofix: bool | None = None
     testing_auto: bool | None = None
     paused: bool | None = None

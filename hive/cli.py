@@ -227,10 +227,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("set", help="patch project settings")
     p.add_argument("project_id")
-    p.add_argument("--mode")
     p.add_argument("--autonomy")
-    p.add_argument("--guess-propensity")
-    p.add_argument("--prod-deploys", choices=["true", "false"])
     p.add_argument("--ci-autofix", choices=["true", "false"], help="poll repo CI and auto-fix red builds")
     p.add_argument(
         "--testing-auto",
@@ -1157,11 +1154,10 @@ def run(args: argparse.Namespace, client) -> dict | list:
         data = client.get("/api/show").raise_for_status().json()
         return data[args.part] if args.part else data
     elif c == "set":
-        body = {k: v for k, v in {
-            "mode": args.mode, "autonomy": args.autonomy,
-            "guess_propensity": args.guess_propensity,
-        }.items() if v is not None}
-        for flag in ("prod_deploys", "ci_autofix", "testing_auto", "paused"):
+        body = {}
+        if args.autonomy is not None:
+            body["autonomy"] = args.autonomy
+        for flag in ("ci_autofix", "testing_auto", "paused"):
             if (v := getattr(args, flag)) is not None:
                 body[flag] = v == "true"
         if args.daily_budget is not None:

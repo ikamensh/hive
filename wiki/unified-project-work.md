@@ -372,7 +372,7 @@ This is the current spec/build page:
 - intake panel if intake is incomplete
 - goal-complete banner when applicable
 - work item board
-- policy strip: mode, autonomy, guess propensity, prod deploys
+- policy strip: autonomy, CI auto-fix, auto testing, paused
 - compact activity slice for latest iteration work
 
 No issue-specific controls appear here.
@@ -467,7 +467,7 @@ Project policies plus automation workstreams:
 
 ```text
 Project policies
-  mode, autonomy, guess propensity, prod deploys, daily budget
+  autonomy, CI auto-fix, auto testing, paused, daily budget
 
 Repositories
   spec repo

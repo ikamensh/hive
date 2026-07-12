@@ -84,22 +84,9 @@ class Machine(BaseModel):
     last_seen: float = Field(default_factory=now)
 
 
-class Mode(StrEnum):
-    build = "build"
-    maintain = "maintain"
-
-
 class Autonomy(StrEnum):
     pr = "pr"
     direct_push = "direct_push"
-
-
-class GuessPropensity(StrEnum):
-    never = "never"
-    rarely = "rarely"
-    sometimes = "sometimes"
-    often = "often"
-    always = "always"
 
 
 class AgentGrant(BaseModel):
@@ -137,10 +124,7 @@ class Project(BaseModel):
     # primary statement of intent and preserves it under input-log/ when finalizing.
     initial_spec: str = ""
     member_repos: list[str] = []  # git URLs; spec_repo included if it holds code
-    mode: Mode = Mode.build
     autonomy: Autonomy = Autonomy.direct_push
-    guess_propensity: GuessPropensity = GuessPropensity.sometimes
-    prod_deploys: bool = False
     ci_autofix: bool = False  # poll each repo's default-branch CI; file+fix an issue when red
     # Autonomous testing: Hive keeps the story backlog aligned (auto refresh when
     # missing/weak) and sweeps unproven stories (auto episodes) on its own. Only
