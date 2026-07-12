@@ -125,7 +125,7 @@ class WorkerLoop:
             candidate = self.config.client_factory(url, self.config)
             try:
                 worker_id = self._register(candidate, boot=boot)
-            except (httpx.HTTPError, OSError) as exc:
+            except (httpx.HTTPError, OSError, ValueError) as exc:
                 candidate.close()
                 last_error = exc
                 continue
@@ -145,7 +145,7 @@ class WorkerLoop:
             try:
                 with self.config.client_factory(self.current_url, self.config) as client:
                     self._register(client)
-            except (httpx.HTTPError, OSError):
+            except (httpx.HTTPError, OSError, ValueError):
                 pass
 
     # -- results -----------------------------------------------------------
@@ -241,7 +241,7 @@ class WorkerLoop:
                     done += 1
                     if max_tasks is not None and done >= max_tasks:
                         return ""
-                except (httpx.HTTPError, OSError) as exc:
+                except (httpx.HTTPError, OSError, ValueError) as exc:
                     failures += 1
                     log.warning("transient error: %s — retrying in %.0fs", exc, self.config.retry_s)
                     if client is not None and failures >= self.config.reconnect_after_failures:

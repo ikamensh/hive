@@ -94,6 +94,30 @@ def test_loop_executes_tasks_and_reports_results(tmp_path):
     assert chief.registers[0]["boot"] is True  # first registration announces a reboot
 
 
+def test_loop_survives_undecodable_2xx_poll_body(tmp_path):
+    """Same bug class as the cancel watcher's Caddy-502 death (2026-07-11): a
+    proxy answering 2xx with a non-JSON body raises JSONDecodeError from
+    `.json()`, which is a ValueError, not an httpx.HTTPError — it must count
+    as one more transient error, not kill the loop."""
+    chief = FakeChief(tasks=[{"id": "t1"}])
+    real_handler = chief.handler
+    garbled = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/poll") and not garbled:
+            garbled.append(True)
+            return httpx.Response(200, content=b"<html>misrouted</html>")
+        return real_handler(request)
+
+    chief.handler = handler
+    loop = make_loop(tmp_path, {"http://a": chief}, ["http://a"])
+
+    loop.run(max_tasks=1)
+
+    assert [t["id"] for t in loop.executed] == ["t1"]
+    assert [tid for tid, _ in chief.results] == ["t1"]
+
+
 def test_loop_fails_over_to_advertised_chief_and_prefers_it(tmp_path):
     """A worker seeded only with a dead primary finds the successor through the
     roster it learned earlier — the chief-relocation story."""

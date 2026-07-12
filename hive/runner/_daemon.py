@@ -677,6 +677,34 @@ def _upload_artifacts(task_id: str, project_dir: Path, headers: dict, auth) -> l
     return uploaded
 
 
+def watch_for_cancel(
+    watcher: httpx.Client,
+    task_id: str,
+    stop_watch: threading.Event,
+    cancelled: threading.Event,
+    session,
+    poll_s: float = CANCEL_POLL_S,
+) -> None:
+    """Poll the task until the chief flags an operator cancel, then terminate
+    the agent session, which unblocks Agent.run in its worker thread.
+
+    Any single bad poll — chief unreachable, a proxy 5xx, an undecodable
+    body — skips the iteration: this thread must outlive outages, or
+    cancellation silently stops being observed while the task keeps running.
+    """
+    while not stop_watch.wait(poll_s):
+        try:
+            response = watcher.get(f"/api/tasks/{task_id}")
+            response.raise_for_status()
+            state = response.json()
+        except (httpx.HTTPError, ValueError):  # ValueError: undecodable body
+            continue
+        if state.get("cancel_requested"):
+            cancelled.set()
+            session.terminate()
+            return
+
+
 def execute(task: dict, headers: dict, auth) -> dict:
     from kodo import log as kodo_log
 
@@ -705,22 +733,13 @@ def execute(task: dict, headers: dict, auth) -> dict:
         cancelled = threading.Event()
         stop_watch = threading.Event()
 
-        def watch_for_cancel(session) -> None:
-            # Poll the task; on an operator cancel request, terminate the session,
-            # which unblocks Agent.run in its worker thread.
-            watcher = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=15.0, auth=auth)
-            while not stop_watch.wait(CANCEL_POLL_S):
-                try:
-                    state = watcher.get(f"/api/tasks/{task['id']}").json()
-                except httpx.HTTPError:
-                    continue
-                if state.get("cancel_requested"):
-                    cancelled.set()
-                    session.terminate()
-                    return
-
         def start_cancel_watch(session) -> None:
-            threading.Thread(target=watch_for_cancel, args=(session,), daemon=True).start()
+            watcher = httpx.Client(base_url=HIVE_URL, headers=headers, timeout=15.0, auth=auth)
+            threading.Thread(
+                target=watch_for_cancel,
+                args=(watcher, task["id"], stop_watch, cancelled, session),
+                daemon=True,
+            ).start()
 
         try:
             result = run_agent(
