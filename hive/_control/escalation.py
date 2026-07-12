@@ -195,6 +195,17 @@ def _workstream_done(store, todo: HumanTask) -> str:
     return ""
 
 
+def _plan_item_done(store, todo: HumanTask) -> str:
+    from hive.models import PlanItem, PlanItemStatus
+
+    item = store.get(PlanItem, todo.resolution.get("plan_item_id", ""))
+    if item is None:
+        return "the plan item no longer exists"
+    if item.status in (PlanItemStatus.done, PlanItemStatus.cancelled):
+        return f"the plan item is {item.status}"
+    return ""
+
+
 def _conversation_done(store, todo: HumanTask) -> str:
     conv = store.get(AgentConversation, todo.resolution.get("conversation_id", ""))
     if conv is None:
@@ -232,6 +243,7 @@ RESOLUTION_CHECKS: dict[str, Callable[[object, HumanTask], str]] = {
     "story_verdict": _story_verdict,
     "finding_decided": _finding_decided,
     "workstream_done": _workstream_done,
+    "plan_item_done": _plan_item_done,
     "conversation_done": _conversation_done,
     "orchestrator_ran": _orchestrator_ran,
     "project_state_not": _project_state_not,

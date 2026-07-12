@@ -58,6 +58,10 @@ from hive.models import (
     HumanTask,
     HumanTaskKind,
     IssueRun,
+    Plan,
+    PlanItem,
+    PlanItemStatus,
+    PlanStatus,
     Project,
     ProjectState,
     ProjectWorkstream,
@@ -91,6 +95,7 @@ from hive.models import (
     parse_verdict,
 )
 from hive._integrations.specrepo import SpecRepo
+from hive._workstreams import plans
 from hive._workstreams.testing import (
     close_issue as default_close_issue,
     file_or_update_finding_issue as default_file_or_update_finding_issue,
@@ -315,6 +320,14 @@ class TaskResultProcessor:
         # it failed so dispatch stops; tell the operator how to fix it too.
         if body.auth_blocked:
             self._escalate_backend_login(task, body.text, workspace_id)
+
+        # Plan items ride the same resolve/review kinds as issue work; which
+        # record `work_item_id` resolves to is the discriminator.
+        if task.kind in (TaskKind.resolve, TaskKind.review) and task.work_item_id:
+            plan_item = self.store.get(PlanItem, task.work_item_id)
+            if plan_item is not None:
+                self._handle_plan_task_result(task, body, plan_item)
+                return {"ok": True}
 
         if task.kind == TaskKind.resolve and not body.cancelled:
             self._land_resolve(task, body)
@@ -834,6 +847,121 @@ class TaskResultProcessor:
                 f"landed: issue #{ws.issue_number} merged and closed",
             )
         self._refresh_run(task)
+
+    # -- iteration-plan items (doc-fed pipeline, wiki/iteration-plan.md) -------
+
+    def _handle_plan_task_result(self, task: Task, body: TaskResult, item: PlanItem) -> None:
+        project = self.store.get(Project, task.project_id)
+        plan = self.store.get(Plan, task.run_id) if task.run_id else None
+        if not project or not plan:
+            return
+        if body.cancelled:
+            # No scan exists to resurrect plan work: an operator cancel parks
+            # the item so the human's retry is the explicit way forward.
+            plans.set_item_status(
+                self.store,
+                item.id,
+                PlanItemStatus.blocked_clarity,
+                "task cancelled by the operator — retry the item to continue",
+            )
+            return
+        if task.kind == TaskKind.resolve:
+            self._land_plan_resolve(project, plan, task, body, item)
+        else:
+            self._land_plan_review(project, plan, task, body, item)
+        plans.advance_plan(
+            self.store,
+            project,
+            self.store.get(Plan, plan.id) or plan,
+            backend=self.config.issue_backend,
+            model=self.config.issue_model,
+        )
+        finished = self.store.get(Plan, plan.id)
+        if finished and finished.status == PlanStatus.complete:
+            self.supervisor.wake(
+                project.id,
+                "Iteration plan complete: every item is merged on the default branch. "
+                f"The goal was: {plan.goal[:500]}\n"
+                "Summarize the outcome and propose the next iteration's goal and plan.",
+            )
+
+    def _land_plan_resolve(
+        self, project: Project, plan: Plan, task: Task, body: TaskResult, item: PlanItem
+    ) -> None:
+        if item.status != PlanItemStatus.resolving:
+            return
+        if body.is_error:
+            plans.set_item_status(
+                self.store,
+                item.id,
+                PlanItemStatus.blocked_clarity,
+                f"build task errored — fix the cause and retry:\n\n{body.text[-1500:]}",
+            )
+            return
+        if task.verdict != Verdict.accept:
+            report = self._agent_report(body.text) or "the agent reported BLOCKED without a reason"
+            plans.set_item_status(self.store, item.id, PlanItemStatus.blocked_clarity, report)
+            log.info("plan item '%s' blocked at build (task %s)", item.title, task.id)
+            return
+        plans.set_item_status(self.store, item.id, PlanItemStatus.reviewing, "")
+        review = plans.create_review_task(
+            self.store, project, plan, item, backend=task.backend, model=task.model
+        )
+        log.info("queued plan review task %s for item '%s' on %s", review.id, item.title, review.branch)
+
+    def _land_plan_review(
+        self, project: Project, plan: Plan, task: Task, body: TaskResult, item: PlanItem
+    ) -> None:
+        if item.status != PlanItemStatus.reviewing:
+            return
+        if body.is_error:
+            plans.set_item_status(
+                self.store,
+                item.id,
+                PlanItemStatus.rejected,
+                f"review task errored — retry the item:\n\n{body.text[-1500:]}",
+            )
+            return
+        if task.verdict != Verdict.accept:
+            report = self._agent_report(body.text) or "the review rejected without a report"
+            plans.set_item_status(self.store, item.id, PlanItemStatus.rejected, report)
+            log.info("plan item '%s' rejected at review (task %s)", item.title, task.id)
+            return
+        branch = plans.plan_branch(item)
+        try:
+            # Strict sequencing makes landing conflicts rare (each item branches
+            # after the prior merge), so there is no auto-integration chain here:
+            # any landing failure parks the item and files the todo.
+            self.merge_branch(
+                task.repo, branch, self.config.gh_token,
+                message=f"Land plan item '{item.title}' via Hive",
+            )
+        except Exception as exc:
+            log.error("landing plan item '%s' failed: %s", item.title, exc)
+            plans.set_item_status(
+                self.store, item.id, PlanItemStatus.rejected, f"{plans.LANDING_FAILED_PREFIX}: {exc}"
+            )
+            escalate(
+                self.store,
+                f"Land plan item '{item.title}' failed",
+                instructions=(
+                    f"The review accepted the work on `{branch}`, but merging it into the "
+                    f"default branch failed:\n\n{exc}\n\n"
+                    "Land it manually (the branch is intact), then cancel or retry the item."
+                ),
+                project_id=project.id,
+                workspace_id=project.workspace_id,
+                kind=HumanTaskKind.repair,
+                dedup_key=f"repair:plan-land:{project.id}:{item.id}",
+                resolution={"check": "plan_item_done", "plan_item_id": item.id},
+            )
+            return
+        try:
+            self.delete_branch(task.repo, branch, self.config.gh_token)
+        except Exception as exc:  # never fail a completed landing over branch cleanup
+            log.info("plan item '%s' landed; leftover branch %s not deleted: %s", item.title, branch, exc)
+        plans.set_item_status(self.store, item.id, PlanItemStatus.done, "")
+        log.info("plan item '%s' landed: merged on the default branch", item.title)
 
     @staticmethod
     def _is_landing_integration_task(task: Task) -> bool:

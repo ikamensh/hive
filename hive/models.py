@@ -271,6 +271,77 @@ class Workstream(BaseModel):
     created_at: float = Field(default_factory=now)
 
 
+class PlanStatus(StrEnum):
+    draft = "draft"  # assembling / under review
+    approved = "approved"  # items queued; executing
+    complete = "complete"
+    abandoned = "abandoned"
+
+
+class Plan(BaseModel):
+    """The ordered item list for one iteration (wiki/iteration-plan.md). One
+    active plan per project; approval is the human's verdict that makes the
+    whole set executable. The dial between emergence and certainty is the
+    human's review depth, not a field here."""
+
+    id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    project_id: str
+    goal: str  # the iteration statement this plan serves
+    status: PlanStatus = PlanStatus.draft
+    proposed_by: str = "agent"  # "agent" | "human"
+    spec_ref: str = ""  # path of the committed plan doc in the spec home
+    created_at: float = Field(default_factory=now)
+    approved_at: float = 0.0
+    finished_at: float = 0.0
+
+
+class PlanItemStatus(StrEnum):
+    # review phase (owned by the plan UI)
+    proposed = "proposed"  # awaiting the human's flip
+    approved = "approved"  # flipped; waiting for whole-plan approval
+    # execution phase (owned by the pipeline; same machine as issue work)
+    queued = "queued"
+    resolving = "resolving"
+    blocked_clarity = "blocked_clarity"  # resolve returned BLOCKED; reason on the item
+    reviewing = "reviewing"
+    rejected = "rejected"  # review returned REJECT (or landing failed); reason on the item
+    done = "done"  # work merged on the remote default branch
+    cancelled = "cancelled"  # removed by amendment, or plan abandoned
+
+
+# Plan-item states the human must act on before the plan can continue. The
+# plan executes in strict order, so a parked item stalls everything behind it.
+PLAN_ITEM_PARKED = (PlanItemStatus.blocked_clarity, PlanItemStatus.rejected)
+PLAN_ITEM_IN_FLIGHT = (PlanItemStatus.resolving, PlanItemStatus.reviewing)
+PLAN_ITEM_TERMINAL = (PlanItemStatus.done, PlanItemStatus.cancelled)
+
+
+class PlanItem(BaseModel):
+    """One durable unit of plan work — the work item the doc-fed pipeline
+    executes. One record carries review state, then execution state; the plan
+    UI owns content and the review flips, the pipeline owns status from
+    `queued` on (wiki/iteration-plan.md)."""
+
+    id: str = Field(default_factory=new_id)
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    project_id: str
+    plan_id: str
+    order: int = 0
+    repo: str = ""  # target repo; the project's main repo when empty
+    title: str
+    story: str = ""  # target user story: who can do what once this lands
+    constraints: str = ""  # technical boundaries, intentionally sparse
+    notes: str = ""
+    story_keys: list[str] = []  # acceptance stories this claims to deliver
+    status: PlanItemStatus = PlanItemStatus.proposed
+    parked_reason: str = ""  # blocked/rejected: the agent's explanation
+    authored_by: str = "agent"  # "agent" | "human"
+    edited_by_human: bool = False
+    created_at: float = Field(default_factory=now)
+    updated_at: float = Field(default_factory=now)
+
+
 class TaskStatus(StrEnum):
     pending = "pending"
     running = "running"  # dispatched to a runner
@@ -964,6 +1035,8 @@ ALL_MODELS: tuple[type[BaseModel], ...] = (
     LimitEvent,
     Machine,
     OrchestratorRun,
+    Plan,
+    PlanItem,
     Project,
     ProjectWorkstream,
     Question,
