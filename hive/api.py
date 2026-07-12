@@ -727,19 +727,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         )
         return project.model_dump()
 
-    @app.post("/api/projects/{project_id}/start")
-    def start_project(project_id: str, ctx: AuthContext = Depends(editor)):
-        project = require_project(project_id, ctx)
-        if not project.spec_repo.strip():
-            raise HTTPException(400, "spec_repo must be set before starting")
-        if not intake.is_done(store, project):
-            raise HTTPException(409, "complete project intake before starting planning")
-        supervisor.wake(
-            project_id,
-            "Project start requested after approved intake. Plan from the durable spec.",
-        )
-        return project.model_dump()
-
     @app.post("/api/projects/{project_id}/intake/start")
     def start_intake(
         project_id: str,

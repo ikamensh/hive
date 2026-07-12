@@ -90,8 +90,9 @@ def _complete_intake(client, pid):
 
 
 def _start_project(client, pid):
+    """Complete intake and wake planning, as intake acceptance does live."""
     _complete_intake(client, pid)
-    client.post(f"/api/projects/{pid}/start")
+    client.app.state.supervisor.wake(pid, "Intake accepted after approved intake. Plan from the durable spec.")
 
 
 def _create_started(client, name, spec_repo="https://example.com/spec.git"):
@@ -334,13 +335,6 @@ def test_rename_and_archive_project(harness):
     assert pid in {p["id"] for p in client.get("/api/projects").json()}
 
 
-def test_start_requires_spec_repo(harness):
-    client, store, orch = harness
-    project = client.post("/api/projects", json={"name": "draft"}).json()
-    assert client.post(f"/api/projects/{project['id']}/start", json={}).status_code == 400
-    assert len(orch.invocations) == 0
-
-
 def test_project_payload_includes_decision_ledger(harness, tmp_path):
     """Project detail is the CLI/UI payload; it must carry the ledger fields
     needed to show operator-vs-Hive provenance without a second command."""
@@ -427,15 +421,7 @@ def test_reopen_hive_assumption_creates_question_and_parks_work(harness, tmp_pat
     assert not (verify / ".hive-decision-read").exists()
 
 
-def test_start_requires_completed_intake(harness):
-    client, store, orch = harness
-    project = client.post("/api/projects", json={"name": "draft"}).json()
-    _configure_project(client, project["id"])
-    assert client.post(f"/api/projects/{project['id']}/start", json={}).status_code == 409
-    assert len(orch.invocations) == 0
-
-
-def test_start_after_intake_wakes_orchestrator(harness):
+def test_intake_acceptance_wakes_orchestrator(harness):
     client, store, orch = harness
 
     project = _create_started(client, "briefed")

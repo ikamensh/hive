@@ -172,9 +172,6 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("resume", help="undo `hive pause`; queued work dispatches again")
     p = sub.add_parser("projects", help="list projects")
 
-    p = sub.add_parser("create", help="create a project (name only; configure in project view)")
-    p.add_argument("name")
-
     p = sub.add_parser(
         "new",
         help="one-step project start: create, wire or create the repo, hand over "
@@ -185,9 +182,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", default="", help="existing repo git URL (default: create a private repo)")
     p.add_argument("--budget", type=float, help="daily spend cap in USD (default 10)")
     p.add_argument("--public", action="store_true", help="make the created repo public")
-
-    p = sub.add_parser("start", help="wake planning after approved project intake")
-    p.add_argument("project_id")
 
     p = sub.add_parser("repo-create", help="create a private greenfield repo for a project")
     p.add_argument("project_id")
@@ -1083,8 +1077,6 @@ def run(args: argparse.Namespace, client) -> dict | list:
         r = client.patch("/api/workspace", json={"paused": c == "pause"})
     elif c == "projects":
         r = client.get("/api/projects")
-    elif c == "create":
-        r = client.post("/api/projects", json={"name": args.name})
     elif c == "new":
         spec_text = ""
         if args.spec:
@@ -1122,8 +1114,6 @@ def run(args: argparse.Namespace, client) -> dict | list:
                 f"`hive intake {pid} --approve`."
             ),
         }
-    elif c == "start":
-        r = client.post(f"/api/projects/{args.project_id}/start")
     elif c == "repo-create":
         r = client.post(f"/api/projects/{args.project_id}/repo", json={
             "name": args.name,

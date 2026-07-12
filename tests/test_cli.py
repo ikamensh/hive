@@ -57,7 +57,7 @@ def test_cli_drives_full_loop(harness, tmp_path, monkeypatch):
         "iteration.md": "# Iteration\nBuild the first loop.\n",
     })
 
-    project = cli(client, "create", "demo")
+    project = client.post("/api/projects", json={"name": "demo"}).json()
     pid = project["id"]
     cli(client, "set", pid, "--spec-repo", str(origin),
         "--member-repos", "https://example.com/app.git")
@@ -84,7 +84,6 @@ def test_cli_drives_full_loop(harness, tmp_path, monkeypatch):
     approved = cli(client, "intake", pid, "--approve")
     assert approved["conversation"]["status"] == "done"
     assert approved["spec_status"]["ready"] is True
-    cli(client, "start", pid)
     assert cli(client, "projects")[0]["id"] == pid
     _pump(client, store)
 
@@ -413,7 +412,7 @@ def test_cli_agents_and_probe(harness):
 
 def test_cli_settings_and_admin(harness):
     client, _store = harness
-    pid = cli(client, "create", "p")["id"]
+    pid = client.post("/api/projects", json={"name": "p"}).json()["id"]
     cli(client, "set", pid, "--spec-repo", "https://example.com/s.git")
 
     patched = cli(client, "set", pid, "--paused", "true", "--autonomy", "pr",
@@ -794,7 +793,7 @@ def test_cli_cancel_and_dismiss(harness):
     from hive.models import Question, Task, IssueItem
 
     client, store = harness
-    pid = cli(client, "create", "p")["id"]
+    pid = client.post("/api/projects", json={"name": "p"}).json()["id"]
     cli(client, "set", pid, "--spec-repo", "https://example.com/s.git")
     ws = store.put(IssueItem(project_id=pid, title="w"))
     task = store.put(Task(project_id=pid, workstream_id=ws.id, repo="r", instructions="i"))
@@ -902,7 +901,7 @@ def test_cli_issue_run_and_sync(harness, monkeypatch):
     from test_issues import _pass_preflight, issue
 
     client, store = harness
-    pid = cli(client, "create", "spec")["id"]
+    pid = client.post("/api/projects", json={"name": "spec"}).json()["id"]
     cli(client, "set", pid, "--spec-repo", "https://github.com/o/r.git")
     _pass_preflight(monkeypatch)
     monkeypatch.setattr(
@@ -944,7 +943,7 @@ def test_cli_decision_reopen(harness, tmp_path):
             "Retry failed webhooks for 24 hours.\n"
         ),
     })
-    pid = cli(client, "create", "ledger")["id"]
+    pid = client.post("/api/projects", json={"name": "ledger"}).json()["id"]
     cli(client, "set", pid, "--spec-repo", str(origin))
 
     ledger = cli(client, "project", pid)["decision_ledger"]
@@ -987,7 +986,7 @@ def test_cli_stories_coverage_view(harness, tmp_path):
             "## Examples\n- Given valid credentials\n  When I sign in\n  Then I see the dashboard\n"
         ),
     })
-    pid = cli(client, "create", "demo")["id"]
+    pid = client.post("/api/projects", json={"name": "demo"}).json()["id"]
     cli(client, "set", pid, "--spec-repo", str(origin))
 
     report = cli(client, "stories", pid)

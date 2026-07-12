@@ -86,27 +86,37 @@ Only `usable` backends get real work. A failed probe stays non-dispatchable and
 files a human todo telling you exactly what to fix; after fixing a login, re-check
 with `uv run hive probe <resource_id>` (ids in `hive resources`).
 
-### 5. Create your first project and set the goal
+### 5. Hand over your spec
+
+One command takes the spec, wires (or creates) the repo, and launches the intake
+scout — the trusted agent that reads everything, self-answers what it can, and
+comes back once with its understanding and the few questions that matter:
 
 ```bash
-uv run hive create myproj
-uv run hive set <project_id> --spec-repo https://github.com/me/spec.git
-uv run hive start <project_id> \
-  --mission "A small CLI that counts word frequencies in a file." \
-  --iteration-goal "Read a text file path from argv, print the top 10 words by count."
-uv run hive projects                  # see it appear with a live state badge
+echo "A small CLI that counts word frequencies in a file.
+First iteration: read a file path from argv, print the top 10 words." > spec.md
+
+uv run hive new wordfreq --spec spec.md          # no --repo: creates a private repo for you
+uv run hive projects                             # state badge + a plain-language reason line
 ```
 
-Creating a project makes a draft. `set --spec-repo` tells hive where the spec home lives, and `start` wakes the orchestrator: it runs a spec critique, decomposes the goal into workstreams, and starts dispatching work to your runner.
+Point at an existing repo instead with `--repo <git-url>`; cap spend with
+`--budget <usd>` (default $10/day).
 
-### 6. Watch it work and answer its questions
+### 6. Approve the brief, answer questions, watch it build
 
 ```bash
-uv run hive project <project_id>      # workstreams, tasks, and any open questions
-uv run hive answer <question_id> "yes, read UTF-8 and ignore punctuation"
+uv run hive intake <project_id>                  # the scout's brief + what to do next
+uv run hive intake <project_id> -m "UTF-8; ignore punctuation"   # answer / correct it
+uv run hive intake <project_id> --approve        # finalize: spec files land, planning wakes
+uv run hive project <project_id>                 # plan, tasks, and any open questions
+uv run hive answer <question_id> "yes, add B"
 ```
 
-The project moves through states you can watch on either surface: `working` → `blocked: questions` (it needs you) → `blocked: resources` (out of agent capacity, resumes itself) → `idle: goal complete`. When it's done, set the next goal with `uv run hive iterate <project_id> "…"`.
+Approval ends setup. Hive plans the iteration, you approve the plan (web
+launchpad or `hive plan-approve`), and the pipeline builds — every state comes
+with a reason sentence telling you why and what to do, so nothing needs
+decoding. When the goal completes, set the next one with `uv run hive iterate <project_id> "…"`.
 
 Set a `--daily-budget` and hive stays under it: spend counts both the runner agents' cost *and* the orchestrator's own LLM calls, and once a project is over budget it stops dispatching and stops planning (`blocked: budget`) until spend rolls over at UTC midnight. Work that keeps failing — verification rejects or runner/execution errors — is capped after a few rounds so a broken workstream parks and asks you instead of burning the budget on retries.
 
@@ -124,10 +134,9 @@ Prefer clicking? Run the web UI (below) and do steps 5–6 there instead.
 
 ```bash
 hive whoami                        # resolved target URL + authenticated identity
-hive create myproj
-hive set <project_id> --spec-repo https://github.com/me/spec.git --member-repos https://github.com/me/app.git
-hive start <project_id> --mission "ship the first useful slice" --iteration-goal "..."
-hive projects                      # list with live states
+hive new myproj --spec spec.md     # one-step start: repo + spec handover + intake scout
+hive intake <project_id> [--approve | -m "answer"]   # the one intake verb
+hive projects                      # list with live states + reasons
 hive project <project_id>          # workstreams, tasks, questions
 hive show [machines|agents|subscriptions|autonomy]  # fleet, launchable agents, license gaps, autonomous jobs
 hive answer <question_id> "yes, add B"
@@ -190,7 +199,7 @@ hive config set HIVE_BASIC_AUTH you:your-password    # if it sits behind basic a
 hive whoami                                           # confirm: prints the target URL + identity
 ```
 
-From there every command — `hive start`, `hive answer`, `hive scan`, `hive test-refresh`, `hive iterate` — runs against the server. Submit once and walk away; the server carries it out. Don't *also* run `hive run` locally against the same database — the leader lease will refuse it. With a remote chief your laptop never needs its own.
+From there every command — `hive intake`, `hive answer`, `hive scan`, `hive test-refresh`, `hive iterate` — runs against the server. Submit once and walk away; the server carries it out. Don't *also* run `hive run` locally against the same database — the leader lease will refuse it. With a remote chief your laptop never needs its own.
 
 **Match the always-on backends to the work you want unattended.** A runner can only execute work for the agent CLIs it has logged in. So which work continues while your laptop is off depends on what the *server's* runner has:
 
