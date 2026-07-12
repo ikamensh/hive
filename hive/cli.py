@@ -306,6 +306,33 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("project_id")
     p.add_argument("note")
 
+    p = sub.add_parser("plan", help="show the project's iteration plan (items + statuses)")
+    p.add_argument("project_id")
+
+    p = sub.add_parser("plan-propose", help="ask the planner to draft an iteration plan")
+    p.add_argument("project_id")
+
+    p = sub.add_parser("plan-new", help="create a hand-written draft plan")
+    p.add_argument("project_id")
+    p.add_argument("goal")
+    p.add_argument("items", help="JSON list of {title,story,constraints,notes,repo}; '-' = stdin")
+
+    p = sub.add_parser("plan-approve", help="approve all remaining items and start the plan")
+    p.add_argument("project_id")
+
+    p = sub.add_parser("plan-abandon", help="abandon the active plan (cancels its queued items and tasks)")
+    p.add_argument("project_id")
+
+    p = sub.add_parser("plan-item-approve", help="approve one proposed plan item")
+    p.add_argument("item_id")
+
+    p = sub.add_parser("plan-retry", help="retry a blocked/rejected plan item")
+    p.add_argument("item_id")
+
+    p = sub.add_parser("plan-item-cancel", help="cancel a plan item (unblocks the queue behind it)")
+    p.add_argument("item_id")
+    p.add_argument("--reason", default="")
+
     p = sub.add_parser("answer", help="answer an open question")
     p.add_argument("question_id")
     p.add_argument("answer")
@@ -972,6 +999,15 @@ def testability_report(detail: dict) -> dict:
     return {"testability": report}
 
 
+def _plan_id(client, project_id: str) -> str:
+    """Resolve the project's live plan id (plan routes key on it)."""
+    detail = client.get(f"/api/projects/{project_id}").raise_for_status().json()
+    payload = detail.get("plan")
+    if not payload:
+        raise SystemExit("no plan for this project — `hive plan-propose` or `hive plan-new` first")
+    return payload["plan"]["id"]
+
+
 def run(args: argparse.Namespace, client) -> dict | list:
     """Execute one command against an httpx-compatible client and return the
     response payload. Non-2xx responses raise (clear failure over silence)."""
@@ -1079,6 +1115,28 @@ def run(args: argparse.Namespace, client) -> dict | list:
     elif c == "ask":
         text = sys.stdin.read() if args.text == "-" else args.text
         r = client.post(f"/api/projects/{args.project_id}/directives", json={"text": text})
+    elif c == "plan":
+        detail = client.get(f"/api/projects/{args.project_id}").raise_for_status().json()
+        return detail.get("plan") or {
+            "note": "no plan yet — `hive plan-propose` asks the AI, `hive plan-new` writes one by hand"
+        }
+    elif c == "plan-propose":
+        r = client.post(f"/api/projects/{args.project_id}/plan/propose")
+    elif c == "plan-new":
+        items = json.loads(sys.stdin.read() if args.items == "-" else args.items)
+        r = client.post(
+            f"/api/projects/{args.project_id}/plan", json={"goal": args.goal, "items": items}
+        )
+    elif c == "plan-approve":
+        r = client.post(f"/api/plans/{_plan_id(client, args.project_id)}/approve")
+    elif c == "plan-abandon":
+        r = client.post(f"/api/plans/{_plan_id(client, args.project_id)}/abandon")
+    elif c == "plan-item-approve":
+        r = client.post(f"/api/plan-items/{args.item_id}/approve")
+    elif c == "plan-retry":
+        r = client.post(f"/api/plan-items/{args.item_id}/retry")
+    elif c == "plan-item-cancel":
+        r = client.post(f"/api/plan-items/{args.item_id}/cancel", json={"reason": args.reason})
     elif c == "scan":
         r = client.post(f"/api/projects/{args.project_id}/scan-issues")
     elif c == "check-ci":

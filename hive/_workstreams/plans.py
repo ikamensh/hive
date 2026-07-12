@@ -73,6 +73,33 @@ def plan_items(store, plan: Plan) -> list[PlanItem]:
     return sorted(items, key=lambda i: (i.order, i.created_at))
 
 
+def latest_plan(store, project: Project) -> Plan | None:
+    """The plan a viewer should see: the active one, else the most recent
+    finished one (so the rail persists after completion)."""
+    live = active_plan(store, project)
+    if live is not None:
+        return live
+    plans_all = store.list(Plan, workspace_id=project.workspace_id, project_id=project.id)
+    return max(plans_all, key=lambda p: p.created_at) if plans_all else None
+
+
+def cancel_plan_work(store, task: Task) -> None:
+    """Release a plan item whose resolve/review task was hard-cancelled at the
+    chief (never reached a runner). The runner-reported cancel path goes
+    through TaskResultProcessor instead."""
+    if task.kind not in (TaskKind.resolve, TaskKind.review) or not task.work_item_id:
+        return
+    item = store.get(PlanItem, task.work_item_id)
+    if item is None or item.status not in PLAN_ITEM_IN_FLIGHT:
+        return
+    set_item_status(
+        store,
+        item.id,
+        PlanItemStatus.blocked_clarity,
+        "task cancelled by the operator — retry the item to continue",
+    )
+
+
 # -- drafting + review ----------------------------------------------------------
 
 

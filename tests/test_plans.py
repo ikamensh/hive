@@ -416,6 +416,137 @@ def test_plan_doc_committed_to_spec_home_on_activation():
     assert store.get(Plan, plan.id).spec_ref == plans.PLAN_DOC_PATH
 
 
+# -- API surface -----------------------------------------------------------------
+
+
+@pytest.fixture
+def app(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from hive.api import create_app
+    from hive.persistence.blobstore import LocalBlobStore
+    from hive._control.supervisor import Supervisor
+
+    store = MemoryStore()
+    supervisor = Supervisor(store, lambda pid, events: None)
+    config = make_config(tmp_path)
+    client = TestClient(create_app(store, supervisor, config, blobs=LocalBlobStore(tmp_path / "b")))
+    return client, store
+
+
+class FakeSpecRepo:
+    """Stands in for hive.api.SpecRepo so plan approval stays offline."""
+
+    commits: dict = {}
+
+    def __init__(self, url, base, token):
+        pass
+
+    def sync(self):
+        return None
+
+    def commit_files(self, files, message):
+        FakeSpecRepo.commits.update(files)
+        return "cafe1234"
+
+
+def _api_project(client):
+    pid = client.post("/api/projects", json={"name": "p"}).json()["id"]
+    client.patch(f"/api/projects/{pid}", json={"spec_repo": "https://github.com/o/r.git"})
+    return pid
+
+
+def test_plan_api_review_loop(app, monkeypatch):
+    """Draft by hand → edit an item → flip one item → 'Approve all & start':
+    the two review depths converge, execution starts, and the project payload
+    carries the plan."""
+    client, store = app
+    monkeypatch.setattr("hive.api.SpecRepo", FakeSpecRepo)
+    FakeSpecRepo.commits = {}
+    pid = _api_project(client)
+
+    payload = client.post(
+        f"/api/projects/{pid}/plan",
+        json={"goal": "mobile", "items": [{"title": "A"}, {"title": "B", "story": "s"}]},
+    ).json()
+    plan_id = payload["plan"]["id"]
+    first, second = payload["items"]
+    assert payload["plan"]["proposed_by"] == "human"
+
+    edited = client.patch(f"/api/plan-items/{first['id']}", json={"story": "user can X"}).json()
+    assert edited["story"] == "user can X"
+    assert edited["edited_by_human"]
+
+    assert client.post(f"/api/plan-items/{first['id']}/approve").json()["status"] == "approved"
+    result = client.post(f"/api/plans/{plan_id}/approve").json()
+    statuses = {i["title"]: i["status"] for i in result["items"]}
+    assert statuses == {"A": "resolving", "B": "queued"}
+    assert plans.PLAN_DOC_PATH in FakeSpecRepo.commits
+
+    detail = client.get(f"/api/projects/{pid}").json()
+    assert detail["plan"]["plan"]["status"] == "approved"
+    tasks = [t for t in detail["tasks"] if t["kind"] == "resolve"]
+    assert len(tasks) == 1 and t_work_item(tasks[0]) == first["id"]
+
+
+def t_work_item(task: dict) -> str:
+    return task["work_item_id"]
+
+
+def test_plan_api_activation_refuses_partial_approval(app, monkeypatch):
+    client, store = app
+    monkeypatch.setattr("hive.api.SpecRepo", FakeSpecRepo)
+    pid = _api_project(client)
+    payload = client.post(
+        f"/api/projects/{pid}/plan", json={"goal": "g", "items": [{"title": "A"}]}
+    ).json()
+    # approve with zero items approved works via approve-all; an empty plan doesn't
+    empty = client.post(f"/api/projects/{pid}/plan", json={"goal": "g2", "items": []}).json()
+    r = client.post(f"/api/plans/{empty['plan']['id']}/approve")
+    assert r.status_code == 400
+    assert "no items" in r.json()["detail"]
+
+
+def test_plan_api_abandon_cancels_pending_tasks(app, monkeypatch):
+    client, store = app
+    monkeypatch.setattr("hive.api.SpecRepo", FakeSpecRepo)
+    pid = _api_project(client)
+    payload = client.post(
+        f"/api/projects/{pid}/plan", json={"goal": "g", "items": [{"title": "A"}]}
+    ).json()
+    plan_id = payload["plan"]["id"]
+    client.post(f"/api/plans/{plan_id}/approve")
+
+    result = client.post(f"/api/plans/{plan_id}/abandon").json()
+    assert result["plan"]["status"] == "abandoned"
+    assert all(i["status"] == "cancelled" for i in result["items"])
+    tasks = store.list(Task, project_id=pid)
+    assert tasks and all(t.status == TaskStatus.cancelled for t in tasks)
+
+
+def test_cli_plan_commands(app, monkeypatch):
+    """CLI parity: plan-new → plan-item-approve → plan-approve → plan → abandon
+    all round-trip through the same routes the web uses."""
+    from hive.cli import build_parser, run as cli_run
+
+    def cli(client, *argv):
+        return cli_run(build_parser().parse_args(argv), client)
+
+    client, store = app
+    monkeypatch.setattr("hive.api.SpecRepo", FakeSpecRepo)
+    pid = _api_project(client)
+
+    payload = cli(client, "plan-new", pid, "mobile support",
+                  '[{"title": "A", "story": "s"}, {"title": "B"}]')
+    assert [i["title"] for i in payload["items"]] == ["A", "B"]
+    assert cli(client, "plan", pid)["plan"]["status"] == "draft"
+
+    cli(client, "plan-item-approve", payload["items"][0]["id"])
+    started = cli(client, "plan-approve", pid)
+    assert {i["status"] for i in started["items"]} == {"resolving", "queued"}
+    assert cli(client, "plan-abandon", pid)["plan"]["status"] == "abandoned"
+
+
 def test_plan_doc_commit_failure_files_todo_but_executes():
     store = MemoryStore()
     project = make_project(store)

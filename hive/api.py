@@ -53,6 +53,7 @@ from hive._workstreams.issues import (
     resolve_issue_on_github,
     seed_filed_issue,
 )
+from hive._workstreams import plans
 from hive._workstreams.ci import check_and_autofix
 from hive._workstreams.preflight import (
     checks_payload,
@@ -98,6 +99,10 @@ from hive.models import (
     LicensingMode,
     Machine,
     Mode,
+    Plan,
+    PlanItem,
+    PlanItemStatus,
+    PlanStatus,
     Project,
     ProjectWorkstream,
     ProjectWorkstreamKind,
@@ -274,6 +279,32 @@ class FeedbackBody(BaseModel):
 
 class DirectiveCreate(BaseModel):
     text: str
+
+
+class PlanCreate(BaseModel):
+    goal: str
+    items: list[dict] = []
+
+
+class PlanItemCreate(BaseModel):
+    title: str
+    story: str = ""
+    constraints: str = ""
+    notes: str = ""
+    repo: str = ""
+
+
+class PlanItemPatch(BaseModel):
+    title: str | None = None
+    story: str | None = None
+    constraints: str | None = None
+    notes: str | None = None
+    repo: str | None = None
+    order: int | None = None
+
+
+class PlanItemCancel(BaseModel):
+    reason: str = ""
 
 
 class ResourcePatch(BaseModel):
@@ -994,6 +1025,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             task.finished_at = time.time()
             store.put(task)
             cancel_issue_work(store, task)
+            plans.cancel_plan_work(store, task)
             return True
         if task.status == TaskStatus.running:
             if task.delivered:
@@ -1005,6 +1037,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             task.finished_at = time.time()
             store.put(task)
             cancel_issue_work(store, task)
+            plans.cancel_plan_work(store, task)
             return True
         return False
 
@@ -1039,6 +1072,173 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if not run or run.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
         return cancel_issue_run_record(run, ctx).model_dump()
+
+    # -- iteration plans (wiki/iteration-plan.md) ------------------------------
+
+    def require_plan(plan_id: str, ctx: AuthContext) -> Plan:
+        plan = store.get(Plan, plan_id)
+        if not plan or plan.workspace_id != ctx.workspace_id:
+            raise HTTPException(404)
+        return plan
+
+    def require_plan_item(item_id: str, ctx: AuthContext) -> tuple[Plan, PlanItem]:
+        item = store.get(PlanItem, item_id)
+        if not item or item.workspace_id != ctx.workspace_id:
+            raise HTTPException(404)
+        return require_plan(item.plan_id, ctx), item
+
+    def plan_payload(project: Project) -> dict | None:
+        plan = plans.latest_plan(store, project)
+        if plan is None:
+            return None
+        return {
+            "plan": plan.model_dump(),
+            "items": [i.model_dump() for i in plans.plan_items(store, plan)],
+        }
+
+    def plan_spec_or_reporter(project: Project):
+        """The spec home for the approved-plan doc commit; a failed sync
+        becomes a failing committer so activation's escalate path reports it
+        instead of silently skipping the durable record."""
+
+        class _UnsyncedSpec:
+            def __init__(self, exc: Exception) -> None:
+                self._exc = exc
+
+            def commit_files(self, files: dict, message: str) -> str:
+                raise RuntimeError(f"spec repo sync failed: {self._exc}")
+
+        try:
+            spec = SpecRepo(
+                project.spec_repo,
+                Path(config.data_dir or "/tmp/hive-data") / "specs",
+                config.gh_token,
+            )
+            spec.sync()
+            return spec
+        except Exception as exc:
+            return _UnsyncedSpec(exc)
+
+    @app.post("/api/projects/{project_id}/plan")
+    def create_plan(project_id: str, body: PlanCreate, ctx: AuthContext = Depends(editor)):
+        """A human-authored draft (the max-certainty end of the dial). Items
+        enter `proposed` like any draft — approval stays one explicit act."""
+        project = require_project(project_id, ctx)
+        try:
+            plan = plans.create_draft(store, project, body.goal, body.items, proposed_by="human")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return plan_payload(project)
+
+    @app.post("/api/projects/{project_id}/plan/propose")
+    def propose_plan(project_id: str, ctx: AuthContext = Depends(editor)):
+        """Ask the planner for a plan proposal (fire-and-forget: the draft
+        appears when the invocation lands)."""
+        project = require_project(project_id, ctx)
+        if (existing := plans.active_plan(store, project)) and existing.status == PlanStatus.approved:
+            raise HTTPException(400, "an approved plan is executing; abandon it first")
+        supervisor.wake(
+            project_id,
+            "The user asked for an iteration plan proposal. Draft one with "
+            "propose_plan from the current spec and project state.",
+        )
+        return {"ok": True, "note": "planner woken; the draft appears when it responds"}
+
+    @app.post("/api/plans/{plan_id}/items")
+    def add_plan_item(plan_id: str, body: PlanItemCreate, ctx: AuthContext = Depends(editor)):
+        plan = require_plan(plan_id, ctx)
+        project = require_project(plan.project_id, ctx)
+        try:
+            item = plans.add_item(store, project, plan, body.model_dump(), authored_by="human")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return item.model_dump()
+
+    @app.patch("/api/plan-items/{item_id}")
+    def patch_plan_item(item_id: str, body: PlanItemPatch, ctx: AuthContext = Depends(editor)):
+        _, item = require_plan_item(item_id, ctx)
+        try:
+            return plans.update_item(store, item, body.model_dump(exclude_none=True)).model_dump()
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/plan-items/{item_id}/approve")
+    def approve_plan_item(item_id: str, ctx: AuthContext = Depends(editor)):
+        plan, item = require_plan_item(item_id, ctx)
+        try:
+            item = plans.approve_item(store, plan, item)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if item.status == PlanItemStatus.queued:  # amendment on a live plan
+            project = require_project(plan.project_id, ctx)
+            plans.advance_plan(store, project, plan,
+                               backend=config.issue_backend, model=config.issue_model)
+            supervisor.poke()
+        return (store.get(PlanItem, item.id) or item).model_dump()
+
+    @app.post("/api/plan-items/{item_id}/unapprove")
+    def unapprove_plan_item(item_id: str, ctx: AuthContext = Depends(editor)):
+        _, item = require_plan_item(item_id, ctx)
+        try:
+            return plans.unapprove_item(store, item).model_dump()
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/plan-items/{item_id}/cancel")
+    def cancel_plan_item(
+        item_id: str, body: PlanItemCancel | None = None, ctx: AuthContext = Depends(editor)
+    ):
+        plan, item = require_plan_item(item_id, ctx)
+        try:
+            item = plans.cancel_item(store, item, (body.reason if body else ""))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        project = require_project(plan.project_id, ctx)
+        # Cancelling the stalled head unblocks the queue behind it.
+        plans.advance_plan(store, project, store.get(Plan, plan.id) or plan,
+                           backend=config.issue_backend, model=config.issue_model)
+        supervisor.poke()
+        return item.model_dump()
+
+    @app.post("/api/plan-items/{item_id}/retry")
+    def retry_plan_item(item_id: str, ctx: AuthContext = Depends(editor)):
+        plan, item = require_plan_item(item_id, ctx)
+        project = require_project(plan.project_id, ctx)
+        try:
+            item = plans.retry_item(store, project, plan, item)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        supervisor.poke()
+        return (store.get(PlanItem, item.id) or item).model_dump()
+
+    @app.post("/api/plans/{plan_id}/approve")
+    def approve_plan(plan_id: str, ctx: AuthContext = Depends(editor)):
+        """'Approve all & start': flip any still-proposed items and activate.
+        A plan reviewed item-by-item arrives here with zero flips left —
+        the two review depths converge on the same event."""
+        plan = require_plan(plan_id, ctx)
+        project = require_project(plan.project_id, ctx)
+        plans.approve_all(store, plan)
+        try:
+            notes = plans.activate(store, project, plan, spec=plan_spec_or_reporter(project))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        supervisor.poke()
+        return {"notes": notes, **(plan_payload(project) or {})}
+
+    @app.post("/api/plans/{plan_id}/abandon")
+    def abandon_plan(plan_id: str, ctx: AuthContext = Depends(editor)):
+        plan = require_plan(plan_id, ctx)
+        project = require_project(plan.project_id, ctx)
+        for task in store.list(Task, workspace_id=ctx.workspace_id,
+                               project_id=project.id, run_id=plan.id):
+            cancel_one_task(
+                task,
+                pending_msg="Cancelled by operator when the plan was abandoned.",
+                predelivery_msg="Cancelled by operator before delivery to a runner.",
+            )
+        plans.abandon_plan(store, plan)
+        return plan_payload(project)
 
     @app.post("/api/projects/{project_id}/workstreams/{workstream_id}/check-ci")
     def check_workstream_ci(
@@ -1347,6 +1547,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 for d in store.list(Directive, workspace_id=ctx.workspace_id, project_id=project_id)
             ],
             "checkouts": [c.model_dump() for c in project_checkouts(ctx.workspace_id, project)],
+            "plan": plan_payload(project),
             "decision_ledger": decisions.read_decision_ledger(config, project).model_dump(),
             "spend_today": supervisor.spend_today(project_id),
             "allowance": allowances.allowance_view(
