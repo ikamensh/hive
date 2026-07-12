@@ -1047,8 +1047,8 @@ def test_manual_spec_files_finalize_intake_and_handoff_to_orchestrator(harness, 
 
 def test_web_intake_contract_holds_until_durable_spec_finalize(harness, tmp_path):
     """Regression proof for the web intake MVP contract: configuring a project
-    is quiet, scout turns stay in intake, write-mission is the durable-spec
-    push turn, and only verified files wake normal planning."""
+    is quiet, scout turns stay in intake, approve queues the durable-spec
+    finalize turn, and only verified files wake normal planning."""
     client, store, orch = harness
     spec_dir = tmp_path / "spec"
     spec_dir.mkdir()
@@ -1097,35 +1097,33 @@ def test_web_intake_contract_holds_until_durable_spec_finalize(harness, tmp_path
     assert store.get(Project, pid).state == "intake"
     assert orch.invocations == []
 
-    queued = client.post(f"/api/projects/{pid}/intake/write-mission").json()["task"]
-    assert queued["conversation_turn"] == "write_mission"
+    # Approve with iteration.md still missing: approval IS the finalize ask —
+    # one scout turn writes and pushes the durable files.
+    approved = client.post(
+        f"/api/conversations/{conversation['id']}/message", json={"action": "approve"}
+    ).json()
+    queued = approved["task"]
+    assert queued["conversation_turn"] == "finalize"
     assert queued["session_handle"] == "session-1"
     assert store.get(AgentConversation, conversation["id"]).status == "finalizing"
     _pump(client, store)
-    write_task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
-    assert write_task["id"] == queued["id"]
-    assert "mission.md" in write_task["instructions"]
-    assert "iteration.md" in write_task["instructions"]
-    assert "Commit and push" in write_task["instructions"]
+    finalize_task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert finalize_task["id"] == queued["id"]
+    assert "mission.md" in finalize_task["instructions"]
+    assert "iteration.md" in finalize_task["instructions"]
     (spec_dir / "iteration.md").write_text("# Iteration\nMake intake file-based.\n")
     (spec_dir / "wiki").mkdir()
     (spec_dir / "wiki" / "intake.md").write_text("# Intake\nConversation captured.\n")
     client.post(
-        f"/api/tasks/{write_task['id']}/result",
+        f"/api/tasks/{finalize_task['id']}/result",
         json={"text": "Committed and pushed mission.md, iteration.md, and wiki/intake.md."},
         headers=RUNNER_HEADERS,
     )
-    assert store.get(AgentConversation, conversation["id"]).status == "open"
-    assert store.get(Project, pid).state == "intake"
-    _pump(client, store)
-    assert orch.invocations == []
-
-    accepted = client.post(f"/api/projects/{pid}/intake/finalize").json()
-    assert accepted["spec_status"]["ready"] is True
-    assert accepted["conversation"]["status"] == "done"
+    # The verified finalize completes intake and wakes planning by itself.
+    assert store.get(AgentConversation, conversation["id"]).status == "done"
     assert store.get(Project, pid).state == "idle"
     _pump(client, store)
-    assert any("Intake accepted from durable spec files" in event for batch in orch.invocations for event in batch)
+    assert any("Intake accepted" in event for batch in orch.invocations for event in batch)
 
 
 def test_approve_without_spec_files_queues_finalize_and_proceed_stays_conversational(

@@ -144,19 +144,6 @@ def create_conversation(store, project: Project, prefer_backend: str = "") -> Ag
     return conversation
 
 
-def writable_conversation(store, project: Project, prefer_backend: str = "") -> AgentConversation:
-    existing = (
-        store.get(AgentConversation, project.intake_conversation_id)
-        if project.intake_conversation_id
-        else None
-    )
-    if existing and existing.status in (ConversationStatus.running, ConversationStatus.finalizing):
-        return existing
-    if existing and existing.status == ConversationStatus.open:
-        return existing
-    return create_conversation(store, project, prefer_backend)
-
-
 def accept(
     store,
     supervisor,
@@ -335,19 +322,6 @@ def prompt(
             "Do not modify product code. Commit and push the spec changes. Report the "
             "commit SHA and the files changed."
         )
-    if turn == "write_mission":
-        return (
-            _context(conversation)
-            + "\n"
-            "Write the durable project-intake files in the spec repo. The canonical "
-            "outputs are dedicated files, not markdown sections in this chat.\n\n"
-            "Edit or create:\n"
-            "- mission.md — the long-term mission and operating principles.\n"
-            "- iteration.md — the concrete next iteration goal and acceptance signal.\n\n"
-            "You may also update wiki/intake.md and input-log/* if useful for provenance. "
-            "Do not modify product code. Commit and push the spec changes. Report the "
-            "commit SHA and the files changed."
-        )
     return (
         _context(conversation)
         + "\n"
@@ -391,7 +365,7 @@ def queue_turn(
     def mark(conv: AgentConversation) -> None:
         conv.status = (
             ConversationStatus.finalizing
-            if turn in ("finalize", "write_mission")
+            if turn == "finalize"
             else ConversationStatus.running
         )
         conv.last_task_id = task.id

@@ -194,21 +194,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name", default="")
     p.add_argument("--public", action="store_true")
 
-    p = sub.add_parser("intake-start", help="start the project intake scout")
+    p = sub.add_parser(
+        "intake",
+        help="the intake conversation, keyed by project: show it, answer it, or approve it",
+        description="With no flags: show the scout's latest brief and what to do next "
+        "(starts intake if none exists). -m sends an answer; --proceed accepts the "
+        "assumptions; --approve finalizes (the scout pushes any missing spec files and "
+        "planning wakes).",
+    )
     p.add_argument("project_id")
-
-    p = sub.add_parser("intake-send", help="send an intake answer or correction")
-    p.add_argument("conversation_id")
-    p.add_argument("message")
-
-    p = sub.add_parser("intake-proceed", help="tell intake to proceed with current assumptions")
-    p.add_argument("conversation_id")
-
-    p = sub.add_parser("intake-write-mission", help="ask a scout to write mission.md and iteration.md")
-    p.add_argument("project_id")
-
-    p = sub.add_parser("intake-approve", help="accept existing mission.md and iteration.md as finalized intake")
-    p.add_argument("conversation_id")
+    p.add_argument("-m", "--message", default="", help="answer or correct the scout")
+    p.add_argument("--proceed", action="store_true", help="proceed with the scout's assumptions")
+    p.add_argument("--approve", action="store_true", help="approve the brief; finalize and go")
+    p.add_argument("--backend", default="", help="pin the scout backend when (re)starting intake")
 
     p = sub.add_parser("project", help="project detail: workstreams, tasks, questions")
     p.add_argument("project_id")
@@ -1119,9 +1117,9 @@ def run(args: argparse.Namespace, client) -> dict | list:
             "conversation_id": conversation["id"],
             "scout": f"{conversation['backend']} {conversation.get('model', '')}".strip(),
             "next": (
-                f"The scout is reading your spec. Follow with `hive project {pid}`; "
-                f"answer with `hive intake-send {conversation['id']} <msg>`; approve with "
-                f"`hive intake-approve {conversation['id']}`."
+                f"The scout is reading your spec. `hive intake {pid}` shows its brief; "
+                f"answer with `hive intake {pid} -m '<text>'`; approve with "
+                f"`hive intake {pid} --approve`."
             ),
         }
     elif c == "start":
@@ -1131,23 +1129,51 @@ def run(args: argparse.Namespace, client) -> dict | list:
             "name": args.name,
             "private": not args.public,
         })
-    elif c == "intake-start":
-        r = client.post(f"/api/projects/{args.project_id}/intake/start")
-    elif c == "intake-send":
-        r = client.post(f"/api/conversations/{args.conversation_id}/message", json={
-            "action": "message",
-            "message": args.message,
-        })
-    elif c == "intake-proceed":
-        r = client.post(f"/api/conversations/{args.conversation_id}/message", json={
-            "action": "proceed",
-        })
-    elif c == "intake-write-mission":
-        r = client.post(f"/api/projects/{args.project_id}/intake/write-mission")
-    elif c == "intake-approve":
-        r = client.post(f"/api/conversations/{args.conversation_id}/message", json={
-            "action": "approve",
-        })
+    elif c == "intake":
+        detail = client.get(f"/api/projects/{args.project_id}").raise_for_status().json()
+        conversation_id = detail["project"].get("intake_conversation_id", "")
+        conversation = next(
+            (c_ for c_ in detail.get("conversations", []) if c_["id"] == conversation_id),
+            None,
+        )
+        wants_action = bool(args.message or args.proceed or args.approve)
+        # No conversation, or a failed one being retried, (re)starts the scout.
+        if conversation is None or (
+            conversation["status"] == "failed" and (wants_action or args.backend)
+        ):
+            conversation = client.post(
+                f"/api/projects/{args.project_id}/intake/start",
+                json={"backend": args.backend},
+            ).raise_for_status().json()
+            if not wants_action:
+                return {
+                    "conversation": conversation,
+                    "next": "the scout is reading the spec — rerun `hive intake` for its brief",
+                }
+        if args.approve:
+            r = client.post(f"/api/conversations/{conversation['id']}/message", json={"action": "approve"})
+        elif args.proceed:
+            r = client.post(f"/api/conversations/{conversation['id']}/message", json={"action": "proceed"})
+        elif args.message:
+            r = client.post(
+                f"/api/conversations/{conversation['id']}/message",
+                json={"action": "message", "message": args.message},
+            )
+        else:
+            status = conversation.get("status", "")
+            hints = {
+                "open": "answer with `-m '<text>'`, accept assumptions with --proceed, or --approve",
+                "running": "the scout is working — rerun `hive intake` shortly",
+                "finalizing": "approved — the scout is pushing the spec files",
+                "done": "intake is complete; planning owns the project now",
+                "failed": "intake failed — retry with `hive intake <project> --backend <scout>`",
+            }
+            return {
+                "status": status,
+                "scout": f"{conversation.get('backend', '')} {conversation.get('model', '')}".strip(),
+                "brief": conversation.get("latest_brief", ""),
+                "next": hints.get(status, ""),
+            }
     elif c == "project":
         r = client.get(f"/api/projects/{args.project_id}")
     elif c == "show":

@@ -473,7 +473,7 @@ class Task(BaseModel):
     kind: TaskKind = TaskKind.work
     instructions: str
     conversation_id: str = ""
-    conversation_turn: str = ""  # intake: initial | message | proceed | write_mission
+    conversation_turn: str = ""  # intake: initial | message | proceed | finalize
     session_handle: str = ""  # runner resumes this backend session when possible
     issue_number: int = 0  # issue solving: the issue this task resolves/reviews
     issue_doc: str = ""  # issue solving: full issue markdown (title+body+comments) -> .hive ISSUE.md

@@ -63,7 +63,7 @@ def test_cli_drives_full_loop(harness, tmp_path, monkeypatch):
         "--member-repos", "https://example.com/app.git")
 
     scout_rid = _register_usable_runner(client, name="scout", backend="codex")
-    conversation = cli(client, "intake-start", pid)
+    cli(client, "intake", pid)
     _pump(client, store)
     intake = client.post(f"/api/runners/{scout_rid}/poll", headers=RUNNER_HEADERS).json()["task"]
     assert intake["kind"] == "intake"
@@ -81,7 +81,7 @@ def test_cli_drives_full_loop(harness, tmp_path, monkeypatch):
         },
         headers=RUNNER_HEADERS,
     )
-    approved = cli(client, "intake-approve", conversation["id"])
+    approved = cli(client, "intake", pid, "--approve")
     assert approved["conversation"]["status"] == "done"
     assert approved["spec_status"]["ready"] is True
     cli(client, "start", pid)
@@ -1043,4 +1043,35 @@ def test_cli_new_hands_spec_to_intake_in_one_command(harness, tmp_path):
     assert len(intake_tasks) == 1
     assert "A tower defense game in Rust." in intake_tasks[0]["instructions"]
     assert out["conversation_id"]
-    assert f"hive project {out['project_id']}" in out["next"]
+    assert f"hive intake {out['project_id']}" in out["next"]
+
+
+def test_cli_intake_is_one_project_keyed_verb(harness, tmp_path):
+    """`hive intake <project>` shows the scout's brief with a next-step hint,
+    sends answers with -m, and never asks the user for a conversation id."""
+    client, store = harness
+    origin = _spec_origin(tmp_path, {"mission.md": "# Mission\nBuild it.\n"})
+    out = client.post("/api/projects", json={"name": "one-verb"}).json()
+    pid = out["id"]
+    cli(client, "set", pid, "--spec-repo", str(origin))
+    rid = _register_usable_runner(client, name="scout2", backend="codex")
+
+    started = cli(client, "intake", pid)
+    assert started["conversation"]["status"] in ("open", "running")
+    assert "hive intake" in started["next"]
+
+    _pump(client, store)
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    client.post(
+        f"/api/tasks/{task['id']}/result",
+        json={"text": "Brief: build it. Questions: none."},
+        headers=RUNNER_HEADERS,
+    )
+
+    view = cli(client, "intake", pid)
+    assert view["status"] == "open"
+    assert "Brief: build it." in view["brief"]
+    assert "-m" in view["next"]
+
+    sent = cli(client, "intake", pid, "-m", "use sqlite")
+    assert sent["task"]["conversation_turn"] == "message"

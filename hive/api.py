@@ -764,24 +764,6 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         intake.queue_turn(store, project, conversation, "initial")
         return store.get(AgentConversation, conversation.id).model_dump()
 
-    @app.post("/api/projects/{project_id}/intake/write-mission")
-    def write_mission(
-        project_id: str,
-        body: IntakeStart = IntakeStart(),
-        ctx: AuthContext = Depends(editor),
-    ):
-        project = require_project(project_id, ctx)
-        if project.autonomy != Autonomy.direct_push:
-            raise HTTPException(400, "write mission currently supports direct_push projects only")
-        if not project.spec_repo.strip():
-            raise HTTPException(400, "spec_repo must be set before writing mission")
-        conversation = intake.writable_conversation(store, project, body.backend.strip())
-        task = intake.queue_turn(store, project, conversation, "write_mission")
-        return {
-            "conversation": store.get(AgentConversation, conversation.id).model_dump(),
-            "task": task.model_dump(),
-        }
-
     @app.post("/api/projects/{project_id}/intake/finalize")
     def finalize_intake(project_id: str, ctx: AuthContext = Depends(editor)):
         project = require_project(project_id, ctx)

@@ -107,12 +107,6 @@ export default function ProjectPage() {
     refresh();
   };
 
-  const writeMission = async (p: ProjectPatch) => {
-    await api.patchProject(id, p);
-    await api.writeMission(id);
-    refresh();
-  };
-
   const finalizeIntake = async (p: ProjectPatch) => {
     await api.patchProject(id, p);
     await api.finalizeIntake(id);
@@ -340,7 +334,6 @@ export default function ProjectPage() {
           onSave={saveSetup}
           onCreateRepo={createRepo}
           onStartIntake={startIntake}
-          onWriteMission={writeMission}
           onFinalizeIntake={finalizeIntake}
           onConversationMessage={sendIntakeMessage}
         />

@@ -34,7 +34,6 @@ export function ProjectSetup({
   onSave,
   onCreateRepo,
   onStartIntake,
-  onWriteMission,
   onFinalizeIntake,
   onConversationMessage,
 }: {
@@ -44,7 +43,6 @@ export function ProjectSetup({
   onSave: (patch: ProjectPatch) => Promise<void>;
   onCreateRepo: (repoName: string) => Promise<void>;
   onStartIntake: (patch: ProjectPatch, backend?: string) => Promise<void>;
-  onWriteMission: (patch: ProjectPatch) => Promise<void>;
   onFinalizeIntake: (patch: ProjectPatch) => Promise<void>;
   onConversationMessage: (conversationId: string, action: "message" | "proceed", message?: string) => Promise<void>;
 }) {
@@ -121,17 +119,6 @@ export function ProjectSetup({
       if (action === "message") setIntakeMessage("");
     } catch (e) {
       setError((e as Error).message || "could not send intake message");
-    }
-    setBusy(false);
-  };
-
-  const writeMission = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      await onWriteMission(buildSetupPatch(fields));
-    } catch (e) {
-      setError((e as Error).message || "could not write mission");
     }
     setBusy(false);
   };
@@ -272,14 +259,6 @@ export function ProjectSetup({
           </button>
         </div>
         <div className="setup-actions">
-          <button
-            type="button"
-            className="ghost"
-            onClick={writeMission}
-            disabled={busy || intakeRunning || !specRepo.trim() || availableScoutBackends.length === 0}
-          >
-            write mission
-          </button>
           <button
             type="button"
             onClick={finalizeIntake}

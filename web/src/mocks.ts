@@ -1357,36 +1357,6 @@ export const api = {
     return structuredClone(conversation);
   },
 
-  writeMission: async (id: string, backend = ""): Promise<{ conversation: AgentConversation; task: Task }> => {
-    const project = projects.find((p) => p.id === id);
-    if (!project) throw new Error("not found");
-    if (!project.spec_repo.trim()) throw new Error("spec_repo required");
-    let conversation = conversations.find((c) => c.id === project.intake_conversation_id && c.status === "open");
-    if (!conversation) {
-      conversation = {
-        id: `conv-${Math.random().toString(36).slice(2, 8)}`,
-        project_id: id,
-        role: "intake",
-        repo: project.spec_repo,
-        backend: backend || "codex",
-        model: backend === "claude" ? "opus" : "gpt-5.5",
-        status: "open",
-        session_handle: "",
-        latest_brief: "",
-        transcript: [],
-        last_task_id: "",
-        created_at: Date.now() / 1000,
-        updated_at: Date.now() / 1000,
-      };
-      conversations.push(conversation);
-      project.intake_conversation_id = conversation.id;
-    }
-    const task = makeIntakeTask(project, conversation, "write_mission", "running", "Write mission.md and iteration.md.");
-    conversation.status = "running";
-    conversation.last_task_id = task.id;
-    project.state = "intake";
-    return structuredClone({ conversation, task });
-  },
 
   finalizeIntake: async (id: string): Promise<{ conversation: AgentConversation }> => {
     const project = projects.find((p) => p.id === id);
