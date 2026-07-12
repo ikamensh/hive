@@ -1,7 +1,7 @@
 import json
 
 from hive.agents import ResultSpec, call_agent
-from hive.runner._agent_results import VerifyResult
+from hive.runner._agent_results import ReviewResult
 
 
 class FakeResult:
@@ -37,7 +37,7 @@ def test_call_agent_accepts_pydantic_model_and_reads_valid_result(tmp_path):
     exclude = project_dir / ".git" / "info" / "exclude"
     exclude.parent.mkdir(parents=True)
     exclude.write_text("# local excludes\n")
-    task = {"id": "task-1", "kind": "verify", "instructions": "check the work"}
+    task = {"id": "task-1", "kind": "review", "instructions": "check the work"}
 
     def write_valid(project_dir, instructions):
         assert "Hive structured result contract" in instructions
@@ -47,8 +47,7 @@ def test_call_agent_accepts_pydantic_model_and_reads_valid_result(tmp_path):
             {
                 "task_id": "task-1",
                 "outcome": "accept",
-                "acceptance_checked": ["smoke"],
-                "commands_run": ["pytest"],
+                "tests_run": ["pytest"],
             },
         )
         return FakeResult("VERDICT omitted on purpose", cost=1.5, input_tokens=10, output_tokens=3)
@@ -57,13 +56,13 @@ def test_call_agent_accepts_pydantic_model_and_reads_valid_result(tmp_path):
         FakeAgent([write_valid]),
         instructions=task["instructions"],
         workdir=project_dir,
-        result_spec=VerifyResult,
+        result_spec=ReviewResult,
         task_id=task["id"],
         agent_name=task["kind"],
     )
 
     assert result.structured_result["outcome"] == "accept"
-    assert result.structured_result["commands_run"] == ["pytest"]
+    assert result.structured_result["tests_run"] == ["pytest"]
     assert result.structured_result_error == ""
     assert result.cost_usd == 1.5
     assert result.input_tokens == 10
@@ -75,7 +74,7 @@ def test_call_agent_accepts_pydantic_model_and_reads_valid_result(tmp_path):
 def test_call_agent_repairs_missing_result_in_same_session(tmp_path):
     project_dir = tmp_path / "repo"
     project_dir.mkdir()
-    task = {"id": "task-2", "kind": "verify", "instructions": "check the work"}
+    task = {"id": "task-2", "kind": "review", "instructions": "check the work"}
 
     def forget(project_dir, instructions):
         assert "check the work" in instructions
@@ -91,12 +90,12 @@ def test_call_agent_repairs_missing_result_in_same_session(tmp_path):
         agent,
         instructions=task["instructions"],
         workdir=project_dir,
-        result_spec=ResultSpec(VerifyResult, repair_attempts=1),
+        result_spec=ResultSpec(ReviewResult, repair_attempts=1),
         task_id=task["id"],
         agent_name=task["kind"],
     )
 
-    assert [name for name, _ in agent.calls] == ["verify", "verify-result-repair"]
+    assert [name for name, _ in agent.calls] == ["review", "review-result-repair"]
     assert result.text == "fixed result"
     assert result.structured_result["outcome"] == "reject"
     assert result.structured_result_error == ""
@@ -109,7 +108,7 @@ def test_call_agent_repairs_missing_result_in_same_session(tmp_path):
 def test_call_agent_returns_validation_error_after_repair_budget(tmp_path):
     project_dir = tmp_path / "repo"
     project_dir.mkdir()
-    task = {"id": "task-3", "kind": "verify", "instructions": "check the work"}
+    task = {"id": "task-3", "kind": "review", "instructions": "check the work"}
 
     def wrong_task(project_dir, instructions):
         _write_result(project_dir, {"task_id": "other", "outcome": "accept"})
@@ -124,7 +123,7 @@ def test_call_agent_returns_validation_error_after_repair_budget(tmp_path):
         FakeAgent([wrong_task, still_wrong]),
         instructions=task["instructions"],
         workdir=project_dir,
-        result_spec=ResultSpec(VerifyResult, repair_attempts=1),
+        result_spec=ResultSpec(ReviewResult, repair_attempts=1),
         task_id=task["id"],
         agent_name=task["kind"],
     )

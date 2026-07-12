@@ -38,9 +38,9 @@ import type {
   TestEpisode,
   TestEpisodeResult,
   VersionInfo,
-  WorkItem,
-  Workstream,
-  WorkstreamPatch,
+  IssueItem,
+  ProjectWorkstream,
+  ProjectWorkstreamPatch,
   WorkspaceMember,
   WorkspaceRole,
 } from "./types";
@@ -377,7 +377,7 @@ const conversations: AgentConversation[] = [
   },
 ];
 
-const projectWorkstreams: Workstream[] = [
+const projectWorkstreams: ProjectWorkstream[] = [
   {
     id: "stream-atlas-iteration",
     project_id: "p-atlas",
@@ -642,38 +642,10 @@ function checkoutsForProject(projectId: string): Checkout[] {
   return checkouts.filter((c) => repos.has(canonicalRepo(c.repo)));
 }
 
-const workItems: WorkItem[] = [
-  {
-    id: "ws-auth",
-    project_id: "p-atlas",
-    title: "Auth & session hardening",
-    description: "Move to short-lived tokens, add refresh rotation.",
-    status: "active",
-    parked_reason: "",
-    created_at: now - 86400 * 5,
-  },
-  {
-    id: "ws-billing",
-    project_id: "p-atlas",
-    title: "Usage-based billing",
-    description: "Metering pipeline + Stripe integration.",
-    status: "parked",
-    parked_reason: "Waiting on pricing decision (open question).",
-    created_at: now - 86400 * 4,
-  },
-  {
-    id: "ws-onboard",
-    project_id: "p-atlas",
-    title: "Onboarding flow",
-    description: "Guided setup wizard for new orgs.",
-    status: "done",
-    parked_reason: "",
-    created_at: now - 86400 * 6,
-  },
+const workItems: IssueItem[] = [
   {
     id: "ws-issue-42",
     project_id: "p-beacon",
-    source: "issue",
     issue_number: 42,
     issue_url: "https://github.com/acme/beacon/issues/42",
     title: "#42 Login redirect drops the `next` query param",
@@ -686,7 +658,6 @@ const workItems: WorkItem[] = [
   {
     id: "ws-issue-51",
     project_id: "p-beacon",
-    source: "issue",
     issue_number: 51,
     issue_url: "https://github.com/acme/beacon/issues/51",
     title: "#51 Add export-to-CSV for the audit log",
@@ -700,7 +671,6 @@ const workItems: WorkItem[] = [
   {
     id: "ws-issue-46",
     project_id: "p-beacon",
-    source: "issue",
     issue_number: 46,
     issue_url: "https://github.com/acme/beacon/issues/46",
     order: 46,
@@ -714,7 +684,6 @@ const workItems: WorkItem[] = [
   {
     id: "ws-issue-37",
     project_id: "p-beacon",
-    source: "issue",
     issue_number: 37,
     issue_url: "https://github.com/acme/beacon/issues/37",
     title: "#37 Dark-mode toggle flickers on first paint",
@@ -727,7 +696,6 @@ const workItems: WorkItem[] = [
   {
     id: "ws-issue-29",
     project_id: "p-beacon",
-    source: "issue",
     issue_number: 29,
     issue_url: "https://github.com/acme/beacon/issues/29",
     title: "#29 Rate limiter rejects valid bursts",
@@ -741,7 +709,6 @@ const workItems: WorkItem[] = [
   {
     id: "ws-issue-64",
     project_id: "p-beacon",
-    source: "issue",
     issue_number: 64,
     issue_url: "https://github.com/acme/beacon/issues/64",
     title: "#64 Audit-log filters reset after refresh",
@@ -754,7 +721,6 @@ const workItems: WorkItem[] = [
   {
     id: "ws-issue-18",
     project_id: "p-beacon",
-    source: "issue",
     issue_number: 18,
     issue_url: "https://github.com/acme/beacon/issues/18",
     title: "#18 Typo in onboarding email subject",
@@ -767,7 +733,6 @@ const workItems: WorkItem[] = [
   {
     id: "ws-issue-12",
     project_id: "p-beacon",
-    source: "issue",
     issue_number: 12,
     issue_url: "https://github.com/acme/beacon/issues/12",
     title: "#12 Investigate flaky upload test",
@@ -780,7 +745,7 @@ const workItems: WorkItem[] = [
 ];
 
 for (const item of workItems) {
-  if (item.project_id === "p-beacon" && item.source === "issue") {
+  if (item.project_id === "p-beacon" && item.issue_number) {
     item.workstream_id = "stream-beacon-issues";
     item.repo = "https://github.com/acme/beacon.git";
   }
@@ -1592,13 +1557,6 @@ export const api = {
     decision.status = "needs_clarification";
     decision.can_reopen = false;
     ledger.counts.reopenable = ledger.decisions.filter((d) => d.can_reopen).length;
-    const parked = workItems.filter(
-      (w) => w.project_id === projectId && (w.source ?? "manual") === "manual" && w.status === "active",
-    );
-    for (const item of parked) {
-      item.status = "parked";
-      item.parked_reason = `decision ${decision.id} re-opened`;
-    }
     const question: Question = {
       id: `q-decision-${decision.id.toLowerCase()}`,
       project_id: projectId,
@@ -1613,7 +1571,7 @@ export const api = {
     return structuredClone({
       decision,
       question,
-      parked_workstream_ids: parked.map((w) => w.id),
+      parked_workstream_ids: [],
       commit: "mock",
     });
   },
@@ -1736,7 +1694,7 @@ export const api = {
     return structuredClone(project);
   },
 
-  updateWorkstream: async (projectId: string, workstreamId: string, patch: WorkstreamPatch): Promise<Workstream> => {
+  updateWorkstream: async (projectId: string, workstreamId: string, patch: ProjectWorkstreamPatch): Promise<ProjectWorkstream> => {
     const workstream = projectWorkstreams.find((w) => w.project_id === projectId && w.id === workstreamId);
     if (!workstream) throw new Error("not found");
     if (patch.title !== undefined) workstream.title = patch.title;
@@ -1767,7 +1725,7 @@ export const api = {
     if (!project) throw new Error("not found");
     if (!project.spec_repo.trim()) throw new Error("spec_repo required");
     const open = workItems.filter(
-      (w) => w.project_id === id && w.source === "issue" && w.status !== "done" && w.status !== "cancelled",
+      (w) => w.project_id === id && w.issue_number && w.status !== "done" && w.status !== "cancelled",
     );
     const run = {
       id: `run-${Date.now()}`,
@@ -1810,7 +1768,7 @@ export const api = {
 
   syncIssues: async (id: string): Promise<ScanResult> => {
     const open = workItems.filter(
-      (w) => w.project_id === id && w.source === "issue" && w.status !== "done" && w.status !== "cancelled",
+      (w) => w.project_id === id && w.issue_number && w.status !== "done" && w.status !== "cancelled",
     );
     return {
       open_issues: open.length,
@@ -1827,7 +1785,7 @@ export const api = {
     body: { scope: "selected" | "all_open_now" | "scan_only"; issue_numbers?: number[] },
   ) => {
     const open = workItems.filter(
-      (w) => w.project_id === id && w.source === "issue" && w.status !== "done" && w.status !== "cancelled",
+      (w) => w.project_id === id && w.issue_number && w.status !== "done" && w.status !== "cancelled",
     );
     const issueNumbers = body.scope === "selected"
       ? body.issue_numbers || []

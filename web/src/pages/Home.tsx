@@ -87,10 +87,9 @@ function ProjectRow({
 }) {
   const { counts } = p;
   const bits = [
-    `${counts.active} active`,
     counts.running ? `${counts.running} running` : null,
-    counts.blockers ? `${counts.blockers} blockers` : null,
-    `${counts.streams} streams`,
+    counts.blockers ? `${counts.blockers} blocked` : null,
+    counts.questions ? `${counts.questions} questions` : null,
   ].filter(Boolean);
   return (
     <article className="home-project">

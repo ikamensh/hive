@@ -9,7 +9,7 @@ import type {
   TestEpisode,
   TestabilityView,
   TestingHealth,
-  Workstream,
+  ProjectWorkstream,
 } from "../../types";
 
 const STORY_GROUPS: { label: string; statuses: Story["status"][] }[] = [
@@ -29,7 +29,7 @@ export function TestingToolbar({
   onChanged,
 }: {
   project: Project;
-  testingStreams: Workstream[];
+  testingStreams: ProjectWorkstream[];
   selectedStreamId: string;
   onSelectedStream: (id: string) => void;
   selectedStoryKeys: string[];
@@ -173,7 +173,7 @@ export function TestabilityPanel({
   onChanged,
 }: {
   project: Project;
-  stream?: Workstream;
+  stream?: ProjectWorkstream;
   view?: TestabilityView;
   decisions: Question[];
   onChanged: () => void;

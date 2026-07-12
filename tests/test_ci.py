@@ -17,9 +17,8 @@ from hive.models import (
     Project,
     Task,
     TaskKind,
-    Workstream,
-    WorkstreamSource,
-    WorkstreamStatus,
+    IssueItem,
+    IssueItemStatus,
 )
 from hive.persistence.store import MemoryStore
 from hive._workstreams.ci import (
@@ -110,9 +109,9 @@ def test_red_ci_files_issue_and_queues_a_resolve(monkeypatch):
     assert result.filed_issue == 99 and not result.already_filed
     assert result.resolve_queued == 1
     # The CI failure is now an ordinary issue work item driven by the same pipeline.
-    items = [w for w in store.list(Workstream, project_id=project.id) if w.source == WorkstreamSource.issue]
+    items = [w for w in store.list(IssueItem, project_id=project.id) if w.issue_number]
     assert [w.issue_number for w in items] == [99]
-    assert items[0].status == WorkstreamStatus.resolving
+    assert items[0].status == IssueItemStatus.resolving
     resolve = [t for t in store.list(Task, project_id=project.id) if t.kind == TaskKind.resolve]
     assert len(resolve) == 1
     assert resolve[0].issue_number == 99 and resolve[0].branch == "hive/issue-99"
@@ -135,7 +134,7 @@ def test_red_ci_does_not_refile_same_commit(monkeypatch):
     result = check_and_autofix(store, project, ws, "tok", issue_backend="codex")
 
     assert result.already_filed and result.filed_issue == 42
-    items = [w for w in store.list(Workstream, project_id=project.id) if w.source == WorkstreamSource.issue]
+    items = [w for w in store.list(IssueItem, project_id=project.id) if w.issue_number]
     assert [w.issue_number for w in items] == [42]  # the existing issue, ingested once
 
 
@@ -163,7 +162,7 @@ def test_green_ci_files_nothing(monkeypatch):
     result = check_and_autofix(store, project, ws, "tok")
 
     assert result.conclusion == CiConclusion.passing and result.filed_issue == 0
-    assert not [w for w in store.list(Workstream, project_id=project.id) if w.source == WorkstreamSource.issue]
+    assert not [w for w in store.list(IssueItem, project_id=project.id) if w.issue_number]
 
 
 # -- supervisor gating -------------------------------------------------------

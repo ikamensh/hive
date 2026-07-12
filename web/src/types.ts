@@ -54,14 +54,14 @@ export interface Project {
   created_at: number;
 }
 
-export type WorkstreamKind = "iteration" | "github_issues" | "testing";
+export type ProjectWorkstreamKind = "iteration" | "github_issues" | "testing";
 export type ProjectWorkstreamStatus = "idle" | "active" | "blocked" | "disabled";
 
-export interface Workstream {
+export interface ProjectWorkstream {
   id: string;
   workspace_id?: string;
   project_id: string;
-  kind: WorkstreamKind;
+  kind: ProjectWorkstreamKind;
   title: string;
   repo: string;
   source_ref: Record<string, unknown>;
@@ -72,25 +72,23 @@ export interface Workstream {
   updated_at: number;
 }
 
-export interface WorkstreamPatch {
+export interface ProjectWorkstreamPatch {
   title?: string;
   enabled?: boolean;
   config?: Record<string, unknown>;
 }
 
-/** Iteration work items plus the issue-solving per-issue lifecycle. */
-export type WorkItemStatus =
-  | "active"
+/** The issue-solving per-issue lifecycle (resolve -> review -> merge). */
+export type IssueItemStatus =
   | "queued"
-  | "parked"
-  | "done"
   | "resolving"
   | "blocked_clarity"
   | "reviewing"
   | "rejected"
+  | "done"
   | "cancelled";
 
-export interface WorkItem {
+export interface IssueItem {
   id: string;
   workspace_id?: string;
   project_id: string;
@@ -98,10 +96,8 @@ export interface WorkItem {
   repo?: string;
   title: string;
   description: string;
-  status: WorkItemStatus;
+  status: IssueItemStatus;
   parked_reason: string;
-  // Issue solving: each work item tracks one GitHub issue.
-  source?: "manual" | "issue";
   issue_number?: number;
   issue_url?: string;
   order?: number;
@@ -294,8 +290,8 @@ export interface ProjectDetail {
   project: Project;
   testing_health?: Record<string, TestingHealth>;
   testability?: Record<string, TestabilityView>;
-  workstreams: Workstream[];
-  work_items: WorkItem[];
+  workstreams: ProjectWorkstream[];
+  work_items: IssueItem[];
   tasks: Task[];
   questions: Question[];
   human_todos: HumanTodo[];
@@ -681,11 +677,9 @@ export interface OverviewProject {
   daily_budget_usd: number;
   spend_today: number;
   counts: {
-    active: number;
     running: number;
     questions: number;
     blockers: number;
-    streams: number;
   };
 }
 

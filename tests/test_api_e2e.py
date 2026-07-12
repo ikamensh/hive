@@ -36,8 +36,8 @@ from hive.models import (
     TaskKind,
     TaskStatus,
     Verdict,
-    Workstream,
-    WorkstreamStatus,
+    IssueItem,
+    IssueItemStatus,
 )
 from hive._control.orchestrator import Orchestrator, Tools
 from hive._workstreams import plans
@@ -390,7 +390,8 @@ def test_project_payload_includes_decision_ledger(harness, tmp_path):
 
 def test_reopen_hive_assumption_creates_question_and_parks_work(harness, tmp_path):
     """Re-opening an agent-proposed ledger entry turns it back into an inbox
-    question and stops active manual work that may depend on the assumption."""
+    question; execution pipelines park through their own states, so no work
+    rows are touched."""
     client, store, _orch = harness
     origin = _spec_origin(
         tmp_path,
@@ -409,14 +410,6 @@ def test_reopen_hive_assumption_creates_question_and_parks_work(harness, tmp_pat
         },
     )
     project = store.put(Project(name="ledger", spec_repo=str(origin)))
-    work = store.put(
-        Workstream(
-            project_id=project.id,
-            title="build retries",
-            description="depends on retry policy",
-            status=WorkstreamStatus.active,
-        )
-    )
 
     assert client.get(f"/api/projects/{project.id}").json()["decision_ledger"]["counts"]["reopenable"] == 1
     result = client.post(f"/api/projects/{project.id}/decisions/D-002/reopen", json={}).json()
@@ -424,10 +417,7 @@ def test_reopen_hive_assumption_creates_question_and_parks_work(harness, tmp_pat
     assert result["decision"]["status"] == "needs_clarification"
     assert result["question"]["status"] == "open"
     assert "Retry failed webhooks for 24 hours" in result["question"]["text"]
-    assert result["parked_workstream_ids"] == [work.id]
-    saved_work = store.get(Workstream, work.id)
-    assert saved_work.status == WorkstreamStatus.parked
-    assert "D-002" in saved_work.parked_reason
+    assert result["parked_workstream_ids"] == []
     detail = client.get(f"/api/projects/{project.id}").json()
     assert detail["decision_ledger"]["decisions"][0]["status"] == "needs_clarification"
 
@@ -622,7 +612,7 @@ def test_human_todo_tool_and_api(harness):
 def test_duplicate_task_result_is_ignored(harness):
     client, store, _orch = harness
     project = store.put(Project(name="duplicate-result", spec_repo="https://example.com/spec.git"))
-    ws = store.put(Workstream(project_id=project.id, title="build"))
+    ws = store.put(IssueItem(project_id=project.id, title="build"))
     rid = _register_usable_runner(client, name="dup-runner")
     resource = store.list(Resource)[0]
     task = store.put(
@@ -663,17 +653,17 @@ def test_duplicate_task_result_is_ignored(harness):
     assert updated.last_exhaustion_text == ""
 
 
-def test_structured_verify_result_sets_verdict_without_marker(harness):
+def test_structured_review_result_sets_verdict_without_marker(harness):
     client, store, _orch = harness
-    project = store.put(Project(name="structured-verify", spec_repo="https://example.com/spec.git"))
-    ws = store.put(Workstream(project_id=project.id, title="build"))
+    project = store.put(Project(name="structured-review", spec_repo="https://example.com/spec.git"))
+    ws = store.put(IssueItem(project_id=project.id, title="#1 build", issue_number=1))
     task = store.put(
         Task(
             project_id=project.id,
             workstream_id=ws.id,
             repo="https://example.com/app.git",
-            instructions="verify feature",
-            kind=TaskKind.verify,
+            instructions="review the fix",
+            kind=TaskKind.review,
             status=TaskStatus.running,
         )
     )
@@ -685,8 +675,7 @@ def test_structured_verify_result_sets_verdict_without_marker(harness):
             "structured_result": {
                 "task_id": task.id,
                 "outcome": "accept",
-                "acceptance_checked": ["feature works"],
-                "commands_run": ["pytest"],
+                "tests_run": ["pytest"],
             },
         },
         headers=RUNNER_HEADERS,
@@ -712,7 +701,7 @@ def test_codex_quota_exhaustion_blocks_project(harness):
     pid = project["id"]
     rid = _register_usable_runner(client, name="codex-runner", backend="codex")
 
-    ws = store.put(Workstream(project_id=pid, title="build"))
+    ws = store.put(IssueItem(project_id=pid, title="build"))
     task = store.put(
         Task(
             project_id=pid,
@@ -1008,7 +997,7 @@ def test_dismiss_question_wakes(harness):
 def test_trace_roundtrip(harness):
     client, store, _orch = harness
     pid = client.post("/api/projects", json={"name": "t"}).json()["id"]
-    ws = store.put(Workstream(project_id=pid, title="w"))
+    ws = store.put(IssueItem(project_id=pid, title="w"))
     task = store.put(Task(project_id=pid, workstream_id=ws.id, repo="r", instructions="i",
                           status=TaskStatus.running))
     trace = b'{"event":"run_init"}\n{"event":"agent_run_end","cost_usd":0.1}\n'
@@ -1502,7 +1491,7 @@ def test_fleet_pause_gates_dispatch_until_resume(harness):
     releases exactly the same queued task on the next pump."""
     client, store, _ = harness
     project = store.put(Project(name="demo", spec_repo="https://example.com/s.git"))
-    ws = store.put(Workstream(project_id=project.id, title="w"))
+    ws = store.put(IssueItem(project_id=project.id, title="w"))
     rid = _register_usable_runner(client)
     store.put(
         Task(

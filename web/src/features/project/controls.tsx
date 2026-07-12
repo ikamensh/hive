@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { repoShort } from "../../api";
 import { RepoListEditor } from "../../components/RepoPicker";
 import { AUTONOMY_OPTIONS, Markdown, SegPicker } from "../../components/shared";
-import type { AgentGrant, Allowance, Project, ProjectPatch, WorkItem, Workstream } from "../../types";
+import type { AgentGrant, Allowance, Project, ProjectPatch, ProjectWorkstream } from "../../types";
 
 type ProjectPatchHandler = (p: ProjectPatch) => void | Promise<void>;
 
@@ -476,7 +476,7 @@ export function ProjectSettings({
 }: {
   project: Project;
   onPatch: ProjectPatchHandler;
-  workstreams: Workstream[];
+  workstreams: ProjectWorkstream[];
   allowance?: Allowance;
   onPatchWorkstream: (workstreamId: string, patch: { enabled?: boolean }) => Promise<void>;
 }) {
@@ -661,15 +661,3 @@ export function GoalBanner({ project, onPatch }: { project: Project; onPatch: (p
   );
 }
 
-export function WorkstreamCard({ ws }: { ws: WorkItem }) {
-  return (
-    <article className={`ws-card ws-${ws.status}`}>
-      <header>
-        <h3>{ws.title}</h3>
-        <span className={`chip chip-${ws.status}`}>{ws.status}</span>
-      </header>
-      {ws.description && <p>{ws.description}</p>}
-      {ws.status === "parked" && ws.parked_reason && <p className="parked-reason">{ws.parked_reason}</p>}
-    </article>
-  );
-}

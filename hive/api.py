@@ -124,9 +124,8 @@ from hive.models import (
     TestEpisode,
     TestEpisodeScope,
     TestEpisodeStatus,
-    Workstream,
-    WorkstreamSource,
-    WorkstreamStatus,
+    IssueItem,
+    IssueItemStatus,
 )
 from hive.config.storage import storage_info
 from hive._control.capacity import (
@@ -439,15 +438,15 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         notes, open_count, downloaded, failed = sync_issue_workstream(project, workstream)
         open_items = [
             w
-            for w in store.list(Workstream, project_id=project.id)
-            if w.source == WorkstreamSource.issue
+            for w in store.list(IssueItem, project_id=project.id)
+            if w.issue_number
             and w.workstream_id == workstream.id
             and w.issue_number
         ]
         open_numbers = {
             w.issue_number
             for w in open_items
-            if w.status not in (WorkstreamStatus.done, WorkstreamStatus.cancelled)
+            if w.status not in (IssueItemStatus.done, IssueItemStatus.cancelled)
         }
         if body.scope == IssueRunScope.selected:
             selected = [n for n in dict.fromkeys(body.issue_numbers) if n in open_numbers]
@@ -1444,7 +1443,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     @app.get("/api/projects/{project_id}")
     def get_project(project_id: str, ctx: AuthContext = Depends(current)):
         project = refresh_project_state_for_view(require_project(project_id, ctx))
-        work_items = store.list(Workstream, workspace_id=ctx.workspace_id, project_id=project_id)
+        work_items = store.list(IssueItem, workspace_id=ctx.workspace_id, project_id=project_id)
         human_todos = [
             t.model_dump()
             for t in store.list(HumanTask, workspace_id=ctx.workspace_id, project_id=project_id)
@@ -1677,7 +1676,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             if not updates["name"]:
                 raise HTTPException(400, "name cannot be empty")
         if "spec_repo" in updates and not updates["spec_repo"].strip():
-            if store.list(Workstream, workspace_id=ctx.workspace_id, project_id=project_id):
+            if store.list(IssueItem, workspace_id=ctx.workspace_id, project_id=project_id):
                 raise HTTPException(400, "cannot clear spec_repo after work has started")
         for key, value in updates.items():
             setattr(project, key, value)

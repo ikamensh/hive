@@ -1,7 +1,6 @@
 import type { ProjectDetail, ResourcesPayload } from "../../types";
 
 const TEST_TASK_KINDS = new Set(["test_refresh", "test_sweep", "test_reproduce", "test_judge"]);
-const MANUAL_WORK_ORDER: Record<string, number> = { active: 0, parked: 1, done: 2 };
 
 export function projectViewModel(
   data: ProjectDetail,
@@ -27,11 +26,8 @@ export function projectViewModel(
   const activeIssueStream = issueStreams.find((w) => w.id === selections.issueStreamId) ?? issueStreams[0];
   const testingStreams = workstreams.filter((w) => w.kind === "testing");
   const activeTestingStream = testingStreams.find((w) => w.id === selections.testingStreamId) ?? testingStreams[0];
-  const manualWorkItems = work_items
-    .filter((w) => (w.source ?? "manual") !== "issue")
-    .sort((a, b) => (MANUAL_WORK_ORDER[a.status] ?? 9) - (MANUAL_WORK_ORDER[b.status] ?? 9));
   const issueWorkItems = work_items.filter((w) =>
-    w.source === "issue" && (!activeIssueStream || !w.workstream_id || w.workstream_id === activeIssueStream.id)
+    w.issue_number && (!activeIssueStream || !w.workstream_id || w.workstream_id === activeIssueStream.id)
   );
   const issueRuns = issue_runs.filter((run) =>
     !activeIssueStream || run.workstream_id === activeIssueStream.id
@@ -57,7 +53,7 @@ export function projectViewModel(
   const inboxCount = openQs.length + openTodos.length + issueNeeds.length;
   const nonIntakeTasks = tasks.filter((t) => !["intake", "probe", "preflight", "resolve", "review"].includes(t.kind));
   const intakeDone = intakeConversation?.status === "done";
-  const hasProjectWork = manualWorkItems.length > 0 || issueWorkItems.length > 0 || testingStories.length > 0 || nonIntakeTasks.length > 0;
+  const hasProjectWork = issueWorkItems.length > 0 || testingStories.length > 0 || nonIntakeTasks.length > 0;
   const needsSetup = !configured || (!hasProjectWork && !intakeDone);
   // Backends Hive trusts to run intake, in auto-pick preference order (mirror of
   // the chief's TRUSTED_SCOUTS). Setup only needs a yes/no readiness
@@ -91,7 +87,6 @@ export function projectViewModel(
     testingEpisodes,
     testingActivityVersion,
     testingNeeds,
-    manualWorkItems,
     inboxCount,
     needsSetup,
     availableScoutBackends,

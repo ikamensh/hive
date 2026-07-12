@@ -20,9 +20,8 @@ from hive.models import (
     Runner,
     Task,
     TaskStatus,
-    Workstream,
-    WorkstreamSource,
-    WorkstreamStatus,
+    IssueItem,
+    IssueItemStatus,
 )
 from hive.persistence.store import MemoryStore
 
@@ -61,14 +60,12 @@ def test_totals_agree_with_rows_and_records():
     live = store.put(Project(workspace_id=WS, name="atlas", daily_budget_usd=40))
     store.put(Project(workspace_id=WS, name="ghost", archived=True))
 
-    store.put(Workstream(workspace_id=WS, project_id=live.id, title="build a", status=WorkstreamStatus.active))
     store.put(
-        Workstream(
+        IssueItem(
             workspace_id=WS,
             project_id=live.id,
             title="issue 7",
-            source=WorkstreamSource.issue,
-            status=WorkstreamStatus.blocked_clarity,
+            status=IssueItemStatus.blocked_clarity,
         )
     )
     store.put(
@@ -91,7 +88,7 @@ def test_totals_agree_with_rows_and_records():
     # Archived projects never reach the dashboard.
     assert [p["name"] for p in ov["projects"]] == ["atlas"]
     row = ov["projects"][0]
-    assert row["counts"] == {"active": 1, "running": 1, "questions": 1, "blockers": 1, "streams": 0}
+    assert row["counts"] == {"running": 1, "questions": 1, "blockers": 1}
     assert row["spend_today"] == 5.0
 
     totals = ov["totals"]

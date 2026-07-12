@@ -25,8 +25,8 @@ from hive.models import (
     TaskKind,
     TaskStatus,
     Verdict,
-    Workstream,
-    WorkstreamStatus,
+    IssueItem,
+    IssueItemStatus,
 )
 from hive.persistence.store import MemoryStore
 from hive._control.supervisor import Supervisor, compute_state
@@ -72,6 +72,8 @@ def seed(store, *, with_runner=True) -> Project:
 
 
 def test_goal_complete_only_when_project_is_quiescent_and_verified():
+    """goal_complete is trustworthy (mark_goal_complete gates on a complete
+    plan), but live work or open questions still outrank the idle badge."""
     p = Project(name="p", spec_repo="x", goal_complete=True)
     assert compute_state(p, [], 0, [], set()) == ProjectState.idle_goal_complete
 
@@ -84,30 +86,8 @@ def test_goal_complete_only_when_project_is_quiescent_and_verified():
 
     assert compute_state(p, [], 1, [], set()) == ProjectState.needs_attention
 
-    done_ws = Workstream(project_id=p.id, title="done", status=WorkstreamStatus.done)
-    assert compute_state(p, [done_ws], 0, [], set()) == ProjectState.idle
-
-    rejected_verify = Task(
-        project_id=p.id,
-        workstream_id=done_ws.id,
-        repo="r",
-        instructions="i",
-        kind=TaskKind.verify,
-        status=TaskStatus.done,
-        verdict=Verdict.reject,
-    )
-    assert compute_state(p, [done_ws], 0, [rejected_verify], set()) == ProjectState.idle
-
-    accepted_verify = Task(
-        project_id=p.id,
-        workstream_id=done_ws.id,
-        repo="r",
-        instructions="i",
-        kind=TaskKind.verify,
-        status=TaskStatus.done,
-        verdict=Verdict.accept,
-    )
-    assert compute_state(p, [done_ws], 0, [accepted_verify], set()) == ProjectState.idle_goal_complete
+    done_item = IssueItem(project_id=p.id, title="done", status=IssueItemStatus.done)
+    assert compute_state(p, [done_item], 0, [], set()) == ProjectState.idle_goal_complete
 
 
 def test_plan_states_surface_as_attention_or_work():
@@ -162,15 +142,11 @@ def test_pending_over_budget_is_blocked_budget():
     assert compute_state(p, [], 0, [t], {"cursor"}, over_budget=True) == ProjectState.blocked_budget
 
 
-def test_questions_block_only_when_nothing_active():
+def test_questions_and_blocked_issues_need_attention():
     p = Project(name="p", spec_repo="x")
-    active = Workstream(project_id=p.id, title="a")
-    parked = Workstream(project_id=p.id, title="b", status=WorkstreamStatus.parked)
-    assert compute_state(p, [parked], 2, [], set()) == ProjectState.needs_attention
-    # An active workstream means the orchestrator owes a decision: still working.
-    assert compute_state(p, [active, parked], 2, [], set()) == ProjectState.working
-    # ...unless the daily budget is spent.
-    assert compute_state(p, [active], 0, [], set(), over_budget=True) == ProjectState.blocked_budget
+    blocked = IssueItem(project_id=p.id, title="b", status=IssueItemStatus.blocked_clarity)
+    assert compute_state(p, [], 2, [], set()) == ProjectState.needs_attention
+    assert compute_state(p, [blocked], 0, [], set()) == ProjectState.needs_attention
 
 
 def test_no_workstreams_is_idle():
@@ -208,7 +184,7 @@ def test_supervisor_does_not_fetch_empty_intake_conversation_id():
 def test_dispatch_serializes_per_repo():
     store = MemoryStore()
     project = seed(store)
-    ws = store.put(Workstream(project_id=project.id, title="w"))
+    ws = store.put(IssueItem(project_id=project.id, title="w"))
     for i in range(3):
         store.put(Task(project_id=project.id, workstream_id=ws.id,
                        repo="https://example.com/app.git", instructions=f"t{i}"))
@@ -224,7 +200,7 @@ def test_concurrent_dispatch_still_serializes_per_repo():
     runner = store.put(Runner(name="r2", backends=["cursor"]))
     store.put(Resource(runner_id=runner.id, backend="cursor",
                        usability_status=ResourceUsability.usable))
-    ws = store.put(Workstream(project_id=project.id, title="w"))
+    ws = store.put(IssueItem(project_id=project.id, title="w"))
     for i in range(2):
         store.put(Task(project_id=project.id, workstream_id=ws.id,
                        repo="https://example.com/app.git", instructions=f"t{i}"))
@@ -245,7 +221,7 @@ def test_dispatch_parallel_across_repos():
     runner = store.put(Runner(name="r2", backends=["cursor"]))
     store.put(Resource(runner_id=runner.id, backend="cursor",
                        usability_status=ResourceUsability.usable))
-    ws = store.put(Workstream(project_id=project.id, title="w"))
+    ws = store.put(IssueItem(project_id=project.id, title="w"))
     store.put(Task(project_id=project.id, workstream_id=ws.id, repo="repo-a", instructions="a"))
     store.put(Task(project_id=project.id, workstream_id=ws.id, repo="repo-b", instructions="b"))
     sup = make_supervisor(store)
@@ -255,7 +231,7 @@ def test_dispatch_parallel_across_repos():
 def test_dispatch_limits_parallel_test_tasks_to_runner_capacity():
     store = MemoryStore()
     project = seed(store)
-    ws = store.put(Workstream(project_id=project.id, title="w"))
+    ws = store.put(IssueItem(project_id=project.id, title="w"))
     for i in range(3):
         store.put(
             Task(
@@ -283,7 +259,7 @@ def test_dispatch_requires_backend_and_resource():
     store = MemoryStore()
     project = seed(store, with_runner=False)
     runner = store.put(Runner(name="r", backends=["claude"]))  # no resource row
-    ws = store.put(Workstream(project_id=project.id, title="w"))
+    ws = store.put(IssueItem(project_id=project.id, title="w"))
     store.put(Task(project_id=project.id, workstream_id=ws.id, repo="r",
                    instructions="i", backend="claude"))
     sup = make_supervisor(store)
@@ -300,7 +276,7 @@ def test_cooldown_resource_not_used():
     store.put(Resource(runner_id=runner.id, backend="cursor",
                        usability_status=ResourceUsability.usable,
                        cooldown_until=time.time() + 3600))
-    ws = store.put(Workstream(project_id=project.id, title="w"))
+    ws = store.put(IssueItem(project_id=project.id, title="w"))
     store.put(Task(project_id=project.id, workstream_id=ws.id, repo="r", instructions="i"))
     sup = make_supervisor(store)
     assert sup.dispatch(project) == 0
@@ -327,7 +303,7 @@ def test_over_budget_blocks_dispatch_and_state():
     project = seed(store, with_runner=True)
     project.daily_budget_usd = 1.0
     store.put(project)
-    ws = store.put(Workstream(project_id=project.id, title="w"))
+    ws = store.put(IssueItem(project_id=project.id, title="w"))
     # A task already finished today blew past the cap.
     store.put(Task(project_id=project.id, workstream_id=ws.id, repo="r-done", instructions="i",
                    status=TaskStatus.done, cost_usd=2.0, finished_at=time.time()))
@@ -373,7 +349,7 @@ def test_orphaned_task_fails_when_runner_vanishes(caplog):
     runner = store.list(Runner)[0]
     runner.last_seen = time.time() - 9999
     store.put(runner)
-    ws = store.put(Workstream(project_id=project.id, title="w"))
+    ws = store.put(IssueItem(project_id=project.id, title="w"))
     task = store.put(Task(project_id=project.id, workstream_id=ws.id, repo="r",
                           instructions="i", status=TaskStatus.running, runner_id=runner.id))
     sup = make_supervisor(store)
@@ -459,9 +435,9 @@ def test_dispatch_counts_running_tasks_across_projects():
     runner2 = store.put(Runner(name="r2", backends=["cursor"]))
     store.put(Resource(runner_id=runner2.id, backend="cursor",
                        usability_status=ResourceUsability.usable))
-    ws_a = store.put(Workstream(project_id=project_a.id, title="a"))
+    ws_a = store.put(IssueItem(project_id=project_a.id, title="a"))
     project_b = store.put(Project(name="q", spec_repo="https://example.com/other.git"))
-    ws_b = store.put(Workstream(project_id=project_b.id, title="b"))
+    ws_b = store.put(IssueItem(project_id=project_b.id, title="b"))
 
     sup = make_supervisor(store)
     store.put(Task(project_id=project_a.id, workstream_id=ws_a.id,
@@ -478,7 +454,7 @@ def test_dispatch_counts_running_tasks_across_projects():
 
     # With every runner busy, a third task waits instead of stacking.
     project_c = store.put(Project(name="r", spec_repo="https://example.com/third.git"))
-    ws_c = store.put(Workstream(project_id=project_c.id, title="c"))
+    ws_c = store.put(IssueItem(project_id=project_c.id, title="c"))
     store.put(Task(project_id=project_c.id, workstream_id=ws_c.id,
                    repo="repo-c", instructions="c"))
     assert sup.dispatch(project_c) == 0

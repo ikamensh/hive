@@ -8,16 +8,16 @@ import type {
   IssueRun,
   Project,
   ScanResult,
-  WorkItem,
-  WorkItemStatus,
-  Workstream,
+  IssueItem,
+  IssueItemStatus,
+  ProjectWorkstream,
 } from "../../types";
 import { CheckList, checksFromError, PreflightSummary } from "./preflight";
 
 const ACTIVE_ISSUE_RUN_STATUSES = new Set<IssueRun["status"]>(["scanning", "queued", "running", "blocked"]);
 
 /** Derive the issue's branch tree URL from its issue URL (`.../issues/42` to `.../tree/hive/issue-42`). */
-function issueBranchUrl(ws: WorkItem): string | null {
+function issueBranchUrl(ws: IssueItem): string | null {
   if (!ws.issue_url || ws.issue_number === undefined) return null;
   return ws.issue_url.replace(/\/issues\/\d+.*$/, `/tree/hive/issue-${ws.issue_number}`);
 }
@@ -32,7 +32,7 @@ export function IssuesToolbar({
   onChanged,
 }: {
   project: Project;
-  issueStreams: Workstream[];
+  issueStreams: ProjectWorkstream[];
   selectedStreamId: string;
   onSelectedStream: (id: string) => void;
   selectedNumbers: number[];
@@ -270,7 +270,7 @@ export function IssuesToolbar({
   );
 }
 
-export function IssueCard({ ws }: { ws: WorkItem }) {
+export function IssueCard({ ws }: { ws: IssueItem }) {
   const [open, setOpen] = useState(false);
   const branch = issueBranchUrl(ws);
   return (
@@ -304,15 +304,15 @@ export function IssueCard({ ws }: { ws: WorkItem }) {
   );
 }
 
-const ISSUE_GROUPS: { label: string; statuses: WorkItemStatus[] }[] = [
+const ISSUE_GROUPS: { label: string; statuses: IssueItemStatus[] }[] = [
   { label: "ready", statuses: ["queued"] },
   { label: "running", statuses: ["resolving", "reviewing"] },
   { label: "needs you", statuses: ["blocked_clarity", "rejected"] },
   { label: "done", statuses: ["done", "cancelled"] },
 ];
 
-function issueSort(group: { statuses: WorkItemStatus[] }) {
-  return (a: WorkItem, b: WorkItem) => {
+function issueSort(group: { statuses: IssueItemStatus[] }) {
+  return (a: IssueItem, b: IssueItem) => {
     if (group.statuses.includes("queued")) {
       return (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) ||
         (a.issue_number ?? 0) - (b.issue_number ?? 0) ||
@@ -327,13 +327,13 @@ export function IssuesView({
   selectedNumbers,
   onToggle,
 }: {
-  workItems: WorkItem[];
+  workItems: IssueItem[];
   selectedNumbers: number[];
   onToggle: (issueNumber: number) => void;
 }) {
   const [filter, setFilter] = useState("ready");
   const [openIssue, setOpenIssue] = useState<number | null>(null);
-  const issues = workItems.filter((w) => w.source === "issue");
+  const issues = workItems.filter((w) => w.issue_number);
   const group = ISSUE_GROUPS.find((g) => g.label === filter) ?? ISSUE_GROUPS[0];
   const items = issues
     .filter((w) => group.statuses.includes(w.status))

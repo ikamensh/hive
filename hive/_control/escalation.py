@@ -45,8 +45,8 @@ from hive.models import (
     StoryStatus,
     Task,
     TaskStatus,
-    Workstream,
-    WorkstreamStatus,
+    IssueItem,
+    IssueItemStatus,
 )
 
 log = logging.getLogger("hive._control.escalation")
@@ -187,10 +187,10 @@ def _finding_decided(store, todo: HumanTask) -> str:
 
 
 def _workstream_done(store, todo: HumanTask) -> str:
-    ws = store.get(Workstream, todo.resolution.get("workstream_id", ""))
+    ws = store.get(IssueItem, todo.resolution.get("workstream_id", ""))
     if ws is None:
         return "the work item no longer exists"
-    if ws.status == WorkstreamStatus.done:
+    if ws.status == IssueItemStatus.done:
         return "the work item landed"
     return ""
 

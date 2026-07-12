@@ -33,9 +33,8 @@ from hive.models import (
     Task,
     TaskKind,
     TaskStatus,
-    Workstream,
-    WorkstreamSource,
-    WorkstreamStatus,
+    IssueItem,
+    IssueItemStatus,
 )
 from hive._control.orchestrator import Tools
 from hive.persistence.store import MemoryStore
@@ -46,7 +45,7 @@ from tests.test_api_e2e import RUNNER_HEADERS, _pump, _register_usable_runner
 def _age_items(store, project, seconds=600):
     """Push work items past the list-lag grace so absence from the open set
     counts as an external close (reconcile protects just-filed issues)."""
-    for w in store.list(Workstream, project_id=project.id):
+    for w in store.list(IssueItem, project_id=project.id):
         w.created_at -= seconds
         store.put(w)
 
@@ -74,9 +73,9 @@ def test_reconcile_ingests_as_queued():
     store = MemoryStore()
     project = issues_project(store)
     reconcile(store, project, [issue(7), issue(3, attachments=["http://x/a.png"])])
-    ws = {w.issue_number: w for w in store.list(Workstream, project_id=project.id)}
-    assert {w.status for w in ws.values()} == {WorkstreamStatus.queued}
-    assert all(w.source == WorkstreamSource.issue for w in ws.values())
+    ws = {w.issue_number: w for w in store.list(IssueItem, project_id=project.id)}
+    assert {w.status for w in ws.values()} == {IssueItemStatus.queued}
+    assert all(w.issue_number for w in ws.values())
     assert ws[3].issue_attachments == ["http://x/a.png"]
 
 
@@ -86,39 +85,39 @@ def test_reconcile_idempotent_and_cancels_closed():
     reconcile(store, project, [issue(1), issue(2)])
     _age_items(store, project)
     reconcile(store, project, [issue(1)])  # #2 closed on GitHub
-    ws = {w.issue_number: w for w in store.list(Workstream, project_id=project.id)}
+    ws = {w.issue_number: w for w in store.list(IssueItem, project_id=project.id)}
     assert len(ws) == 2  # no duplicates
-    assert ws[2].status == WorkstreamStatus.cancelled
+    assert ws[2].status == IssueItemStatus.cancelled
 
 
 @pytest.mark.parametrize(
     "stuck",
-    [WorkstreamStatus.blocked_clarity, WorkstreamStatus.rejected, WorkstreamStatus.resolving],
+    [IssueItemStatus.blocked_clarity, IssueItemStatus.rejected, IssueItemStatus.resolving],
 )
 def test_reconcile_regates_stuck_issue_on_rescan(stuck):
     store = MemoryStore()
     project = issues_project(store)
     reconcile(store, project, [issue(1)])
-    ws = store.list(Workstream, project_id=project.id)[0]
+    ws = store.list(IssueItem, project_id=project.id)[0]
     ws.status = stuck  # blocked/rejected, or errored mid-flight with no live task
     store.put(ws)
     reconcile(store, project, [issue(1)])  # human acted, scans again
-    assert store.get(Workstream, ws.id).status == WorkstreamStatus.queued
+    assert store.get(IssueItem, ws.id).status == IssueItemStatus.queued
 
 
 def test_reconcile_closed_landing_failure_is_done():
     store = MemoryStore()
     project = issues_project(store)
     reconcile(store, project, [issue(4)])
-    ws = store.list(Workstream, project_id=project.id)[0]
-    ws.status = WorkstreamStatus.rejected
+    ws = store.list(IssueItem, project_id=project.id)[0]
+    ws.status = IssueItemStatus.rejected
     ws.parked_reason = f"{LANDING_FAILED_PREFIX}: close issue #4 failed"
     store.put(ws)
     _age_items(store, project)
 
     notes = reconcile(store, project, [])  # issue closed on GitHub
 
-    assert store.get(Workstream, ws.id).status == WorkstreamStatus.done
+    assert store.get(IssueItem, ws.id).status == IssueItemStatus.done
     assert notes == ["marked #4 done: issue closed on GitHub after landing retry"]
 
 
@@ -134,8 +133,8 @@ def test_advance_issues_starts_one_at_a_time():
     tasks = store.list(Task, project_id=project.id)
     assert len(tasks) == 1 and tasks[0].kind == TaskKind.resolve and tasks[0].backend == "codex"
     assert tasks[0].issue_number == 1  # lowest order first
-    statuses = {w.issue_number: w.status for w in store.list(Workstream, project_id=project.id)}
-    assert statuses == {1: WorkstreamStatus.resolving, 2: WorkstreamStatus.queued}
+    statuses = {w.issue_number: w.status for w in store.list(IssueItem, project_id=project.id)}
+    assert statuses == {1: IssueItemStatus.resolving, 2: IssueItemStatus.queued}
     # a second call is a no-op while issue #1 is in flight
     assert advance_issues(store, project) == 0
     assert len(store.list(Task, project_id=project.id)) == 1
@@ -162,8 +161,8 @@ def test_selected_issue_run_starts_only_selected_issue():
     assert task.issue_number == 2
     assert task.run_id == run.id
     assert task.work_item_id == task.workstream_id
-    statuses = {w.issue_number: w.status for w in store.list(Workstream, project_id=project.id)}
-    assert statuses == {1: WorkstreamStatus.queued, 2: WorkstreamStatus.resolving}
+    statuses = {w.issue_number: w.status for w in store.list(IssueItem, project_id=project.id)}
+    assert statuses == {1: IssueItemStatus.queued, 2: IssueItemStatus.resolving}
     assert store.get(IssueRun, run.id).status == IssueRunStatus.running
 
 
@@ -245,7 +244,7 @@ def test_delete_branch_raises_on_unexpected_status(monkeypatch):
 
 
 def _ws(p, status):
-    return Workstream(project_id=p.id, title="x", status=status, source=WorkstreamSource.issue)
+    return IssueItem(project_id=p.id, title="x", status=status)
 
 
 def _task(p, backend="codex"):
@@ -256,13 +255,13 @@ def _task(p, backend="codex"):
 def test_compute_state_issue_items_are_project_attention():
     p = Project(name="p", spec_repo="x")
     # a pending resolve/review task whose backend is available → working
-    assert compute_state(p, [_ws(p, WorkstreamStatus.resolving)], 0, [_task(p)], {"codex"}) == ProjectState.working
+    assert compute_state(p, [_ws(p, IssueItemStatus.resolving)], 0, [_task(p)], {"codex"}) == ProjectState.working
     # open issue, no task in flight → waiting on a human
-    assert compute_state(p, [_ws(p, WorkstreamStatus.blocked_clarity)], 0, [], set()) == ProjectState.needs_attention
-    assert compute_state(p, [_ws(p, WorkstreamStatus.rejected)], 0, [], set()) == ProjectState.needs_attention
+    assert compute_state(p, [_ws(p, IssueItemStatus.blocked_clarity)], 0, [], set()) == ProjectState.needs_attention
+    assert compute_state(p, [_ws(p, IssueItemStatus.rejected)], 0, [], set()) == ProjectState.needs_attention
     # drained issue work does not change the project kind
-    assert compute_state(p, [_ws(p, WorkstreamStatus.done)], 0, [], set()) == ProjectState.idle
-    assert compute_state(p, [_ws(p, WorkstreamStatus.cancelled)], 0, [], set()) == ProjectState.idle
+    assert compute_state(p, [_ws(p, IssueItemStatus.done)], 0, [], set()) == ProjectState.idle
+    assert compute_state(p, [_ws(p, IssueItemStatus.cancelled)], 0, [], set()) == ProjectState.idle
 
 
 def test_planner_tool_surface_plans_only_never_executes():
@@ -379,7 +378,7 @@ def test_scan_resolve_review_accept_lands(app, monkeypatch):
     )
 
     ws_id = resolve["workstream_id"]
-    assert store.get(Workstream, ws_id).status == WorkstreamStatus.reviewing
+    assert store.get(IssueItem, ws_id).status == IssueItemStatus.reviewing
 
     _pump(client, store)
     review = _poll(client, rid)
@@ -416,7 +415,7 @@ def test_scan_resolve_review_accept_lands(app, monkeypatch):
     assert "Verified the comment includes the fix report." in merged["comment"]
     assert "OUTCOME:" not in merged["comment"]
     assert "REVIEW:" not in merged["comment"]
-    assert store.get(Workstream, ws_id).status == WorkstreamStatus.done
+    assert store.get(IssueItem, ws_id).status == IssueItemStatus.done
     # The merged work branch is cleaned up so issue branches don't pile up.
     assert merged["deleted"] == "hive/issue-1"
 
@@ -451,7 +450,7 @@ def test_strict_sequencing_starts_next_issue_only_after_landing(app, monkeypatch
     _report(client, rev1["id"], "good\nREVIEW: ACCEPT")
 
     # only now does issue #2 begin
-    assert store.get(Workstream, rev1["workstream_id"]).status == WorkstreamStatus.done
+    assert store.get(IssueItem, rev1["workstream_id"]).status == IssueItemStatus.done
     assert resolve_numbers() == [1, 2]
     _pump(client, store)
     r2 = _poll(client, rid)
@@ -482,8 +481,8 @@ def test_landing_failure_does_not_advance_to_next_issue(app, monkeypatch):
 
     tasks = store.list(Task, project_id=pid)
     assert sorted(t.issue_number for t in tasks if t.kind == TaskKind.resolve) == [1]
-    ws = store.get(Workstream, review["workstream_id"])
-    assert ws.status == WorkstreamStatus.rejected
+    ws = store.get(IssueItem, review["workstream_id"])
+    assert ws.status == IssueItemStatus.rejected
     assert ws.parked_reason.startswith(LANDING_FAILED_PREFIX)
     assert [t.title for t in store.list(HumanTask, project_id=pid)] == ["Land issue #1 failed"]
 
@@ -519,8 +518,8 @@ def test_landing_merge_conflict_queues_ai_integration_review(app, monkeypatch):
     review = _poll(client, rid)
     _report(client, review["id"], "good\nREVIEW: ACCEPT")
 
-    ws = store.get(Workstream, review["workstream_id"])
-    assert ws.status == WorkstreamStatus.reviewing
+    ws = store.get(IssueItem, review["workstream_id"])
+    assert ws.status == IssueItemStatus.reviewing
     assert not store.list(HumanTask, project_id=pid)
     reviews = [t for t in store.list(Task, project_id=pid) if t.kind == TaskKind.review]
     integration = next(t for t in reviews if t.id != review["id"])
@@ -535,7 +534,7 @@ def test_landing_merge_conflict_queues_ai_integration_review(app, monkeypatch):
 
     assert merge_calls == ["hive/issue-1", "hive/issue-1"]
     assert closed["number"] == 1
-    assert store.get(Workstream, review["workstream_id"]).status == WorkstreamStatus.done
+    assert store.get(IssueItem, review["workstream_id"]).status == IssueItemStatus.done
     assert sorted(t.issue_number for t in store.list(Task, project_id=pid) if t.kind == TaskKind.resolve) == [1, 2]
 
 
@@ -562,8 +561,8 @@ def test_landing_integration_reject_creates_human_todo(app, monkeypatch):
 
     _report(client, repair["id"], "Need a product decision about which behavior wins.\nREVIEW: REJECT")
 
-    ws = store.get(Workstream, repair["workstream_id"])
-    assert ws.status == WorkstreamStatus.rejected
+    ws = store.get(IssueItem, repair["workstream_id"])
+    assert ws.status == IssueItemStatus.rejected
     assert ws.parked_reason == f"{LANDING_FAILED_PREFIX}: integration needs human input"
     todos = store.list(HumanTask, project_id=pid)
     assert [t.title for t in todos] == ["Land issue #1 failed"]
@@ -577,12 +576,11 @@ def test_mark_landing_failure_todo_done_marks_closed_issue_done(app, monkeypatch
     monkeypatch.setattr("hive.api.issue_is_closed", lambda repo, number, token: True)
     project = store.get(Project, pid)
     ws = store.put(
-        Workstream(
+        IssueItem(
             workspace_id=project.workspace_id,
             project_id=pid,
             title="#4 settings",
-            status=WorkstreamStatus.rejected,
-            source=WorkstreamSource.issue,
+            status=IssueItemStatus.rejected,
             issue_number=4,
             parked_reason=f"{LANDING_FAILED_PREFIX}: close failed",
         )
@@ -600,7 +598,7 @@ def test_mark_landing_failure_todo_done_marks_closed_issue_done(app, monkeypatch
 
     assert resp.status_code == 200
     assert store.get(HumanTask, human.id).status == HumanTaskStatus.done
-    assert store.get(Workstream, ws.id).status == WorkstreamStatus.done
+    assert store.get(IssueItem, ws.id).status == IssueItemStatus.done
 
 
 def test_resolve_blocked_holds_issue(app, monkeypatch):
@@ -614,8 +612,8 @@ def test_resolve_blocked_holds_issue(app, monkeypatch):
     _pump(client, store)
     resolve = _poll(client, rid)
     _report(client, resolve["id"], "needs product decisions\nOUTCOME: BLOCKED")
-    ws = store.get(Workstream, resolve["workstream_id"])
-    assert ws.status == WorkstreamStatus.blocked_clarity
+    ws = store.get(IssueItem, resolve["workstream_id"])
+    assert ws.status == IssueItemStatus.blocked_clarity
     # no review task was queued
     assert not [t for t in store.list(Task, project_id=pid) if t.kind == TaskKind.review]
 
@@ -631,8 +629,8 @@ def test_cancel_pending_issue_task_requeues_issue(app, monkeypatch):
     resp = client.post(f"/api/tasks/{task.id}/cancel")
     assert resp.status_code == 200
     assert store.get(Task, task.id).status == TaskStatus.cancelled
-    ws = store.get(Workstream, task.workstream_id)
-    assert ws.status == WorkstreamStatus.queued
+    ws = store.get(IssueItem, task.workstream_id)
+    assert ws.status == IssueItemStatus.queued
     assert "scan to retry" in ws.parked_reason
 
 
@@ -649,7 +647,7 @@ def test_review_reject_marks_rejected(app, monkeypatch):
     _pump(client, store)
     review = _poll(client, rid)
     _report(client, review["id"], "broke other things\nREVIEW: REJECT")
-    assert store.get(Workstream, review["workstream_id"]).status == WorkstreamStatus.rejected
+    assert store.get(IssueItem, review["workstream_id"]).status == IssueItemStatus.rejected
 
 
 def test_scan_downloads_attachments_and_serves_to_runner(app, monkeypatch):
@@ -690,29 +688,27 @@ def test_scan_allowed_on_normal_project(app, monkeypatch):
 
     assert resp.status_code == 200
     assert resp.json()["open_issues"] == 1
-    ws = store.list(Workstream, project_id=project["id"])[0]
-    assert ws.source == WorkstreamSource.issue and ws.issue_number == 9
+    ws = store.list(IssueItem, project_id=project["id"])[0]
+    assert ws.issue_number == 9
 
 
 def test_project_workstreams_attach_legacy_work_items():
+    """Issue items created before the workstream layer get attached to the
+    project's github_issues workstream on the next listing."""
     store = MemoryStore()
     project = store.put(Project(name="p", spec_repo="https://github.com/o/r.git"))
-    manual = store.put(Workstream(project_id=project.id, title="manual"))
     issue_item = store.put(
-        Workstream(
+        IssueItem(
             project_id=project.id,
             title="#1 bug",
-            source=WorkstreamSource.issue,
             issue_number=1,
         )
     )
 
     streams = project_workstreams(store, project)
-    iteration = next(w for w in streams if w.kind == ProjectWorkstreamKind.iteration)
     github = next(w for w in streams if w.kind == ProjectWorkstreamKind.github_issues)
 
-    assert store.get(Workstream, manual.id).workstream_id == iteration.id
-    saved_issue = store.get(Workstream, issue_item.id)
+    saved_issue = store.get(IssueItem, issue_item.id)
     assert saved_issue.workstream_id == github.id
     assert saved_issue.repo == project.spec_repo
 
@@ -794,7 +790,7 @@ def test_cancel_issue_run_cancels_pending_run_task(app, monkeypatch):
     assert cancelled["status"] == IssueRunStatus.cancelled
     assert cancelled["counts"]["cancelled_tasks"] == 1
     assert store.get(Task, task.id).status == TaskStatus.cancelled
-    assert store.get(Workstream, task.workstream_id).status == WorkstreamStatus.queued
+    assert store.get(IssueItem, task.workstream_id).status == IssueItemStatus.queued
 
     project_model = store.get(Project, project["id"])
     cancelled_run = store.get(IssueRun, run["id"])
@@ -885,14 +881,13 @@ def test_cancelled_delivered_issue_task_result_refreshes_parent_run(app):
     client.patch(f"/api/projects/{project['id']}", json={"spec_repo": "https://github.com/o/r.git"})
     stream = next(w for w in client.get(f"/api/projects/{project['id']}").json()["workstreams"] if w["kind"] == "github_issues")
     ws = store.put(
-        Workstream(
+        IssueItem(
             project_id=project["id"],
             workstream_id=stream["id"],
             repo="https://github.com/o/r.git",
             title="#7 bug",
-            source=WorkstreamSource.issue,
             issue_number=7,
-            status=WorkstreamStatus.resolving,
+            status=IssueItemStatus.resolving,
         )
     )
     run = store.put(
@@ -1123,8 +1118,8 @@ def test_reconcile_requeue_stalled_false_never_resurrects_failures(app):
     ws = ensure_issue_workstream(store, project)
 
     reconcile(store, project, [issue(1, "old"), issue(2, "new")], workstream=ws)
-    item = next(w for w in store.list(Workstream, project_id=pid) if w.issue_number == 1)
-    item.status = WorkstreamStatus.rejected
+    item = next(w for w in store.list(IssueItem, project_id=pid) if w.issue_number == 1)
+    item.status = IssueItemStatus.rejected
     item.parked_reason = "rejected at review"
     store.put(item)
 
@@ -1135,8 +1130,8 @@ def test_reconcile_requeue_stalled_false_never_resurrects_failures(app):
 
     assert any("ingested issue #3" in n for n in notes)
     assert not any("re-queued" in n for n in notes)
-    rejected = next(w for w in store.list(Workstream, project_id=pid) if w.issue_number == 1)
-    assert rejected.status == WorkstreamStatus.rejected
+    rejected = next(w for w in store.list(IssueItem, project_id=pid) if w.issue_number == 1)
+    assert rejected.status == IssueItemStatus.rejected
 
 
 def test_scheduled_issue_scan_ingests_and_advances(app, monkeypatch):
@@ -1157,7 +1152,7 @@ def test_scheduled_issue_scan_ingests_and_advances(app, monkeypatch):
 
     make_issue_scan(store, config)(pid)
 
-    items = [w for w in store.list(Workstream, project_id=pid) if w.issue_number == 4]
-    assert len(items) == 1 and items[0].status == WorkstreamStatus.resolving
+    items = [w for w in store.list(IssueItem, project_id=pid) if w.issue_number == 4]
+    assert len(items) == 1 and items[0].status == IssueItemStatus.resolving
     tasks = store.list(Task, project_id=pid, kind=TaskKind.resolve)
     assert len(tasks) == 1 and tasks[0].status == TaskStatus.pending

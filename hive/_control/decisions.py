@@ -16,13 +16,7 @@ from pydantic import BaseModel
 
 from hive._integrations.specrepo import SpecRepo
 from hive.config.settings import Config
-from hive.models import (
-    Project,
-    Question,
-    Workstream,
-    WorkstreamSource,
-    WorkstreamStatus,
-)
+from hive.models import ISSUE_BLOCKED, IssueItem, Project, Question
 
 DECISIONS_PATH = "wiki/decisions.md"
 SPEC_READ_TTL_S = 60.0
@@ -384,25 +378,17 @@ def _replace_status_in_block(block: str, status: str) -> str:
 
 
 def _park_dependent_work(store, project: Project, workstream_id: str, decision_id: str) -> list[str]:
-    candidates: list[Workstream]
-    if workstream_id:
-        ws = store.get(Workstream, workstream_id)
-        candidates = [ws] if ws and ws.project_id == project.id else []
-    else:
-        candidates = [
-            ws
-            for ws in store.list(Workstream, workspace_id=project.workspace_id, project_id=project.id)
-            if ws.source == WorkstreamSource.manual and ws.status == WorkstreamStatus.active
-        ]
-    parked: list[str] = []
-    for ws in candidates:
-        if ws.status != WorkstreamStatus.active:
-            continue
-        ws.status = WorkstreamStatus.parked
-        ws.parked_reason = f"decision {decision_id} re-opened"
-        store.put(ws)
-        parked.append(ws.id)
-    return parked
+    """Note the re-opened decision on the named in-flight issue item, if any.
+    Plan items park through their own pipeline; there is no manual workstream
+    layer to sweep anymore."""
+    if not workstream_id:
+        return []
+    ws = store.get(IssueItem, workstream_id)
+    if not ws or ws.project_id != project.id or ws.status not in ISSUE_BLOCKED:
+        return []
+    ws.parked_reason = f"decision {decision_id} re-opened"
+    store.put(ws)
+    return [ws.id]
 
 
 def _reopen_question(decision: DecisionEntry, commit_sha: str, parked: list[str]) -> str:

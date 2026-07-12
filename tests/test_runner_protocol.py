@@ -18,7 +18,7 @@ from hive.models import (
     Task,
     TaskKind,
     TaskStatus,
-    Workstream,
+    IssueItem,
 )
 from hive.persistence.store import MemoryStore
 from hive._control.supervisor import Supervisor
@@ -56,7 +56,7 @@ def test_boot_requeues_inflight_tasks_heartbeat_does_not():
                       json={"name": "r", "backends": ["cursor"], "boot": True},
                       headers=H).json()["runner_id"]
     project = store.put(Project(name="p", spec_repo="s"))
-    ws = store.put(Workstream(project_id=project.id, title="w"))
+    ws = store.put(IssueItem(project_id=project.id, title="w"))
     task = store.put(Task(project_id=project.id, workstream_id=ws.id, repo="r",
                           instructions="i", status=TaskStatus.running,
                           runner_id=rid, delivered=True))
@@ -442,7 +442,7 @@ def test_poll_persists_last_seen_only_when_stale():
         headers=H,
     ).json()["runner_id"]
     project = store.put(Project(name="p", spec_repo="s"))
-    ws = store.put(Workstream(project_id=project.id, title="w"))
+    ws = store.put(IssueItem(project_id=project.id, title="w"))
 
     def deliverable_task():
         return store.put(
@@ -519,7 +519,7 @@ def test_poll_response_carries_chief_version():
     assert empty["chief_version"] == get_version()
 
     project = store.put(Project(name="p", spec_repo="s"))
-    ws = store.put(Workstream(project_id=project.id, title="w"))
+    ws = store.put(IssueItem(project_id=project.id, title="w"))
     store.put(Task(project_id=project.id, workstream_id=ws.id, repo="r",
                    instructions="i", status=TaskStatus.running, runner_id=rid))
     loaded = client.post(f"/api/runners/{rid}/poll", headers=H).json()

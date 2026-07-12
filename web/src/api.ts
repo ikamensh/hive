@@ -30,8 +30,8 @@ import type {
   TestEpisode,
   TestEpisodeResult,
   VersionInfo,
-  Workstream,
-  WorkstreamPatch,
+  ProjectWorkstream,
+  ProjectWorkstreamPatch,
   WorkspaceMember,
   WorkspaceRole,
 } from "./types";
@@ -157,8 +157,8 @@ const realApi = {
     http<PlanPayload>(`/api/plans/${planId}/abandon`, { method: "POST" }),
   patchProject: (id: string, patch: ProjectPatch) =>
     http<Project>(`/api/projects/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
-  updateWorkstream: (projectId: string, workstreamId: string, patch: WorkstreamPatch) =>
-    http<Workstream>(`/api/projects/${projectId}/workstreams/${workstreamId}`, {
+  updateWorkstream: (projectId: string, workstreamId: string, patch: ProjectWorkstreamPatch) =>
+    http<ProjectWorkstream>(`/api/projects/${projectId}/workstreams/${workstreamId}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),

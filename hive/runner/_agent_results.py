@@ -28,14 +28,6 @@ class AgentResultBase(BaseModel):
     summary: str = ""
 
 
-class VerifyResult(AgentResultBase):
-    outcome: Literal["accept", "reject"]
-    acceptance_checked: list[str] = Field(default_factory=list)
-    commands_run: list[str] = Field(default_factory=list)
-    findings: list[str] = Field(default_factory=list)
-    residual_risk: str = ""
-
-
 class ResolveResult(AgentResultBase):
     outcome: Literal["fixed", "blocked"]
     tests_run: list[str] = Field(default_factory=list)
@@ -110,7 +102,6 @@ class TestJudgeResult(AgentResultBase):
 
 
 RESULT_SPECS: dict[TaskKind, ResultSpec] = {
-    TaskKind.verify: ResultSpec(VerifyResult),
     TaskKind.resolve: ResultSpec(ResolveResult),
     TaskKind.review: ResultSpec(ReviewResult),
     TaskKind.test_refresh: ResultSpec(TestRefreshResult),
@@ -138,7 +129,7 @@ def verdict_from_structured(kind: str | TaskKind, payload: dict) -> Verdict:
         task_kind = TaskKind(kind)
     except ValueError:
         return Verdict.none
-    if task_kind in (TaskKind.verify, TaskKind.review):
+    if task_kind == TaskKind.review:
         if outcome == "accept":
             return Verdict.accept
         if outcome == "reject":

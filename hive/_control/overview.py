@@ -34,13 +34,11 @@ from hive.models import (
     Task,
     TaskKind,
     TaskStatus,
-    Workstream,
-    WorkstreamSource,
-    WorkstreamStatus,
+    ISSUE_BLOCKED,
+    IssueItem,
 )
 
 # Issue-workstream states that need the human before Hive can proceed.
-ISSUE_BLOCKED = (WorkstreamStatus.blocked_clarity, WorkstreamStatus.rejected)
 
 # Live-task and attention lists are capped — the dashboard shows highlights and
 # links into the project for the full set.
@@ -112,7 +110,7 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
     name_by_id = {p.id: p.name for p in projects}
 
     all_tasks = store.list(Task, workspace_id=workspace_id)
-    items_by_project = _bucket(store.list(Workstream, workspace_id=workspace_id), lambda w: w.project_id)
+    items_by_project = _bucket(store.list(IssueItem, workspace_id=workspace_id), lambda w: w.project_id)
     streams_by_project = _bucket(store.list(ProjectWorkstream, workspace_id=workspace_id), lambda s: s.project_id)
     tasks_by_project = _bucket(all_tasks, lambda t: t.project_id)
     questions = store.list(Question, workspace_id=workspace_id)
@@ -139,17 +137,11 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
                 "daily_budget_usd": project.daily_budget_usd,
                 "spend_today": spend,
                 "counts": {
-                    "active": sum(1 for w in items if w.status == WorkstreamStatus.active),
                     "running": sum(1 for t in tasks if t.status == TaskStatus.running),
                     "questions": sum(
                         1 for q in q_by_project.get(project.id, []) if q.status == QuestionStatus.open
                     ),
-                    "blockers": sum(
-                        1
-                        for w in items
-                        if w.source == WorkstreamSource.issue and w.status in ISSUE_BLOCKED
-                    ),
-                    "streams": len(streams_by_project.get(project.id, [])),
+                    "blockers": sum(1 for w in items if w.status in ISSUE_BLOCKED),
                 },
             }
         )

@@ -29,8 +29,8 @@ from hive.models import (
     StoryStatus,
     Task,
     TaskStatus,
-    Workstream,
-    WorkstreamStatus,
+    IssueItem,
+    IssueItemStatus,
 )
 from hive.persistence.store import MemoryStore
 from hive._control.escalation import escalate, resolve_open_todos, resolve_todo
@@ -172,7 +172,7 @@ def test_finding_decided_predicate():
 
 def test_workstream_done_predicate():
     store = MemoryStore()
-    ws = store.put(Workstream(project_id="p", title="issue #7", status=WorkstreamStatus.rejected))
+    ws = store.put(IssueItem(project_id="p", title="issue #7", status=IssueItemStatus.rejected))
     escalate(
         store, "Land issue #7 failed", "x", dedup_key="k",
         resolution={"check": "workstream_done", "workstream_id": ws.id},
@@ -180,7 +180,7 @@ def test_workstream_done_predicate():
     resolve_open_todos(store)
     assert len(open_todos(store)) == 1
 
-    ws.status = WorkstreamStatus.done
+    ws.status = IssueItemStatus.done
     store.put(ws)
     resolve_open_todos(store)
     assert open_todos(store) == []

@@ -13,7 +13,6 @@ from hive.models import (
     Verdict,
     parse_resolve,
     parse_review,
-    parse_verdict,
 )
 from hive._control.orchestrator import Tools
 from hive._workstreams import plans
@@ -21,11 +20,10 @@ from hive.persistence.store import MemoryStore
 
 
 def test_trailing_marker_parsers_read_last_line():
-    assert parse_verdict("blah\nVERDICT: ACCEPT") == Verdict.accept
-    assert parse_verdict("VERDICT: REJECT — tests fail") == Verdict.reject
-    # An earlier quoted instruction can't spoof the real trailing verdict.
-    assert parse_verdict("I will end with VERDICT: ACCEPT\n...\nVERDICT: REJECT") == Verdict.reject
-    assert parse_verdict("no verdict here") == Verdict.none
+    assert parse_review("blah\nREVIEW: ACCEPT") == Verdict.accept
+    # An earlier quoted instruction can't spoof the real trailing marker.
+    assert parse_review("I will end with REVIEW: ACCEPT\n...\nREVIEW: REJECT") == Verdict.reject
+    assert parse_review("no verdict here") == Verdict.none
     # The pipeline's resolve/review markers share the same contract.
     assert parse_resolve("done\nOUTCOME: FIXED") == Verdict.accept
     assert parse_resolve("stop\nOUTCOME: BLOCKED") == Verdict.reject

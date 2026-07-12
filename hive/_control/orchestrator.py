@@ -32,11 +32,8 @@ from hive.models import (
     Runner,
     Subscription,
     Task,
-    TaskKind,
     TaskStatus,
-    Verdict,
-    Workstream,
-    WorkstreamSource,
+    IssueItem,
 )
 from hive.llm._pricing import estimate_cost
 from hive.llm.prompts import load as load_prompt
@@ -300,9 +297,7 @@ class Tools:
                     line += f"\n  parked: {item.parked_reason[:400]}"
                 plan_lines.append(line)
         issue_items = [
-            w
-            for w in self.store.list(Workstream, project_id=self.project.id)
-            if w.source == WorkstreamSource.issue
+            w for w in self.store.list(IssueItem, project_id=self.project.id) if w.issue_number
         ]
         issue_lines = []
         for ws in sorted(issue_items, key=lambda w: (w.order, w.issue_number))[-20:]:
@@ -315,8 +310,6 @@ class Tools:
             line = f"- [{t.status}] {t.kind} task {t.id} ws={t.workstream_id} repo={t.repo} backend={t.backend}"
             if t.branch:
                 line += f" branch={t.branch}"
-            if t.kind == TaskKind.verify and t.verdict != Verdict.none:
-                line += f" verdict={t.verdict}"
             if t.status in (TaskStatus.done, TaskStatus.failed, TaskStatus.cancelled):
                 line += f"\n  result: {t.result_text[:RESULT_SNIPPET]}"
             task_lines.append(line)

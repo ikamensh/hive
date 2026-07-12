@@ -30,6 +30,7 @@ from hive.models import (
     HumanTaskKind,
     HumanTaskStatus,
     Machine,
+    ISSUE_BLOCKED,
     OrchestratorRun,
     PLAN_ITEM_PARKED,
     Plan,
@@ -45,10 +46,7 @@ from hive.models import (
     Task,
     TaskKind,
     TaskStatus,
-    Verdict,
-    Workstream,
-    WorkstreamSource,
-    WorkstreamStatus,
+    IssueItem,
 )
 
 log = logging.getLogger("hive._control.supervisor")
@@ -73,7 +71,7 @@ def _serializes_repo(task: Task) -> bool:
 
 def compute_state(
     project: Project,
-    workstreams: list[Workstream],
+    issue_items: list[IssueItem],
     open_question_count: int,
     tasks: list[Task],
     available_backends: set[str],
@@ -114,40 +112,15 @@ def compute_state(
         i.status == PlanItemStatus.queued for i in items
     ):
         return ProjectState.blocked_budget if over_budget else ProjectState.working
-    active = [
-        w
-        for w in workstreams
-        if w.source != WorkstreamSource.issue and w.status == WorkstreamStatus.active
-    ]
-    if open_question_count and not active:
-        return ProjectState.needs_attention
-    if active:
-        return ProjectState.blocked_budget if over_budget else ProjectState.working
-    if any(
-        w.source == WorkstreamSource.issue
-        and w.status in (WorkstreamStatus.blocked_clarity, WorkstreamStatus.rejected)
-        for w in workstreams
-    ):
+    if any(w.status in ISSUE_BLOCKED for w in issue_items):
         return ProjectState.needs_attention
     if open_question_count:
         return ProjectState.needs_attention
-    if project.goal_complete and _completed_workstreams_verified(workstreams, tasks):
+    if project.goal_complete:
+        # The completion gate already ran in mark_goal_complete (plan complete,
+        # nothing in flight, no open questions) — the flag is trustworthy.
         return ProjectState.idle_goal_complete
     return ProjectState.idle
-
-
-def _completed_workstreams_verified(workstreams: list[Workstream], tasks: list[Task]) -> bool:
-    tasks_by_workstream: dict[str, list[Task]] = defaultdict(list)
-    for task in tasks:
-        tasks_by_workstream[task.workstream_id].append(task)
-    for workstream in workstreams:
-        if workstream.source == WorkstreamSource.issue or workstream.status != WorkstreamStatus.done:
-            continue
-        ws_tasks = tasks_by_workstream.get(workstream.id, [])
-        last = ws_tasks[-1] if ws_tasks else None
-        if last is None or last.kind != TaskKind.verify or last.verdict != Verdict.accept:
-            return False
-    return True
 
 
 class Supervisor:
@@ -303,7 +276,7 @@ class Supervisor:
             return ProjectState.intake
         elif not project.goal_complete:
             workstreams = self.store.list(
-                Workstream, workspace_id=self.workspace_id, project_id=project.id
+                IssueItem, workspace_id=self.workspace_id, project_id=project.id
             )
             tasks = [
                 t
@@ -321,7 +294,7 @@ class Supervisor:
                     self.store.put(project)
                 return ProjectState.intake
         workstreams = self.store.list(
-            Workstream, workspace_id=self.workspace_id, project_id=project.id
+            IssueItem, workspace_id=self.workspace_id, project_id=project.id
         )
         # all_tasks feeds grant accounting (sessions_today needs finished tasks
         # and handles its own kind exemptions); compute_state sees live

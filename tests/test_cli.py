@@ -791,12 +791,12 @@ def test_detect_config_seeds_from_gh_and_env(monkeypatch):
 
 
 def test_cli_cancel_and_dismiss(harness):
-    from hive.models import Question, Task, Workstream
+    from hive.models import Question, Task, IssueItem
 
     client, store = harness
     pid = cli(client, "create", "p")["id"]
     cli(client, "set", pid, "--spec-repo", "https://example.com/s.git")
-    ws = store.put(Workstream(project_id=pid, title="w"))
+    ws = store.put(IssueItem(project_id=pid, title="w"))
     task = store.put(Task(project_id=pid, workstream_id=ws.id, repo="r", instructions="i"))
     assert cli(client, "cancel", task.id)["status"] == "cancelled"
     question = store.put(Question(project_id=pid, text="A or B?"))

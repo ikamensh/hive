@@ -81,9 +81,8 @@ from hive.models import (
     TestSweepOutcome,
     TestUxOutcome,
     Verdict,
-    Workstream,
-    WorkstreamSource,
-    WorkstreamStatus,
+    IssueItem,
+    IssueItemStatus,
     parse_resolve,
     parse_review,
     parse_test_refresh,
@@ -92,7 +91,6 @@ from hive.models import (
     parse_test_ux,
     parse_testability_draft,
     parse_testability_probe,
-    parse_verdict,
 )
 from hive._integrations.specrepo import SpecRepo
 from hive._workstreams import plans
@@ -188,12 +186,12 @@ def _test_ux_outcome(body: TaskResult) -> TestUxOutcome:
     return structured if structured != TestUxOutcome.none else parse_test_ux(body.text)
 
 
-def _set_ws_status(store, ws_id: str, status: WorkstreamStatus, reason: str) -> Workstream | None:
-    def mutate(ws: Workstream) -> None:
+def _set_ws_status(store, ws_id: str, status: IssueItemStatus, reason: str) -> IssueItem | None:
+    def mutate(ws: IssueItem) -> None:
         ws.status = status
         ws.parked_reason = reason
 
-    return store.update(Workstream, ws_id, mutate)
+    return store.update(IssueItem, ws_id, mutate)
 
 
 def cancel_issue_work(store, task: Task) -> None:
@@ -201,7 +199,7 @@ def cancel_issue_work(store, task: Task) -> None:
         _set_ws_status(
             store,
             task.workstream_id,
-            WorkstreamStatus.queued,
+            IssueItemStatus.queued,
             "cancelled by operator — scan to retry",
         )
 
@@ -227,14 +225,13 @@ def sync_landing_failure_human_task(
         return
     if not closed:
         return
-    for ws in store.list(Workstream, project_id=project.id):
+    for ws in store.list(IssueItem, project_id=project.id):
         if (
-            ws.source == WorkstreamSource.issue
-            and ws.issue_number == issue_number
-            and ws.status == WorkstreamStatus.rejected
+            ws.issue_number == issue_number
+            and ws.status == IssueItemStatus.rejected
             and ws.parked_reason.startswith(LANDING_FAILED_PREFIX)
         ):
-            _set_ws_status(store, ws.id, WorkstreamStatus.done, "")
+            _set_ws_status(store, ws.id, IssueItemStatus.done, "")
             log.info("human task %s confirmed issue #%s is closed; marked workstream done", task.id, issue_number)
             return
 
@@ -355,12 +352,6 @@ class TaskResultProcessor:
         return {"ok": True}
 
     def _record_verdict(self, task: Task, body: TaskResult) -> None:
-        if task.kind == TaskKind.verify and not body.cancelled:
-            task.verdict = _structured_or_legacy_verdict(
-                task.kind,
-                body,
-                parse_verdict(body.text),
-            )
         if body.cancelled or body.is_error:
             return
         if task.kind == TaskKind.resolve:
@@ -687,17 +678,17 @@ class TaskResultProcessor:
                 body.text[-300:],
             )
 
-        def transition(ws: Workstream) -> None:
-            if ws.status != WorkstreamStatus.resolving:
+        def transition(ws: IssueItem) -> None:
+            if ws.status != IssueItemStatus.resolving:
                 return
             if task.verdict == Verdict.accept:
-                ws.status = WorkstreamStatus.reviewing
+                ws.status = IssueItemStatus.reviewing
                 ws.parked_reason = ""
             else:
-                ws.status = WorkstreamStatus.blocked_clarity
+                ws.status = IssueItemStatus.blocked_clarity
                 ws.parked_reason = "blocked at clarify step — see the GitHub issue comment"
 
-        ws = self.store.update(Workstream, task.workstream_id, transition)
+        ws = self.store.update(IssueItem, task.workstream_id, transition)
         if ws is None:
             return
         log.info(
@@ -707,7 +698,7 @@ class TaskResultProcessor:
             task.verdict,
             ws.status,
         )
-        if ws.status == WorkstreamStatus.reviewing:
+        if ws.status == IssueItemStatus.reviewing:
             project = self.store.get(Project, task.project_id)
             if project:
                 run = self.store.get(IssueRun, task.run_id) if task.run_id else None
@@ -734,8 +725,8 @@ class TaskResultProcessor:
             refresh_issue_run(self.store, project, run)
 
     def _land_review(self, task: Task, body: TaskResult) -> None:
-        ws = self.store.get(Workstream, task.workstream_id)
-        if ws is None or ws.status != WorkstreamStatus.reviewing:
+        ws = self.store.get(IssueItem, task.workstream_id)
+        if ws is None or ws.status != IssueItemStatus.reviewing:
             return
         landing_integration = self._is_landing_integration_task(task)
         if body.is_error:
@@ -750,7 +741,7 @@ class TaskResultProcessor:
                 if landing_integration
                 else "review errored — re-scan to retry"
             )
-            _set_ws_status(self.store, ws.id, WorkstreamStatus.rejected, reason)
+            _set_ws_status(self.store, ws.id, IssueItemStatus.rejected, reason)
             self._refresh_run(task)
             return
         if task.verdict == Verdict.none:
@@ -770,7 +761,7 @@ class TaskResultProcessor:
             _set_ws_status(
                 self.store,
                 ws.id,
-                WorkstreamStatus.rejected,
+                IssueItemStatus.rejected,
                 "rejected at review — see the GitHub issue comment",
             )
             self._refresh_run(task)
@@ -828,7 +819,7 @@ class TaskResultProcessor:
                 dedup_key=f"repair:land:{task.project_id}:{ws.issue_number}",
                 resolution={"check": "workstream_done", "workstream_id": ws.id},
             )
-            _set_ws_status(self.store, ws.id, WorkstreamStatus.rejected, f"{LANDING_FAILED_PREFIX}: {exc}")
+            _set_ws_status(self.store, ws.id, IssueItemStatus.rejected, f"{LANDING_FAILED_PREFIX}: {exc}")
             self._refresh_run(task)
             return
         log.info("issue #%s landed: merged + closed; workstream done", ws.issue_number)
@@ -836,7 +827,7 @@ class TaskResultProcessor:
             self.delete_branch(task.repo, branch, self.config.gh_token)
         except Exception as exc:  # never fail a completed landing over branch cleanup
             log.info("issue #%s landed; leftover branch %s not deleted: %s", ws.issue_number, branch, exc)
-        _set_ws_status(self.store, ws.id, WorkstreamStatus.done, "")
+        _set_ws_status(self.store, ws.id, IssueItemStatus.done, "")
         project = self.store.get(Project, task.project_id)
         if project:
             sync_directives_for_issue(
@@ -967,12 +958,12 @@ class TaskResultProcessor:
     def _is_landing_integration_task(task: Task) -> bool:
         return LANDING_INTEGRATION_PROMPT in task.prompt_versions
 
-    def _escalate_landing_needs_human(self, task: Task, ws: Workstream, report: str) -> None:
+    def _escalate_landing_needs_human(self, task: Task, ws: IssueItem, report: str) -> None:
         branch = issue_branch(ws.issue_number)
         _set_ws_status(
             self.store,
             ws.id,
-            WorkstreamStatus.rejected,
+            IssueItemStatus.rejected,
             f"{LANDING_FAILED_PREFIX}: integration needs human input",
         )
         escalate(
@@ -1040,10 +1031,10 @@ class TaskResultProcessor:
     def _should_advance_after_issue_result(self, task: Task) -> bool:
         if task.kind not in (TaskKind.resolve, TaskKind.review):
             return False
-        ws = self.store.get(Workstream, task.workstream_id)
+        ws = self.store.get(IssueItem, task.workstream_id)
         if ws is None:
             return True
-        if ws.status == WorkstreamStatus.rejected and ws.parked_reason.startswith(LANDING_FAILED_PREFIX):
+        if ws.status == IssueItemStatus.rejected and ws.parked_reason.startswith(LANDING_FAILED_PREFIX):
             return False
         return True
 
@@ -1633,8 +1624,7 @@ class TaskResultProcessor:
         outcome = "cancelled" if body.cancelled else ("failed" if body.is_error else "finished")
         verdict_note = (
             f" verdict={task.verdict}"
-            if task.kind in (TaskKind.verify, TaskKind.resolve, TaskKind.review)
-            and not body.cancelled
+            if task.kind in (TaskKind.resolve, TaskKind.review) and not body.cancelled
             else ""
         )
         self.supervisor.wake(

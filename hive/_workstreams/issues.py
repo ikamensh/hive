@@ -7,7 +7,7 @@ Two concerns, kept separate so the store logic is testable without network:
 - Store logic (`reconcile`, `advance_issues`, `create_review_task`) — pure ops
   mapping issues to work items and queuing the codex resolve/review tasks.
 
-An issue becomes a work item (`Workstream` during the migration, source=issue);
+An issue becomes an `IssueItem` work item;
 the lifecycle is
 queued → resolving → (blocked_clarity | reviewing) → (rejected | done).
 Sequencing is **strict per GitHub-issues workstream**: `advance_issues` keeps at
@@ -38,9 +38,8 @@ from hive.models import (
     Task,
     TaskKind,
     TaskStatus,
-    Workstream,
-    WorkstreamSource,
-    WorkstreamStatus,
+    IssueItem,
+    IssueItemStatus,
 )
 from hive.llm.prompts import load as load_prompt
 
@@ -138,7 +137,7 @@ def directive_issue_content(directive: Directive) -> tuple[str, str]:
 
 def seed_filed_issue(
     store, project: Project, workstream: ProjectWorkstream, number: int, url: str, title: str, body: str
-) -> Workstream:
+) -> IssueItem:
     """Upsert the work item for an issue Hive itself just filed.
 
     The GitHub list API is eventually consistent: a create→list round trip can
@@ -150,15 +149,14 @@ def seed_filed_issue(
     if existing:
         return existing[0]
     return store.put(
-        Workstream(
+        IssueItem(
             workspace_id=project.workspace_id,
             project_id=project.id,
             workstream_id=workstream.id,
             repo=workstream.repo,
             title=f"#{number} {title}",
             description=build_issue_doc(title, body, []),
-            status=WorkstreamStatus.queued,
-            source=WorkstreamSource.issue,
+            status=IssueItemStatus.queued,
             issue_number=number,
             issue_url=url,
             issue_attachments=extract_image_urls(body),
@@ -440,7 +438,7 @@ def ensure_issue_workstream(store, project: Project, repo: str | None = None) ->
 
 
 def project_workstreams(store, project: Project) -> list[ProjectWorkstream]:
-    iteration = ensure_iteration_workstream(store, project)
+    ensure_iteration_workstream(store, project)
     issue_stream = None
     if project.spec_repo.strip():
         try:
@@ -456,20 +454,16 @@ def project_workstreams(store, project: Project) -> list[ProjectWorkstream]:
         except ValueError:
             pass
     for item in store.list(
-        Workstream,
+        IssueItem,
         workspace_id=project.workspace_id,
         project_id=project.id,
     ):
         if item.workstream_id:
             continue
-        if item.source == WorkstreamSource.manual:
-            item.workstream_id = iteration.id
+        if issue_stream is not None and item.repo in ("", issue_stream.repo):
+            item.workstream_id = issue_stream.id
+            item.repo = item.repo or issue_stream.repo
             store.put(item)
-        elif item.source == WorkstreamSource.issue and issue_stream is not None:
-            if item.repo in ("", issue_stream.repo):
-                item.workstream_id = issue_stream.id
-                item.repo = item.repo or issue_stream.repo
-                store.put(item)
     return store.list(
         ProjectWorkstream,
         workspace_id=project.workspace_id,
@@ -477,7 +471,7 @@ def project_workstreams(store, project: Project) -> list[ProjectWorkstream]:
     )
 
 
-def _item_in_workstream(item: Workstream, workstream: ProjectWorkstream | None) -> bool:
+def _item_in_workstream(item: IssueItem, workstream: ProjectWorkstream | None) -> bool:
     if workstream is None:
         return True
     if item.workstream_id:
@@ -489,15 +483,15 @@ def _issue_workstreams(
     store,
     project: Project,
     workstream: ProjectWorkstream | None = None,
-) -> list[Workstream]:
+) -> list[IssueItem]:
     return [
         w
-        for w in store.list(Workstream, project_id=project.id)
-        if w.source == WorkstreamSource.issue and _item_in_workstream(w, workstream)
+        for w in store.list(IssueItem, project_id=project.id)
+        if w.issue_number and _item_in_workstream(w, workstream)
     ]
 
 
-def _issue_items_for_run(store, project: Project, run: IssueRun | None) -> list[Workstream]:
+def _issue_items_for_run(store, project: Project, run: IssueRun | None) -> list[IssueItem]:
     workstream = store.get(ProjectWorkstream, run.workstream_id) if run else None
     items = _issue_workstreams(store, project, workstream)
     if run and run.issue_numbers:
@@ -509,11 +503,11 @@ def _issue_items_for_run(store, project: Project, run: IssueRun | None) -> list[
 def refresh_issue_run(store, project: Project, run: IssueRun) -> IssueRun:
     items = _issue_items_for_run(store, project, run)
     counts = {
-        "queued": sum(1 for w in items if w.status == WorkstreamStatus.queued),
-        "running": sum(1 for w in items if w.status in (WorkstreamStatus.resolving, WorkstreamStatus.reviewing)),
-        "blocked": sum(1 for w in items if w.status in (WorkstreamStatus.blocked_clarity, WorkstreamStatus.rejected)),
-        "done": sum(1 for w in items if w.status == WorkstreamStatus.done),
-        "cancelled": sum(1 for w in items if w.status == WorkstreamStatus.cancelled),
+        "queued": sum(1 for w in items if w.status == IssueItemStatus.queued),
+        "running": sum(1 for w in items if w.status in (IssueItemStatus.resolving, IssueItemStatus.reviewing)),
+        "blocked": sum(1 for w in items if w.status in (IssueItemStatus.blocked_clarity, IssueItemStatus.rejected)),
+        "done": sum(1 for w in items if w.status == IssueItemStatus.done),
+        "cancelled": sum(1 for w in items if w.status == IssueItemStatus.cancelled),
     }
 
     def update(saved: IssueRun) -> None:
@@ -567,16 +561,15 @@ def reconcile(
         ws = by_number.get(issue["number"])
         if ws is None:
             store.put(
-                Workstream(
+                IssueItem(
                     workspace_id=project.workspace_id,
                     project_id=project.id,
                     workstream_id=workstream.id,
                     repo=workstream.repo,
                     title=f"#{issue['number']} {issue['title']}",
                     description=issue["doc"],
-                    status=WorkstreamStatus.queued,
-                    source=WorkstreamSource.issue,
-                    issue_number=issue["number"],
+                    status=IssueItemStatus.queued,
+                            issue_number=issue["number"],
                     issue_url=issue["url"],
                     issue_attachments=issue["attachments"],
                     external_ref={"provider": "github", "issue_number": issue["number"], "url": issue["url"]},
@@ -592,26 +585,26 @@ def reconcile(
         ws.external_ref = {"provider": "github", "issue_number": issue["number"], "url": issue["url"]}
         if (
             requeue_stalled
-            and ws.status not in (WorkstreamStatus.done, WorkstreamStatus.queued)
+            and ws.status not in (IssueItemStatus.done, IssueItemStatus.queued)
             and not _has_live_task(store, project, ws.id)
         ):
-            ws.status = WorkstreamStatus.queued  # blocked/rejected/reopened/errored: retry
+            ws.status = IssueItemStatus.queued  # blocked/rejected/reopened/errored: retry
             ws.parked_reason = ""
             notes.append(f"re-queued issue #{issue['number']} for another attempt")
         store.put(ws)
 
     for number, ws in by_number.items():
         if number in open_numbers or ws.status in (
-            WorkstreamStatus.done,
-            WorkstreamStatus.cancelled,
+            IssueItemStatus.done,
+            IssueItemStatus.cancelled,
         ):
             continue
         if ws.created_at > now_s() - GITHUB_LIST_LAG_GRACE_S:
             # Just filed (e.g. by a directive): the eventually-consistent list
             # API may not show it yet. Don't mistake lag for an external close.
             continue
-        if ws.status == WorkstreamStatus.rejected and ws.parked_reason.startswith(LANDING_FAILED_PREFIX):
-            ws.status = WorkstreamStatus.done
+        if ws.status == IssueItemStatus.rejected and ws.parked_reason.startswith(LANDING_FAILED_PREFIX):
+            ws.status = IssueItemStatus.done
             ws.parked_reason = ""
             store.put(ws)
             sync_directives_for_issue(
@@ -619,7 +612,7 @@ def reconcile(
             )
             notes.append(f"marked #{number} done: issue closed on GitHub after landing retry")
             continue
-        ws.status = WorkstreamStatus.cancelled
+        ws.status = IssueItemStatus.cancelled
         ws.parked_reason = "issue closed on GitHub"
         store.put(ws)
         sync_directives_for_issue(
@@ -637,7 +630,7 @@ def _has_live_task(store, project: Project, workstream_id: str) -> bool:
     )
 
 
-def _instructions(ws: Workstream, prompt_name: str, context: str = "") -> tuple[str, dict]:
+def _instructions(ws: IssueItem, prompt_name: str, context: str = "") -> tuple[str, dict]:
     prompt, version = load_prompt(prompt_name)
     path = ISSUE_DIR.format(n=ws.issue_number)
     branch = issue_branch(ws.issue_number)
@@ -654,7 +647,7 @@ def _instructions(ws: Workstream, prompt_name: str, context: str = "") -> tuple[
 def _make_issue_task(
     store,
     project: Project,
-    ws: Workstream,
+    ws: IssueItem,
     kind: TaskKind,
     backend: str,
     model: str = DEFAULT_ISSUE_MODEL,
@@ -710,13 +703,13 @@ def advance_issues(
         return 0
     wss = _issue_items_for_run(store, project, run) if run else _issue_workstreams(store, project, workstream)
     if any(
-        w.status in (WorkstreamStatus.resolving, WorkstreamStatus.reviewing) for w in wss
+        w.status in (IssueItemStatus.resolving, IssueItemStatus.reviewing) for w in wss
     ):
         if run:
             refresh_issue_run(store, project, run)
         return 0
     queued = sorted(
-        (w for w in wss if w.status == WorkstreamStatus.queued),
+        (w for w in wss if w.status == IssueItemStatus.queued),
         key=lambda w: (w.order, w.issue_number),
     )
     if not queued:
@@ -725,11 +718,11 @@ def advance_issues(
         return 0
     nxt = queued[0]
 
-    def promote(w: Workstream) -> None:
-        w.status = WorkstreamStatus.resolving
+    def promote(w: IssueItem) -> None:
+        w.status = IssueItemStatus.resolving
         w.parked_reason = ""
 
-    ws = store.update(Workstream, nxt.id, promote)
+    ws = store.update(IssueItem, nxt.id, promote)
     _make_issue_task(store, project, ws, TaskKind.resolve, backend, model=model, run=run)
     if run:
         refresh_issue_run(store, project, run)
@@ -743,7 +736,7 @@ def advance_issues(
 def create_review_task(
     store,
     project: Project,
-    ws: Workstream,
+    ws: IssueItem,
     backend: str = RESOLVE_BACKEND,
     model: str = DEFAULT_ISSUE_MODEL,
     run: IssueRun | None = None,
@@ -755,7 +748,7 @@ def create_review_task(
 def create_landing_integration_task(
     store,
     project: Project,
-    ws: Workstream,
+    ws: IssueItem,
     failure: str,
     accepted_review: str = "",
     backend: str = RESOLVE_BACKEND,

@@ -47,7 +47,7 @@ def _record_input_log(
             "",
             f"- Answered: {stamp.isoformat()}",
             f"- Project: {project.name} ({project.id})",
-            f"- Workstream: {question.workstream_id or 'project-level'}",
+            f"- IssueItem: {question.workstream_id or 'project-level'}",
             "",
             "## Question",
             "",

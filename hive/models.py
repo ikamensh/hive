@@ -193,12 +193,9 @@ class ProjectWorkstreamStatus(StrEnum):
 
 
 class ProjectWorkstream(BaseModel):
-    """An ongoing channel of project work.
-
-    The current `Workstream` model below is still the smaller work-item record
-    during migration. This model is the target workstream layer from
-    wiki/unified-project-work.md.
-    """
+    """An ongoing channel of project work (iteration / github_issues / testing);
+    see wiki/unified-project-work.md. Units of work live elsewhere: `PlanItem`
+    for the iteration plan, `IssueItem` for GitHub issues."""
 
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
@@ -214,44 +211,44 @@ class ProjectWorkstream(BaseModel):
     updated_at: float = Field(default_factory=now)
 
 
-class WorkstreamStatus(StrEnum):
-    active = "active"
-    queued = "queued"  # issue solving: ingested, awaiting its turn (strict one-at-a-time)
-    parked = "parked"
-    done = "done"
-    # issue-solving per-issue pipeline (see wiki/issue-solving.md):
+class IssueItemStatus(StrEnum):
+    # the per-issue pipeline (see wiki/issue-solving.md):
+    queued = "queued"  # ingested, awaiting its turn (strict one-at-a-time)
     resolving = "resolving"  # resolve task (clarify→fix) in flight
     blocked_clarity = "blocked_clarity"  # resolve returned BLOCKED; agent commented on the issue
     reviewing = "reviewing"  # review task in flight
     rejected = "rejected"  # review returned REJECT; agent commented with the failure + next approach
+    done = "done"
     cancelled = "cancelled"  # backing issue closed on GitHub by a human
+    # historical rows only (pre-plans manual build workstreams); never set today
+    active = "active"
+    parked = "parked"
 
 
-# Issue-workstream states the human must act on before Hive can make progress.
-ISSUE_BLOCKED = (WorkstreamStatus.blocked_clarity, WorkstreamStatus.rejected)
+# Issue states the human must act on before Hive can make progress.
+ISSUE_BLOCKED = (IssueItemStatus.blocked_clarity, IssueItemStatus.rejected)
 
 
-class WorkstreamSource(StrEnum):
-    manual = "manual"  # decomposed from the iteration goal by the orchestrator
-    issue = "issue"  # ingested from a GitHub issue
+class IssueItem(BaseModel):
+    """A GitHub issue mirrored as one unit of pipeline work (resolve → review →
+    merge; wiki/issue-solving.md). The collection keeps its historical name."""
 
+    __collection__: ClassVar[str] = "workstreams"
 
-class Workstream(BaseModel):
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
     project_id: str
-    workstream_id: str = ""  # target parent ProjectWorkstream id; empty for legacy rows
+    workstream_id: str = ""  # parent ProjectWorkstream id; empty for legacy rows
     repo: str = ""
     title: str
     description: str = ""
-    status: WorkstreamStatus = WorkstreamStatus.active
+    status: IssueItemStatus = IssueItemStatus.queued
     parked_reason: str = ""
-    source: WorkstreamSource = WorkstreamSource.manual
-    issue_number: int = 0  # GitHub issue number when source=issue
+    issue_number: int = 0  # 0 only on historical pre-issue rows
     issue_url: str = ""
     issue_attachments: list[str] = []  # embedded image URLs from the issue + comments
     external_ref: dict = {}
-    order: int = 0  # planned position in the issue queue (lower = sooner; dormant ordering variant)
+    order: int = 0  # planned position in the issue queue (lower = sooner)
     created_at: float = Field(default_factory=now)
 
 
@@ -335,8 +332,8 @@ class TaskStatus(StrEnum):
 
 
 class TaskKind(StrEnum):
-    work = "work"
-    verify = "verify"
+    work = "work"  # historical rows only: the pre-plans build path; never created today
+    verify = "verify"  # historical rows only, same era
     probe = "probe"
     intake = "intake"
     resolve = "resolve"  # issue solving: one codex session clarifies then (if clear) fixes
@@ -393,11 +390,6 @@ def _last_marker[T](text: str, prefix: str, options: dict[str, T], default: T) -
                 found = value
                 break
     return found
-
-
-def parse_verdict(text: str) -> Verdict:
-    """A verify agent's `VERDICT: ACCEPT|REJECT`."""
-    return _last_marker(text, "VERDICT", {"ACCEPT": Verdict.accept, "REJECT": Verdict.reject}, Verdict.none)
 
 
 def parse_resolve(text: str) -> Verdict:
@@ -1015,6 +1007,7 @@ ALL_MODELS: tuple[type[BaseModel], ...] = (
     Feedback,
     Finding,
     HumanTask,
+    IssueItem,
     IssueRun,
     LimitEvent,
     Machine,
@@ -1034,5 +1027,4 @@ ALL_MODELS: tuple[type[BaseModel], ...] = (
     User,
     Workspace,
     WorkspaceMembership,
-    Workstream,
 )
