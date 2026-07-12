@@ -108,7 +108,7 @@ budget uses, and it keeps one choke point.
   `remaining`, `resolve_agent`) over `Project` + today's tasks. No store
   writes.
 - `PATCH /api/projects/{id}` accepts `agent_grants`; CLI
-  `hive set <project> --grants '<json>'`.
+  `hive set <project> --grant 'claude:5/day' --grant 'codex=gpt-5.4-mini:unlimited'` (repeatable; `--grant clear` removes all limits).
 - Read side: the project payload and `hive show limits` gain a per-project
   allowance section (grants + used/remaining today), next to the existing
   license-usage view.

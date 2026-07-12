@@ -1125,3 +1125,29 @@ def test_glance_formatters_show_names_reasons_and_next_steps():
     assert "✓ landed thing" in detail and "⚠ stuck thing — which db?" in detail
     assert "q1" in detail and "Which db?" in detail
     assert "hive answer" in detail
+
+
+def test_parse_grants_human_syntax_round_trips_to_agent_grants():
+    """Property: every accepted --grant spec produces a dict AgentGrant accepts,
+    and the wildcard/clear forms mean exactly 'anything' / 'no limits'."""
+    from pydantic import TypeAdapter
+
+    from hive.cli import parse_grants
+    from hive.models import AgentGrant
+
+    specs = ["claude:5/day", "codex=gpt-5.4-mini:unlimited", "*:3", "claude,codex:7/day"]
+    grants = parse_grants(specs)
+    validated = [TypeAdapter(AgentGrant).validate_python(g) for g in grants]
+    assert validated[0].backends == ["claude"] and validated[0].sessions_per_day == 5
+    assert validated[1].models == ["gpt-5.4-mini"] and validated[1].sessions_per_day is None
+    assert validated[2].backends == [] and validated[2].sessions_per_day == 3
+    assert validated[3].backends == ["claude", "codex"]
+
+    assert parse_grants(["clear"]) == []
+
+    import pytest
+
+    with pytest.raises(SystemExit):
+        parse_grants(["claude"])  # no quota
+    with pytest.raises(SystemExit):
+        parse_grants(["claude:often"])  # gibberish quota

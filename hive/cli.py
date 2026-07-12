@@ -231,10 +231,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--paused", choices=["true", "false"])
     p.add_argument("--daily-budget", type=float, help="daily cap on all paid work in USD (0 pauses it; new projects default to 10)")
     p.add_argument(
-        "--grants",
-        help="agent allowance as JSON, e.g. "
-        '\'[{"sessions_per_day": 5}, {"backends": ["codex"], "models": ["gpt-5.4-mini"]}]\' '
-        "(omit sessions_per_day for unlimited; '[]' clears back to no limits)",
+        "--grant",
+        action="append",
+        dest="grants",
+        metavar="SPEC",
+        help="agent allowance, repeatable: 'claude:5/day', 'codex=gpt-5.4-mini:unlimited', "
+        "'*:5/day' (any backend), 'clear' (back to no limits). Grants combine additively.",
     )
     p.add_argument("--member-repos", help="comma-separated git URLs (replaces the list)")
     p.add_argument("--spec-repo", help="spec home git URL")
@@ -653,6 +655,40 @@ PLAN_GLYPHS = {
     "proposed": "?",
     "cancelled": "✗",
 }
+
+
+def parse_grants(specs: list[str]) -> list[dict]:
+    """Turn repeatable `--grant` specs into AgentGrant dicts.
+
+    Grammar per spec: `backends[=models]:quota` — backends/models are
+    comma-separated (`*` or empty = any), quota is `N[/day]` or `unlimited`.
+    The single spec `clear` wipes all grants (back to unrestricted)."""
+    if [s.strip().lower() for s in specs] == ["clear"]:
+        return []
+    grants: list[dict] = []
+    for spec in specs:
+        spec = spec.strip()
+        if ":" not in spec:
+            raise SystemExit(
+                f"grant {spec!r} must look like 'backend[=model]:N/day', "
+                "'*:unlimited', or be the single word 'clear'"
+            )
+        targets, quota = spec.rsplit(":", 1)
+        grant: dict = {}
+        targets = targets.strip()
+        if targets not in ("", "*", "any"):
+            if "=" in targets:
+                targets, models = targets.split("=", 1)
+                grant["models"] = [m.strip() for m in models.split(",") if m.strip()]
+            grant["backends"] = [b.strip() for b in targets.split(",") if b.strip()]
+        quota = quota.strip().lower()
+        if quota != "unlimited":
+            number = quota.removesuffix("/day").strip()
+            if not number.isdigit():
+                raise SystemExit(f"grant quota {quota!r} must be 'N', 'N/day', or 'unlimited'")
+            grant["sessions_per_day"] = int(number)
+        grants.append(grant)
+    return grants
 
 
 def format_projects(projects: list[dict]) -> str:
@@ -1248,7 +1284,7 @@ def run(args: argparse.Namespace, client) -> dict | list:
         if args.daily_budget is not None:
             body["daily_budget_usd"] = args.daily_budget
         if args.grants is not None:
-            body["agent_grants"] = json.loads(args.grants)
+            body["agent_grants"] = parse_grants(args.grants)
         if args.member_repos is not None:
             body["member_repos"] = _csv(args.member_repos)
         if args.spec_repo is not None:
