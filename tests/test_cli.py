@@ -669,7 +669,7 @@ def test_main_falls_back_to_runner_env_chief(monkeypatch, capsys, tmp_path):
 
     from hive.cli import main
 
-    main(["projects"])
+    main(["projects", "--json"])
     captured = capsys.readouterr()
     assert '"id": "p1"' in captured.out
     # Walking past a dead localhost candidate is normal discovery, not news:
@@ -1074,3 +1074,54 @@ def test_cli_intake_is_one_project_keyed_verb(harness, tmp_path):
 
     sent = cli(client, "intake", pid, "-m", "use sqlite")
     assert sent["task"]["conversation_turn"] == "message"
+
+
+def test_glance_formatters_show_names_reasons_and_next_steps():
+    """Property: the readable renderings carry every project's name and reason,
+    plan item titles, and open-question ids — the facts a human acts on —
+    without requiring the reader to know internal enum names."""
+    from hive.cli import format_project, format_projects
+
+    listing = format_projects(
+        [
+            {
+                "id": "p1",
+                "name": "atlas",
+                "state": "needs_attention",
+                "state_reason": "needs you: 1 question(s) to answer",
+                "daily_budget_usd": 10.0,
+                "spend_today": 2.5,
+            }
+        ]
+    )
+    assert "atlas" in listing and "needs you: 1 question(s)" in listing
+    assert "needs attention" in listing and "needs_attention" not in listing
+    assert "$2.50 of $10.00" in listing
+
+    detail = format_project(
+        {
+            "project": {
+                "id": "p1",
+                "name": "atlas",
+                "state": "working",
+                "daily_budget_usd": 10.0,
+                "spec_repo": "https://github.com/o/r.git",
+            },
+            "state_reason": "1 task(s) running: resolve on claude",
+            "spend_today": 2.5,
+            "plan": {
+                "plan": {"status": "approved", "goal": "ship the loop"},
+                "items": [
+                    {"title": "landed thing", "status": "done"},
+                    {"title": "stuck thing", "status": "blocked_clarity", "parked_reason": "which db?"},
+                ],
+            },
+            "questions": [{"id": "q1", "status": "open", "text": "## Which db?\nPick one."}],
+            "human_todos": [],
+            "tasks": [{"id": "t1", "status": "running", "kind": "resolve", "backend": "claude"}],
+        }
+    )
+    assert "ship the loop" in detail
+    assert "✓ landed thing" in detail and "⚠ stuck thing — which db?" in detail
+    assert "q1" in detail and "Which db?" in detail
+    assert "hive answer" in detail

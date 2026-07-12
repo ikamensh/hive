@@ -708,13 +708,17 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if not include_archived:
             projects = [p for p in projects if not p.archived]
         backends = supervisor.available_backends()
-        return [
-            {
-                **p.model_dump(),
-                "state_reason": state_reason(store, p, backends, supervisor.spend_today(p.id)),
-            }
-            for p in projects
-        ]
+        rows = []
+        for p in projects:
+            spend = supervisor.spend_today(p.id)
+            rows.append(
+                {
+                    **p.model_dump(),
+                    "state_reason": state_reason(store, p, backends, spend),
+                    "spend_today": spend,
+                }
+            )
+        return rows
 
     @app.post("/api/projects")
     def create_project(body: ProjectCreate, ctx: AuthContext = Depends(editor)):

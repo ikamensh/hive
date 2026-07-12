@@ -170,7 +170,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("pause", help="pause all of hive: nothing new starts, running tasks finish")
     sub.add_parser("resume", help="undo `hive pause`; queued work dispatches again")
-    p = sub.add_parser("projects", help="list projects")
+    p = sub.add_parser("projects", help="list projects (readable; --json for the raw payload)")
+    p.add_argument("--json", action="store_true", help="raw payload instead of the readable summary")
 
     p = sub.add_parser(
         "new",
@@ -202,8 +203,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--approve", action="store_true", help="approve the brief; finalize and go")
     p.add_argument("--backend", default="", help="pin the scout backend when (re)starting intake")
 
-    p = sub.add_parser("project", help="project detail: workstreams, tasks, questions")
+    p = sub.add_parser("project", help="project glance: state + reason, plan, questions, recent tasks")
     p.add_argument("project_id")
+    p.add_argument("--json", action="store_true", help="raw payload instead of the readable summary")
 
     p = sub.add_parser(
         "show",
@@ -638,6 +640,73 @@ def _fmt_autonomy(rows: list[dict]) -> list[str]:
         else:
             out.append(f"{head}: idle — {j['reason']}")
     return out
+
+
+PLAN_GLYPHS = {
+    "done": "✓",
+    "resolving": "●",
+    "reviewing": "●",
+    "blocked_clarity": "⚠",
+    "rejected": "⚠",
+    "queued": "○",
+    "approved": "○",
+    "proposed": "?",
+    "cancelled": "✗",
+}
+
+
+def format_projects(projects: list[dict]) -> str:
+    """Readable project list: name, badge, reason, money — the glance row."""
+    if not projects:
+        return "no projects yet — `hive new <name> --spec <file>` starts one"
+    lines = []
+    for p in projects:
+        badge = str(p.get("state", "")).replace("_", " ")
+        money = f"${p.get('spend_today', 0.0):.2f} of ${p.get('daily_budget_usd', 0.0):.2f} today"
+        lines.append(f"{p['name']}  [{badge}]  {money}  ({p['id']})")
+        if p.get("state_reason"):
+            lines.append(f"  {p['state_reason']}")
+    return "\n".join(lines)
+
+
+def format_project(payload: dict) -> str:
+    """Readable project glance: state + reason, plan progress, what needs you,
+    recent activity. `--json` keeps the full payload for scripts."""
+    p = payload["project"]
+    badge = str(p.get("state", "")).replace("_", " ")
+    lines = [f"{p['name']}  [{badge}]  ({p['id']})"]
+    if payload.get("state_reason"):
+        lines.append(f"  {payload['state_reason']}")
+    lines.append(
+        f"  spend today ${payload.get('spend_today', 0.0):.2f}"
+        f" of ${p.get('daily_budget_usd', 0.0):.2f}; repo {p.get('spec_repo') or '(none)'}"
+    )
+    plan = payload.get("plan")
+    if plan and plan.get("plan"):
+        head = plan["plan"]
+        lines += ["", f"PLAN [{head['status']}] {head.get('goal', '')[:120]}"]
+        for item in plan.get("items", []):
+            glyph = PLAN_GLYPHS.get(item["status"], "·")
+            line = f"  {glyph} {item['title'][:100]}"
+            if item.get("parked_reason"):
+                line += f" — {item['parked_reason'][:120]}"
+            lines.append(line)
+    open_questions = [q for q in payload.get("questions", []) if q.get("status") == "open"]
+    if open_questions:
+        lines += ["", f"QUESTIONS ({len(open_questions)} open) — `hive answer <id> '<text>'`:"]
+        for q in open_questions:
+            first_line = q["text"].strip().splitlines()[0][:120]
+            lines.append(f"  {q['id']}  {first_line}")
+    todos = [t for t in payload.get("human_todos", []) if t.get("status") == "open"]
+    if todos:
+        lines += ["", f"TODOS ({len(todos)} open):"]
+        lines += [f"  {t['id']}  {t['title'][:120]}" for t in todos]
+    tasks = payload.get("tasks", [])
+    if tasks:
+        lines += ["", "RECENT TASKS:"]
+        for t in tasks[-5:]:
+            lines.append(f"  [{t['status']}] {t['kind']} on {t['backend']}  ({t['id']})")
+    return "\n".join(lines)
 
 
 def format_show(payload, part: str | None) -> str:
@@ -1495,6 +1564,10 @@ def main(argv: list[str] | None = None) -> None:
             payload = run(args, client)
             if args.command == "show" and not args.json:
                 print(format_show(payload, args.part))
+            elif args.command == "projects" and not args.json:
+                print(format_projects(payload))
+            elif args.command == "project" and not args.json:
+                print(format_project(payload))
             else:
                 print(json.dumps(payload, indent=2))
             return
