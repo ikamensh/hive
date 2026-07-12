@@ -16,6 +16,7 @@ from typing import Callable
 
 from hive._control import pause
 from hive._control.capacity import capacity_summary, group_machines
+from hive._control.supervisor import state_reason
 from hive._workstreams.testing import story_health
 from hive.models import (
     HumanTask,
@@ -110,6 +111,13 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
     name_by_id = {p.id: p.name for p in projects}
 
     all_tasks = store.list(Task, workspace_id=workspace_id)
+    runners = store.list(Runner, workspace_id=workspace_id)
+    online_runner_ids = {r.id for r in runners if r.online()}
+    available_backends = {
+        res.backend
+        for res in store.list(Resource, workspace_id=workspace_id)
+        if res.available() and res.runner_id in online_runner_ids
+    }
     items_by_project = _bucket(store.list(IssueItem, workspace_id=workspace_id), lambda w: w.project_id)
     streams_by_project = _bucket(store.list(ProjectWorkstream, workspace_id=workspace_id), lambda s: s.project_id)
     tasks_by_project = _bucket(all_tasks, lambda t: t.project_id)
@@ -132,6 +140,7 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
                 "name": project.name,
                 "spec_repo": project.spec_repo,
                 "state": project.state,
+                "state_reason": state_reason(store, project, available_backends, spend),
                 "paused": project.paused,
                 "created_at": project.created_at,
                 "daily_budget_usd": project.daily_budget_usd,

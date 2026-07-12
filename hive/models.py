@@ -103,16 +103,16 @@ class AgentGrant(BaseModel):
 
 
 class ProjectState(StrEnum):
+    """The badge; every surface pairs it with `state_reason` (supervisor) so
+    the user reads why-and-what-to-do, never a bare internal name."""
+
     intake = "intake"  # intake scout is aligning the project before planning
     working = "working"
-    needs_attention = "needs_attention"
-    blocked_questions = "blocked_questions"
-    blocked_resources = "blocked_resources"
-    blocked_budget = "blocked_budget"  # daily soft cap reached; resets at UTC midnight
-    blocked_clarity = "blocked_clarity"
+    needs_attention = "needs_attention"  # a question, review, or blocked item waits on the human
+    blocked_resources = "blocked_resources"  # no online usable agent for the pending work
+    blocked_budget = "blocked_budget"  # daily budget/allowance spent; resets at UTC midnight
     idle_goal_complete = "idle_goal_complete"
     idle = "idle"
-    idle_no_workstreams = "idle_no_workstreams"
 
 
 class Project(BaseModel):

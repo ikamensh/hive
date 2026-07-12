@@ -136,7 +136,7 @@ from hive._control.capacity import (
 )
 from hive._control.overview import build_overview
 from hive._control.show import build_show
-from hive._control.supervisor import Supervisor
+from hive._control.supervisor import Supervisor, state_reason
 from hive.version import get_version, version_payload
 from hive.runner import registration
 from hive.worker import parse_urls
@@ -707,7 +707,14 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         projects = store.list(Project, workspace_id=ctx.workspace_id)
         if not include_archived:
             projects = [p for p in projects if not p.archived]
-        return [p.model_dump() for p in projects]
+        backends = supervisor.available_backends()
+        return [
+            {
+                **p.model_dump(),
+                "state_reason": state_reason(store, p, backends, supervisor.spend_today(p.id)),
+            }
+            for p in projects
+        ]
 
     @app.post("/api/projects")
     def create_project(body: ProjectCreate, ctx: AuthContext = Depends(editor)):
@@ -1493,6 +1500,9 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
         return {
             "project": project.model_dump(),
+            "state_reason": state_reason(
+                store, project, supervisor.available_backends(), supervisor.spend_today(project_id)
+            ),
             "workstreams": [
                 w.model_dump()
                 for w in streams

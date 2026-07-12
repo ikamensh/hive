@@ -16,13 +16,10 @@ const STATE_META: Record<ProjectState, { label: string; cls: string }> = {
   intake: { label: "intake", cls: "questions" },
   working: { label: "working", cls: "working" },
   needs_attention: { label: "needs you", cls: "questions" },
-  blocked_questions: { label: "needs answers", cls: "questions" },
   blocked_resources: { label: "no capacity", cls: "resources" },
   blocked_budget: { label: "budget reached", cls: "resources" },
-  blocked_clarity: { label: "needs clarity", cls: "questions" },
   idle_goal_complete: { label: "goal complete", cls: "idle" },
   idle: { label: "idle", cls: "idle" },
-  idle_no_workstreams: { label: "idle", cls: "idle" },
 };
 
 export function StateBadge({
@@ -39,7 +36,7 @@ export function StateBadge({
     <span className={`badge badge-${meta.cls}`}>
       <i className="dot" />
       {meta.label}
-      {["needs_attention", "blocked_questions", "blocked_clarity"].includes(state) && attentionCount ? (
+      {state === "needs_attention" && attentionCount ? (
         <b>{attentionCount}</b>
       ) : null}
       {state === "blocked_resources" && cooldownHint ? <b>{cooldownHint}</b> : null}

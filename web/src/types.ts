@@ -5,13 +5,10 @@ export type ProjectState =
   | "intake"
   | "working"
   | "needs_attention"
-  | "blocked_questions"
   | "blocked_resources"
   | "blocked_budget"
-  | "blocked_clarity"
   | "idle_goal_complete"
-  | "idle"
-  | "idle_no_workstreams";
+  | "idle";
 
 /** One additive agent permission (hive.models.AgentGrant): which (backend,
  * model) pairs may run and how many sessions per UTC day. Empty lists are
@@ -288,6 +285,8 @@ export interface PlanItemPatch {
 
 export interface ProjectDetail {
   project: Project;
+  /** One human sentence: why the state, and the fix. */
+  state_reason?: string;
   testing_health?: Record<string, TestingHealth>;
   testability?: Record<string, TestabilityView>;
   workstreams: ProjectWorkstream[];
@@ -672,6 +671,8 @@ export interface OverviewProject {
   name: string;
   spec_repo: string;
   state: ProjectState;
+  /** One human sentence: why the state, and the fix. */
+  state_reason: string;
   paused: boolean;
   created_at: number;
   daily_budget_usd: number;

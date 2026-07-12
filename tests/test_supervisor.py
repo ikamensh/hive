@@ -18,6 +18,7 @@ from hive.models import (
     OrchestratorRun,
     Project,
     ProjectState,
+    Question,
     Resource,
     ResourceUsability,
     Runner,
@@ -29,7 +30,7 @@ from hive.models import (
     IssueItemStatus,
 )
 from hive.persistence.store import MemoryStore
-from hive._control.supervisor import Supervisor, compute_state
+from hive._control.supervisor import Supervisor, compute_state, state_reason
 
 
 def make_supervisor(store) -> Supervisor:
@@ -474,3 +475,56 @@ def test_issue_scan_due_gate():
 
     unwired = Supervisor(store, lambda p, e: None)
     assert not unwired._issue_scan_due(project)
+
+
+def test_state_reason_covers_every_state_with_a_human_sentence():
+    """Property: whatever state a project is in, state_reason returns a
+    non-empty sentence that never leaks a bare internal enum name — the
+    'reasons, not states' contract every surface relies on."""
+    store = MemoryStore()
+    # Underscored names are unmistakably internal; plain words (intake, idle)
+    # double as English and may appear naturally.
+    internal_names = {s.value for s in ProjectState if "_" in s.value}
+    for state in ProjectState:
+        project = store.put(Project(name=f"p-{state}", spec_repo="x", state=state))
+        reason = state_reason(store, project, set(), 0.0)
+        assert reason and len(reason) > 15, f"{state}: reason too thin: {reason!r}"
+        for name in internal_names:
+            assert name not in reason, f"{state}: leaks internal name {name!r}"
+
+    paused = store.put(Project(name="pz", spec_repo="x", paused=True))
+    assert "paused" in state_reason(store, paused, set(), 0.0)
+
+
+def test_state_reason_names_the_missing_backend_and_the_blocked_items():
+    store = MemoryStore()
+    project = store.put(
+        Project(name="p", spec_repo="x", state=ProjectState.blocked_resources)
+    )
+    store.put(
+        Task(
+            project_id=project.id,
+            workstream_id="w",
+            repo="r",
+            instructions="i",
+            backend="codex",
+            status=TaskStatus.pending,
+        )
+    )
+    reason = state_reason(store, project, {"claude"}, 0.0)
+    assert "codex" in reason and "machines" in reason
+
+    attention = store.put(
+        Project(name="q", spec_repo="x", state=ProjectState.needs_attention)
+    )
+    store.put(Question(project_id=attention.id, text="which db?"))
+    store.put(
+        IssueItem(
+            project_id=attention.id,
+            title="#7 broken",
+            issue_number=7,
+            status=IssueItemStatus.blocked_clarity,
+        )
+    )
+    reason = state_reason(store, attention, set(), 0.0)
+    assert "question" in reason and "#7" in reason

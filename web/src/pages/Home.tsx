@@ -105,6 +105,7 @@ function ProjectRow({
             {p.paused && <span className="chip chip-paused">paused</span>}
           </div>
           <div className="hp-stats">{bits.join(" · ")}</div>
+          {p.state_reason && <div className="hp-reason" title={p.state_reason}>{p.state_reason}</div>}
         </div>
         <StateBadge
           state={p.state}

@@ -330,6 +330,7 @@ export default function ProjectPage() {
         </div>
         <ProjectActions project={project} onPatch={patch} />
       </div>
+      {data.state_reason && <p className="page-state-reason">{data.state_reason}</p>}
 
       {needsSetup || needsStart ? (
         <ProjectSetup

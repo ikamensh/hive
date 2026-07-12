@@ -1212,11 +1212,11 @@ export const api = {
     return structuredClone({
       paused: fleetPaused,
       projects: [
-        { id: "p-relay", name: "relay", spec_repo: "git@github.com:acme/relay.git", state: "working", paused: false, created_at: now - 86400 * 5, daily_budget_usd: 40, spend_today: 8.2, counts: { active: 2, running: 1, questions: 0, blockers: 0, streams: 3 } },
-        { id: "p-atlas", name: "atlas", spec_repo: "git@github.com:acme/atlas-spec.git", state: "needs_attention", paused: false, created_at: now - 86400 * 9, daily_budget_usd: 25, spend_today: 3.1, counts: { active: 1, running: 0, questions: 1, blockers: 1, streams: 4 } },
-        { id: "p-probe", name: "probe", spec_repo: "git@github.com:acme/probe.git", state: "blocked_resources", paused: false, created_at: now - 86400 * 2, daily_budget_usd: 15, spend_today: 0, counts: { active: 0, running: 0, questions: 0, blockers: 0, streams: 1 } },
-        { id: "p-beacon", name: "beacon", spec_repo: "git@github.com:acme/beacon.git", state: "needs_attention", paused: false, created_at: now - 86400, daily_budget_usd: 0, spend_today: 1.4, counts: { active: 1, running: 0, questions: 1, blockers: 0, streams: 2 } },
-        { id: "p-ledger", name: "ledger", spec_repo: "git@github.com:acme/ledger-spec.git", state: "idle_goal_complete", paused: false, created_at: now - 86400 * 20, daily_budget_usd: 0, spend_today: 0, counts: { active: 0, running: 0, questions: 0, blockers: 0, streams: 2 } },
+        { id: "p-relay", name: "relay", spec_repo: "git@github.com:acme/relay.git", state: "working", state_reason: "1 task(s) running: resolve on claude", paused: false, created_at: now - 86400 * 5, daily_budget_usd: 40, spend_today: 8.2, counts: { running: 1, questions: 0, blockers: 0 } },
+        { id: "p-atlas", name: "atlas", spec_repo: "git@github.com:acme/atlas-spec.git", state: "needs_attention", state_reason: "needs you: 1 question(s) to answer; 1 issue(s) blocked on your call (#41)", paused: false, created_at: now - 86400 * 9, daily_budget_usd: 25, spend_today: 3.1, counts: { running: 0, questions: 1, blockers: 1 } },
+        { id: "p-probe", name: "probe", spec_repo: "git@github.com:acme/probe.git", state: "blocked_resources", state_reason: "waiting for capacity: no online machine offers codex — wake or log in a machine on the machines page", paused: false, created_at: now - 86400 * 2, daily_budget_usd: 15, spend_today: 0, counts: { running: 0, questions: 0, blockers: 0 } },
+        { id: "p-beacon", name: "beacon", spec_repo: "git@github.com:acme/beacon.git", state: "needs_attention", state_reason: "needs you: 1 question(s) to answer", paused: false, created_at: now - 86400, daily_budget_usd: 0, spend_today: 1.4, counts: { running: 0, questions: 1, blockers: 0 } },
+        { id: "p-ledger", name: "ledger", spec_repo: "git@github.com:acme/ledger-spec.git", state: "idle_goal_complete", state_reason: "iteration complete — read the completion note and set the next goal", paused: false, created_at: now - 86400 * 20, daily_budget_usd: 0, spend_today: 0, counts: { running: 0, questions: 0, blockers: 0 } },
       ],
       capacity: {
         machines_total: 2,

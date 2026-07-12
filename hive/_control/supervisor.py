@@ -123,6 +123,103 @@ def compute_state(
     return ProjectState.idle
 
 
+def state_reason(
+    store,
+    project: Project,
+    available_backends: set[str],
+    spend: float,
+) -> str:
+    """One human sentence explaining `project.state`, with the fix attached.
+
+    The user never has to translate internal state names: every badge ships
+    with why-and-what-to-do. Reads the same store facts the state came from,
+    so it can only drift from the badge by one refresh cycle."""
+    if project.paused:
+        return "paused by you — resume it to continue"
+    state = project.state
+    if state == ProjectState.intake:
+        conv = (
+            store.get(AgentConversation, project.intake_conversation_id)
+            if project.intake_conversation_id
+            else None
+        )
+        if conv is None:
+            return "waiting on you: hand over the spec and start intake"
+        if conv.status == ConversationStatus.running:
+            return f"the intake scout ({conv.backend}) is reading and drafting — its brief lands in the intake panel"
+        if conv.status == ConversationStatus.finalizing:
+            return "intake approved — the scout is pushing the durable spec files"
+        if conv.status == ConversationStatus.failed:
+            return "intake failed — retry with another scout from the intake panel"
+        return "waiting on you: answer or approve the scout's brief in the intake panel"
+    if state == ProjectState.working:
+        running = store.list(Task, project_id=project.id, status=TaskStatus.running)
+        if running:
+            doing = ", ".join(sorted({f"{t.kind} on {t.backend}" for t in running}))
+            return f"{len(running)} task(s) running: {doing}"
+        return "work is queued — dispatching to a machine now"
+    if state == ProjectState.needs_attention:
+        bits: list[str] = []
+        open_questions = store.list(Question, project_id=project.id, status=QuestionStatus.open)
+        if open_questions:
+            bits.append(f"{len(open_questions)} question(s) to answer")
+        live = [
+            p
+            for p in store.list(Plan, project_id=project.id)
+            if p.status in (PlanStatus.draft, PlanStatus.approved)
+        ]
+        if live:
+            plan = live[-1]
+            if plan.status == PlanStatus.draft:
+                bits.append("a drafted plan awaits your review")
+            for item in store.list(PlanItem, plan_id=plan.id):
+                if item.status in PLAN_ITEM_PARKED:
+                    why = f": {item.parked_reason[:120]}" if item.parked_reason else ""
+                    bits.append(f"plan item '{item.title}' is {item.status}{why}")
+        blocked_issues = [
+            w
+            for w in store.list(IssueItem, project_id=project.id)
+            if w.status in ISSUE_BLOCKED
+        ]
+        if blocked_issues:
+            numbers = ", ".join(f"#{w.issue_number}" for w in blocked_issues[:5])
+            bits.append(f"{len(blocked_issues)} issue(s) blocked on your call ({numbers})")
+        return "needs you: " + "; ".join(bits) if bits else "needs you — see the project page"
+    if state == ProjectState.blocked_resources:
+        pending = store.list(Task, project_id=project.id, status=TaskStatus.pending)
+        missing = sorted({t.backend for t in pending if t.backend not in available_backends})
+        resources = [
+            r
+            for r in store.list(Resource, workspace_id=project.workspace_id)
+            if r.backend in missing and r.cooldown_until > time.time()
+        ]
+        if resources:
+            soonest = min(r.cooldown_until for r in resources)
+            when = datetime.datetime.fromtimestamp(soonest, datetime.UTC).strftime("%H:%M UTC")
+            return (
+                f"out of quota for {', '.join(missing)} — resumes by itself around {when}"
+            )
+        if missing:
+            return (
+                f"waiting for capacity: no online machine offers {', '.join(missing)} — "
+                "wake or log in a machine on the machines page"
+            )
+        return "waiting for agent capacity — check the machines page"
+    if state == ProjectState.blocked_budget:
+        if spend >= project.daily_budget_usd:
+            return (
+                f"daily budget spent (${spend:.2f} of ${project.daily_budget_usd:.2f}) — "
+                "paid work resumes at UTC midnight; raise the budget to continue now"
+            )
+        return (
+            "today's agent-session allowance is used up — resumes at UTC midnight; "
+            "raise the allowance in settings to continue now"
+        )
+    if state == ProjectState.idle_goal_complete:
+        return "iteration complete — read the completion note and set the next goal"
+    return "idle — no live plan; ask Hive to propose one, or type an ask into the launchpad"
+
+
 class Supervisor:
     """Owns the control loop. `orchestrate` is invoked (in a worker thread) with
     (project_id, events) whenever a project needs an orchestrator decision."""

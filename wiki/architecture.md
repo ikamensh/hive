@@ -26,11 +26,18 @@ Two layers, deliberately separated:
 
 Plain code that owns the project state machine and computes the state purely from facts in the DB:
 
+- `intake` — the scout is aligning the project (or waits on the user) before planning.
 - `working` — a task is running or being dispatched. Invariant: **if not blocked, a next task must be happening ASAP.**
-- `blocked: questions` — work needs human answers (spec clarification, escalations).
-- `blocked: resources` — all usable AI resources exhausted; carries a wake-up time = earliest quota-cooldown expiry, so the system resumes by itself.
-- `blocked: infra` — (post-MVP) infrastructure drift/problem needs human action.
+- `needs_attention` — a question, a plan review, or a blocked item waits on the human.
+- `blocked: resources` — no online usable agent for the pending work; carries a wake-up time = earliest quota-cooldown expiry, so the system resumes by itself.
+- `blocked: budget` — the daily budget or session allowance is spent; resets at UTC midnight.
 - `idle: goal complete` — the iteration goal is fully built; waiting for the human to set the next one.
+- `idle` — nothing planned.
+
+**Reasons, not states**: every surface pairs the badge with `state_reason` — one
+computed human sentence naming the cause and the fix ("no online machine offers
+codex — wake or log in a machine"). Internal state names are never the whole
+message.
 
 The supervisor wakes the orchestrator on events: intake accepted, task finished, question answered, resource cooldown expired, heartbeat timer, (later) GitHub webhook.
 
