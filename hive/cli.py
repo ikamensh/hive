@@ -28,6 +28,7 @@ import sys
 import time
 from pathlib import Path
 from typing import NamedTuple
+from urllib.parse import quote
 
 from hive.config.file import (
     CONFIG_KEYS,
@@ -258,6 +259,26 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("scan", help="scan the project's open GitHub issues and queue fixes")
     p.add_argument("project_id")
 
+    p = sub.add_parser(
+        "issue-run",
+        help="run a workstream's GitHub issues: all open now, --issue picks some, --scan-only just mirrors",
+    )
+    p.add_argument("project_id")
+    p.add_argument("workstream_id", help="the github_issues workstream for the repo (see `hive project`)")
+    scope = p.add_mutually_exclusive_group()
+    scope.add_argument(
+        "--issue", action="append", type=int, default=[],
+        help="issue number to run (repeatable; implies selected scope)",
+    )
+    scope.add_argument(
+        "--scan-only", action="store_true",
+        help="record the run and mirror open issues without queueing fixes",
+    )
+
+    p = sub.add_parser("issue-sync", help="refresh a workstream's mirrored GitHub issues (no fixes queued)")
+    p.add_argument("project_id")
+    p.add_argument("workstream_id")
+
     p = sub.add_parser("preflight", help="check issue-solving preconditions (token, perms, runner push/gh auth)")
     p.add_argument("project_id")
 
@@ -360,6 +381,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("dismiss", help="dismiss an open question without answering")
     p.add_argument("question_id")
 
+    p = sub.add_parser(
+        "decision-reopen",
+        help="re-open a Hive-assumed ledger decision as a question to you",
+    )
+    p.add_argument("project_id")
+    p.add_argument("decision_id", help="ledger entry id, e.g. D-002 (see `hive project` decision_ledger)")
+    p.add_argument(
+        "--workstream", default="",
+        help="park only this workstream's work (default: every active manual workstream)",
+    )
+
     p = sub.add_parser("feedback", help="leave feedback on a task/workstream")
     p.add_argument("project_id")
     p.add_argument("target_id")
@@ -426,13 +458,22 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("machine-owner", help="claim/assign a machine to a user ('' releases)")
     p.add_argument("machine_id")
     p.add_argument("user_id", nargs="?", default="", help="empty = release")
+    p = sub.add_parser(
+        "machine-forget",
+        help="forget a machine that is gone for good (drops its runners, resources, checkouts)",
+    )
+    p.add_argument("machine_id")
 
+    sub.add_parser(
+        "enroll-token",
+        help="mint a one-hour enrollment token (+ the `hive enroll` command) for onboarding a new machine",
+    )
     p = sub.add_parser(
         "enroll",
-        help="onboard THIS machine as a runner owned by you (token from the web machines page)",
+        help="onboard THIS machine as a runner owned by you (token from `hive enroll-token`)",
     )
     p.add_argument("--url", required=True, help="chief URL, e.g. https://hive.example.com")
-    p.add_argument("--token", required=True, help="enrollment token from the machines page")
+    p.add_argument("--token", required=True, help="enrollment token (`hive enroll-token` or the web machines page)")
     p.add_argument("--name", default="", help="runner name (default: short hostname)")
 
     return parser
@@ -1174,6 +1215,17 @@ def run(args: argparse.Namespace, client) -> dict | list:
         r = client.post(f"/api/plan-items/{args.item_id}/cancel", json={"reason": args.reason})
     elif c == "scan":
         r = client.post(f"/api/projects/{args.project_id}/scan-issues")
+    elif c == "issue-run":
+        r = client.post(
+            f"/api/projects/{args.project_id}/workstreams/{args.workstream_id}/issue-runs",
+            json={
+                "scope": "selected" if args.issue
+                else ("scan_only" if args.scan_only else "all_open_now"),
+                "issue_numbers": args.issue,
+            },
+        )
+    elif c == "issue-sync":
+        r = client.post(f"/api/projects/{args.project_id}/workstreams/{args.workstream_id}/sync")
     elif c == "check-ci":
         r = client.post(
             f"/api/projects/{args.project_id}/workstreams/{args.workstream_id}/check-ci"
@@ -1231,6 +1283,11 @@ def run(args: argparse.Namespace, client) -> dict | list:
                         json={"answer": args.answer})
     elif c == "dismiss":
         r = client.post(f"/api/questions/{args.question_id}/dismiss")
+    elif c == "decision-reopen":
+        r = client.post(
+            f"/api/projects/{args.project_id}/decisions/{quote(args.decision_id, safe='')}/reopen",
+            json={"workstream_id": args.workstream},
+        )
     elif c == "feedback":
         r = client.post("/api/feedback", json={
             "project_id": args.project_id, "target_id": args.target_id,
@@ -1295,6 +1352,10 @@ def run(args: argparse.Namespace, client) -> dict | list:
         r = client.patch(f"/api/users/{args.user_id}", json={"role": args.role})
     elif c == "machine-owner":
         r = client.patch(f"/api/machines/{args.machine_id}", json={"owner_user_id": args.user_id})
+    elif c == "machine-forget":
+        r = client.delete(f"/api/machines/{args.machine_id}")
+    elif c == "enroll-token":
+        r = client.post("/api/enroll-tokens")
     else:
         raise AssertionError(f"unhandled command {c}")
     r.raise_for_status()
@@ -1328,7 +1389,8 @@ def _run_enroll(args: argparse.Namespace) -> None:
         detail = response.json().get("detail", response.text[:300])
         raise SystemExit(
             f"enrollment refused: {detail}\n"
-            "Tokens expire after an hour — mint a fresh one from the machines page."
+            "Tokens expire after an hour — mint a fresh one with `hive enroll-token` "
+            "(or from the web machines page)."
         )
     response.raise_for_status()
     creds = response.json()

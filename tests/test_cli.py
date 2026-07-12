@@ -833,6 +833,9 @@ class _Recorder:
     def patch(self, url, **kw):
         return self._send("PATCH", url, kw.get("json"))
 
+    def delete(self, url, **kw):
+        return self._send("DELETE", url, kw.get("json"))
+
 
 def test_cli_pause_resume_map_to_workspace_patch():
     """`hive pause` / `hive resume` are the fleet-wide off-switch: one PATCH
@@ -861,6 +864,114 @@ def test_cli_run_cancels_map_to_endpoints():
         ("POST", "/api/test-episodes/ep1/cancel", None),
         ("POST", "/api/issue-runs/run1/cancel", None),
     ]
+
+
+def test_cli_issue_commands_map_to_endpoints():
+    """Scoped issue runs mirror the UI's run drawer: --issue implies the
+    selected scope, --scan-only records a run without queueing fixes, and
+    issue-sync refreshes the mirror without a run at all. machine-forget and
+    decision-reopen hit the same routes as their UI buttons."""
+    rec = _Recorder()
+    cli(rec, "issue-run", "p1", "ws1")
+    cli(rec, "issue-run", "p1", "ws1", "--issue", "3", "--issue", "7")
+    cli(rec, "issue-run", "p1", "ws1", "--scan-only")
+    cli(rec, "issue-sync", "p1", "ws1")
+    cli(rec, "machine-forget", "m1")
+    cli(rec, "decision-reopen", "p1", "D-002", "--workstream", "ws9")
+    assert rec.calls == [
+        ("POST", "/api/projects/p1/workstreams/ws1/issue-runs",
+         {"scope": "all_open_now", "issue_numbers": []}),
+        ("POST", "/api/projects/p1/workstreams/ws1/issue-runs",
+         {"scope": "selected", "issue_numbers": [3, 7]}),
+        ("POST", "/api/projects/p1/workstreams/ws1/issue-runs",
+         {"scope": "scan_only", "issue_numbers": []}),
+        ("POST", "/api/projects/p1/workstreams/ws1/sync", None),
+        ("DELETE", "/api/machines/m1", None),
+        ("POST", "/api/projects/p1/decisions/D-002/reopen", {"workstream_id": "ws9"}),
+    ]
+
+    # naming issues and --scan-only contradict each other; argparse refuses
+    with pytest.raises(SystemExit):
+        cli(_Recorder(), "issue-run", "p1", "ws1", "--issue", "3", "--scan-only")
+
+
+def test_cli_issue_run_and_sync(harness, monkeypatch):
+    """CLI/UI parity for the issues page: `hive issue-sync` mirrors open issues
+    without queueing work; `hive issue-run --issue N` queues exactly the named
+    issue; `--scan-only` records a finished run with nothing queued."""
+    from test_issues import _pass_preflight, issue
+
+    client, store = harness
+    pid = cli(client, "create", "spec")["id"]
+    cli(client, "set", pid, "--spec-repo", "https://github.com/o/r.git")
+    _pass_preflight(monkeypatch)
+    monkeypatch.setattr(
+        "hive.api.fetch_open_issues_full",
+        lambda repo, token: [issue(1, "skip"), issue(2, "run me")],
+    )
+    stream = next(
+        w for w in cli(client, "project", pid)["workstreams"]
+        if w["kind"] == "github_issues"
+    )
+
+    synced = cli(client, "issue-sync", pid, stream["id"])
+    assert synced["open_issues"] == 2 and synced["resolve_queued"] == 0
+
+    scanned = cli(client, "issue-run", pid, stream["id"], "--scan-only")
+    assert scanned["run"]["scope"] == "scan_only" and scanned["resolve_queued"] == 0
+
+    ran = cli(client, "issue-run", pid, stream["id"], "--issue", "2")
+    assert ran["run"]["scope"] == "selected"
+    assert ran["run"]["issue_numbers"] == [2]
+    assert ran["resolve_queued"] == 1
+    cli(client, "issue-cancel", ran["run"]["id"])
+
+
+def test_cli_decision_reopen(harness, tmp_path):
+    """The Decisions page's reopen button via CLI: `hive project` surfaces the
+    ledger entry, `hive decision-reopen` flips it to needs_clarification and
+    files the follow-up question."""
+    client, store = harness
+    origin = _spec_origin(tmp_path, {
+        "mission.md": "# Mission\nBuild it.\n",
+        "iteration.md": "# Iteration\nShip it.\n",
+        "wiki/decisions.md": (
+            "# Decision ledger\n\n"
+            "## D-002 · Retry window\n"
+            "source_type: agent_proposed\n"
+            "impact: medium · reversibility: high · status: accepted_for_iteration\n"
+            "expires_when: operator picks a policy\n\n"
+            "Retry failed webhooks for 24 hours.\n"
+        ),
+    })
+    pid = cli(client, "create", "ledger")["id"]
+    cli(client, "set", pid, "--spec-repo", str(origin))
+
+    ledger = cli(client, "project", pid)["decision_ledger"]
+    decision = next(d for d in ledger["decisions"] if d["can_reopen"])
+
+    result = cli(client, "decision-reopen", pid, decision["id"])
+    assert result["decision"]["status"] == "needs_clarification"
+    assert result["question"]["status"] == "open"
+    assert cli(client, "project", pid)["questions"][0]["id"] == result["question"]["id"]
+
+
+def test_cli_enroll_token_and_machine_forget(harness):
+    """Machines-page parity: mint an enrollment token from the CLI and forget a
+    retired machine, cascading to its runners and resources."""
+    client, store = harness
+
+    minted = cli(client, "enroll-token")
+    assert minted["token"] in minted["command"]
+    assert "hive enroll" in minted["command"]
+    assert minted["expires_in_s"] > 0
+
+    _register_usable_runner(client, name="old-laptop")
+    machine = cli(client, "resources")["machines"][0]
+    forgotten = cli(client, "machine-forget", machine["id"])
+    assert forgotten == {"ok": True, "forgotten": machine["id"]}
+    payload = cli(client, "resources")
+    assert payload["machines"] == [] and payload["resources"] == []
 
 
 def test_cli_stories_coverage_view(harness, tmp_path):
