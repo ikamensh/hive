@@ -14,18 +14,18 @@ import logging
 import time
 from pathlib import Path
 
-from hive.agents import BACKEND_NAMES, REGISTRY
+from hive.agents import REGISTRY
 from hive._control import allowances
 from hive._control.escalation import escalate
-from hive._workstreams.issues import ensure_iteration_workstream
+from hive._workstreams import plans
 from hive.llm import LoopResult, ProviderUnavailable, ToolLoop, ToolSet, build_adapters
 from hive.models import (
-    Autonomy,
     Feedback,
     HumanTask,
     HumanTaskKind,
     HumanTaskStatus,
     OrchestratorRun,
+    PlanStatus,
     Project,
     Question,
     QuestionStatus,
@@ -38,7 +38,6 @@ from hive.models import (
     Verdict,
     Workstream,
     WorkstreamSource,
-    WorkstreamStatus,
 )
 from hive.llm._pricing import estimate_cost
 from hive.llm.prompts import load as load_prompt
@@ -48,7 +47,6 @@ log = logging.getLogger("hive._control.orchestrator")
 
 HISTORY_LIMIT = 80
 RESULT_SNIPPET = 4000
-MAX_FIX_ROUNDS = 3  # consecutive verify rejects before a workstream must park + ask
 MAX_REMOTE_CALLS = 25  # tool-call rounds per orchestrator invocation
 
 
@@ -83,14 +81,10 @@ class Tools:
 
     def functions(self) -> list:
         return [
-            self.create_workstream,
-            self.create_task,
-            self.cancel_task,
+            self.propose_plan,
+            self.amend_plan,
             self.ask_user,
             self.withdraw_question,
-            self.park_workstream,
-            self.reactivate_workstream,
-            self.complete_workstream,
             self.commit_to_spec,
             self.create_human_task,
             self.mark_goal_complete,
@@ -98,209 +92,69 @@ class Tools:
 
     # -- tools ---------------------------------------------------------------
 
-    def create_workstream(self, title: str, description: str) -> str:
-        """Create a workstream: a coarse direction of work (e.g. 'auth flow')
-        touching a mostly-disjoint part of the codebase."""
-        iteration = ensure_iteration_workstream(self.store, self.project)
-        ws = self.store.put(
-            Workstream(
-                workspace_id=self.project.workspace_id,
-                project_id=self.project.id,
-                workstream_id=iteration.id,
-                title=title,
-                description=description,
-            )
-        )
-        self.actions.append(f"created workstream {ws.id} '{title}'")
-        return f"workstream_id={ws.id}"
+    def _parse_items(self, items_json: str) -> list[dict] | str:
+        try:
+            items = json.loads(items_json)
+        except json.JSONDecodeError as exc:
+            return f"error: items_json is not valid JSON: {exc}"
+        if not isinstance(items, list) or not items:
+            return "error: items_json must be a non-empty JSON list of item objects"
+        if not all(isinstance(i, dict) and str(i.get("title") or "").strip() for i in items):
+            return "error: every item must be an object with at least a non-empty 'title'"
+        return items
 
-    def create_task(
-        self,
-        workstream_id: str,
-        repo: str,
-        instructions: str,
-        backend: str = "cursor",
-        kind: str = "work",
-        model: str = "",
-    ) -> str:
-        """Queue a task for a coding agent. repo is the git URL to check out.
-        kind is 'work' (implements, then lands changes) or 'verify' (fresh-eyes
-        review of the previous task; landing is disabled). backend is one of
-        claude | cursor | codex | gemini-cli — pick one with a *usable* agent
-        on an online machine (see RUNNERS in the snapshot), or the task cannot
-        dispatch. model optionally pins the backend's model (empty = the
-        backend's default); when AGENT ALLOWANCE in the snapshot restricts
-        models, pick an allowed (backend, model) pair or the task cannot
-        dispatch."""
-        if backend not in BACKEND_NAMES:
-            return f"error: unknown backend {backend!r}, use one of {BACKEND_NAMES}"
-        grants = self.project.agent_grants
-        if grants:
-            left = allowances.remaining(
-                grants,
-                allowances.sessions_today(
-                    self.store.list(Task, project_id=self.project.id),
-                    allowances.utc_day_start(),
-                ),
-            )
-            if not allowances.admits(grants, left, backend, model):
-                pair = f"{backend!r} with model {model!r}" if model else f"{backend!r} (default model)"
-                return (
-                    f"error: the project's agent allowance does not permit {pair} right now. "
-                    f"Allowance: {allowances.describe(grants, left)}. Pick an allowed "
-                    "backend/model, or stop planning paid work until the UTC-midnight reset."
-                )
-        online_runners = {
-            r.id
-            for r in self.store.list(Runner, workspace_id=self.project.workspace_id)
-            if r.online()
-        }
-        usable = sorted(
-            {
-                res.backend
-                for res in self.store.list(Resource, workspace_id=self.project.workspace_id)
-                if res.available() and res.runner_id in online_runners
-            }
-        )
-        if usable and backend not in usable:
-            # Installed is not usable: a parked/failed/cooling-down agent must
-            # not receive work (live: two cursor tasks queued against a dead
-            # subscription before this gate existed).
-            return (
-                f"error: no usable {backend!r} agent is available right now "
-                f"(offline, parked, failed, or cooling down); pick from: {usable}"
-            )
-        ws = self.store.get(Workstream, workstream_id)
-        if not ws:
-            return f"error: no workstream {workstream_id}"
-        if ws.source == WorkstreamSource.issue:
-            return (
-                "error: GitHub issue work items are owned by the deterministic "
-                "issue pipeline. Use the Issues view to scan/run issues instead."
-            )
-        if not ws.repo and repo:
-            ws.repo = repo
-            self.store.put(ws)
-        if kind == TaskKind.work and self._unresolved_rejects(workstream_id) >= MAX_FIX_ROUNDS:
-            return (
-                f"error: workstream {workstream_id} has {MAX_FIX_ROUNDS} verify rejects with no "
-                "accept since. Don't queue another fix — park the workstream and ask the user "
-                "what to change (park_workstream + ask_user)."
-            )
-        if kind == TaskKind.work and self._failed_work_streak(workstream_id) >= MAX_FIX_ROUNDS:
-            return (
-                f"error: workstream {workstream_id} has {MAX_FIX_ROUNDS} work tasks that failed "
-                "(runner/execution errors) with no success since. Re-running won't help — park "
-                "the workstream and ask the user (try a different backend or fix the blocker)."
-            )
-        # PR (mature) mode keeps each workstream's work on its own branch so the
-        # verify task reviews exactly those changes and a human merges the PR.
-        # direct_push (fast) mode lands on the default branch; verify is the
-        # after-the-fact safety net that triggers a fix on reject.
-        branch = f"hive/{workstream_id[:8]}" if self.project.autonomy == Autonomy.pr else ""
-        prompt_versions = {}
-        if kind == TaskKind.work:
-            landing_name = (
-                "landing_direct_push" if self.project.autonomy == Autonomy.direct_push else "landing_pr"
-            )
-            landing, version = load_prompt(landing_name)
-            instructions = f"{instructions}\n\n{landing}"
-            if branch:
-                instructions += f"\n\nUse the git branch `{branch}` for this work."
-            prompt_versions[landing_name] = version
-        else:
-            suffix, version = load_prompt("verify_suffix")
-            instructions = f"{instructions}\n\n{suffix}"
-            prompt_versions["verify_suffix"] = version
-        task = self.store.put(
-            Task(
-                workspace_id=self.project.workspace_id,
-                project_id=self.project.id,
-                workstream_id=workstream_id,
-                work_item_id=workstream_id,
-                repo=repo,
-                branch=branch,
-                kind=TaskKind(kind),
-                instructions=instructions,
-                backend=backend,
-                model=model,
-                prompt_versions=prompt_versions,
-            )
-        )
-        self.actions.append(f"queued {kind} task {task.id} on {repo} via {backend}")
-        return f"task_id={task.id} (queued)"
+    def propose_plan(self, goal: str, items_json: str) -> str:
+        """Draft the iteration plan for the human to review. items_json is a
+        JSON list of item objects, in execution order:
+        {"title", "story", "constraints", "notes", "repo"?} — title is the
+        high-level statement ('add mobile support'); story says who can do
+        what once it lands; constraints are sparse technical boundaries, not a
+        blueprint; repo only when it differs from the spec repo. Nothing
+        executes until the human approves the plan, and the human may rewrite
+        any part of it — write items that read well standalone. Replaces any
+        unapproved draft."""
+        items = self._parse_items(items_json)
+        if isinstance(items, str):
+            return items
+        try:
+            plan = plans.create_draft(self.store, self.project, goal, items, proposed_by="agent")
+        except ValueError as exc:
+            return f"error: {exc}"
+        self.actions.append(f"proposed plan {plan.id} with {len(items)} item(s)")
+        return f"plan_id={plan.id} drafted with {len(items)} item(s); awaiting the human's review"
 
-    def _unresolved_rejects(self, workstream_id: str) -> int:
-        """Verify rejects since the last accept in a workstream — the fix-loop
-        depth the orchestrator must not exceed before escalating to the human."""
-        count = 0
-        for t in self.store.list(Task, project_id=self.project.id, workstream_id=workstream_id):
-            if t.kind != TaskKind.verify:
-                continue
-            if t.verdict == Verdict.accept:
-                count = 0
-            elif t.verdict == Verdict.reject:
-                count += 1
-        return count
+    def amend_plan(self, items_json: str) -> str:
+        """Propose additional items for the live plan (same JSON shape as
+        propose_plan). Use when landed work revealed necessary follow-ups; the
+        items enter as proposals the human must approve before they execute.
+        Never re-add a rejected item without a changed approach, and never
+        amend around a blocked item — that is the human's call."""
+        plan = plans.active_plan(self.store, self.project)
+        if plan is None:
+            return "error: no live plan; use propose_plan"
+        items = self._parse_items(items_json)
+        if isinstance(items, str):
+            return items
+        try:
+            added = [plans.add_item(self.store, self.project, plan, i, "agent") for i in items]
+        except ValueError as exc:
+            return f"error: {exc}"
+        self.actions.append(f"proposed {len(added)} amendment item(s) on plan {plan.id}")
+        return f"{len(added)} item(s) proposed; they execute only after the human approves them"
 
-    def _failed_work_streak(self, workstream_id: str) -> int:
-        """Consecutive failed work tasks since the last successful one — guards
-        against re-queueing work that keeps crashing (bad creds, runtime errors)
-        instead of failing quality review, which `_unresolved_rejects` covers."""
-        streak = 0
-        for t in self.store.list(Task, project_id=self.project.id, workstream_id=workstream_id):
-            if t.kind != TaskKind.work:
-                continue
-            if t.status == TaskStatus.failed:
-                streak += 1
-            elif t.status == TaskStatus.done:
-                streak = 0
-        return streak
-
-    def cancel_task(self, task_id: str, reason: str) -> str:
-        """Cancel one of this project's own queued or running tasks — e.g. work
-        stuck pending on a backend that turned out unusable. A pending task
-        stops immediately; a running one is flagged and the runner stops it
-        cooperatively. Never ask the human to cancel a task: this tool is how
-        you do it yourself. Deterministic pipeline tasks (issue resolve/review,
-        testing) are owned by their workstreams and cannot be cancelled here."""
-        task = self.store.get(Task, task_id)
-        if not task or task.project_id != self.project.id:
-            return f"error: no task {task_id} in this project"
-        if task.kind not in (TaskKind.work, TaskKind.verify):
-            return f"error: {task.kind} tasks belong to their pipeline; cancel only work/verify tasks"
-        if task.status == TaskStatus.running and task.delivered:
-            task.cancel_requested = True
-            self.store.put(task)
-            self.actions.append(f"requested cancel of running task {task_id}: {reason}")
-            return "cancel requested; the runner will stop it and report the result"
-        if task.status in (TaskStatus.pending, TaskStatus.running):
-            task.status = TaskStatus.cancelled
-            task.result_text = f"Cancelled by the planner: {reason}"
-            task.finished_at = time.time()
-            self.store.put(task)
-            self.actions.append(f"cancelled task {task_id}: {reason}")
-            return "cancelled"
-        return f"error: task is already {task.status}; nothing to cancel"
-
-    def ask_user(self, question_markdown: str, workstream_id: str = "") -> str:
+    def ask_user(self, question_markdown: str) -> str:
         """Ask the human a clarification question (markdown: context, the
-        gap/contradiction, options, your recommendation). If workstream_id is
-        given, that workstream is parked until the answer arrives."""
+        gap/contradiction, options, your recommendation). Reserve it for
+        decisions that change what gets built; batch related questions."""
         if problem := _structured_question_problem(question_markdown):
             return problem
         q = self.store.put(
             Question(
                 workspace_id=self.project.workspace_id,
                 project_id=self.project.id,
-                workstream_id=workstream_id,
                 text=question_markdown,
             )
         )
-        if workstream_id and (ws := self.store.get(Workstream, workstream_id)):
-            ws.status = WorkstreamStatus.parked
-            ws.parked_reason = f"awaiting answer to question {q.id}"
-            self.store.put(ws)
         self.actions.append(f"asked user question {q.id}")
         return f"question_id={q.id} (user will see it in the inbox)"
 
@@ -318,54 +172,7 @@ class Tools:
         q.answer = f"(withdrawn by the planner: {reason})"
         self.store.put(q)
         self.actions.append(f"withdrew question {question_id}: {reason}")
-        parked = [
-            ws.id
-            for ws in self.store.list(Workstream, project_id=self.project.id)
-            if ws.status == WorkstreamStatus.parked and question_id in ws.parked_reason
-        ]
-        if parked:
-            return (
-                f"withdrawn; workstream(s) {', '.join(parked)} are still parked on it — "
-                "reactivate them if work should continue"
-            )
         return "withdrawn"
-
-    def park_workstream(self, workstream_id: str, reason: str) -> str:
-        """Park a workstream (stop working on it) with a reason."""
-        ws = self.store.get(Workstream, workstream_id)
-        if not ws:
-            return f"error: no workstream {workstream_id}"
-        ws.status = WorkstreamStatus.parked
-        ws.parked_reason = reason
-        self.store.put(ws)
-        self.actions.append(f"parked workstream {workstream_id}: {reason}")
-        return "parked"
-
-    def reactivate_workstream(self, workstream_id: str) -> str:
-        """Reactivate a parked workstream."""
-        ws = self.store.get(Workstream, workstream_id)
-        if not ws:
-            return f"error: no workstream {workstream_id}"
-        ws.status = WorkstreamStatus.active
-        ws.parked_reason = ""
-        self.store.put(ws)
-        self.actions.append(f"reactivated workstream {workstream_id}")
-        return "active"
-
-    def complete_workstream(self, workstream_id: str) -> str:
-        """Mark a workstream done (its goal is built and verified)."""
-        ws = self.store.get(Workstream, workstream_id)
-        if not ws:
-            return f"error: no workstream {workstream_id}"
-        if ws.source == WorkstreamSource.issue:
-            return (
-                "error: GitHub issue work items are owned by the deterministic "
-                "issue pipeline; do not complete them from the build orchestrator."
-            )
-        ws.status = WorkstreamStatus.done
-        self.store.put(ws)
-        self.actions.append(f"completed workstream {workstream_id}")
-        return "done"
 
     def commit_to_spec(self, files_json: str, message: str) -> str:
         """Write files to the project's spec repo and push. files_json is a
@@ -436,48 +243,42 @@ class Tools:
         return f"human_task_id={t.id} (user will see it on the resources page)"
 
     def mark_goal_complete(self, summary: str) -> str:
-        """Declare the iteration goal fully built and verified. Only valid once
-        every workstream is done/parked, no tasks are queued or running, and no
-        questions are open. The project goes idle until the human sets the next
-        goal.
+        """Declare the iteration goal fully built. Only valid once the
+        iteration plan is complete (every item merged, or cancelled by the
+        human), nothing is queued or running, and no questions are open. The
+        project goes idle until the human sets the next goal.
 
         The summary is the completion note the human reads: it must contain a
         'Try it:' line with the exact command(s) to see the result working
         (e.g. `git clone … && cargo run`), plus the verification evidence
-        (test counts, verify verdicts) — a claim without a way to check it is
+        (review verdicts, test counts) — a claim without a way to check it is
         not a completion note."""
+        # The quality gate is structural: every plan item landed only through
+        # an accepted fresh-agent review, so a complete plan IS the evidence.
+        plan = plans.latest_plan(self.store, self.project)
+        if plan is None:
+            return (
+                "rejected: no iteration plan exists. The goal completes only through "
+                "an approved plan landing; propose_plan first."
+            )
+        if plan.status != PlanStatus.complete:
+            return (
+                f"rejected: the iteration plan is {plan.status}. Every item must merge "
+                "(or be cancelled by the human) before the goal can complete."
+            )
         unfinished = [
             t
             for t in self.store.list(Task, project_id=self.project.id)
             if t.status in (TaskStatus.pending, TaskStatus.running)
         ]
-        active = [
-            w
-            for w in self.store.list(
-                Workstream, project_id=self.project.id, status=WorkstreamStatus.active
-            )
-            if w.source != WorkstreamSource.issue
-        ]
         open_questions = self.store.list(
             Question, project_id=self.project.id, status=QuestionStatus.open
         )
-        if unfinished or active or open_questions:
+        if unfinished or open_questions:
             return (
-                f"rejected: {len(unfinished)} unfinished tasks, {len(active)} active "
-                f"workstreams, {len(open_questions)} open questions. Finish or park them first."
+                f"rejected: {len(unfinished)} unfinished tasks, "
+                f"{len(open_questions)} open questions. Finish them or withdraw moot questions first."
             )
-        # The quality gate is real, not advisory: a workstream counts as built
-        # only if its most recent task is a verify that ACCEPTed.
-        for ws in self.store.list(Workstream, project_id=self.project.id):
-            if ws.source == WorkstreamSource.issue or ws.status != WorkstreamStatus.done:
-                continue
-            ws_tasks = self.store.list(Task, project_id=self.project.id, workstream_id=ws.id)
-            last = ws_tasks[-1] if ws_tasks else None
-            if last is None or last.kind != TaskKind.verify or last.verdict != Verdict.accept:
-                return (
-                    f"rejected: workstream {ws.id} '{ws.title}' is not closed by an accepted "
-                    "verify task. Queue a verify task and get an ACCEPT before completing."
-                )
         self.project.goal_complete = True
         self.project.goal_complete_note = summary
         self.store.put(self.project)
@@ -487,17 +288,23 @@ class Tools:
     # -- context -------------------------------------------------------------
 
     def snapshot(self) -> str:
-        all_workstreams = self.store.list(Workstream, project_id=self.project.id)
-        workstreams = list(all_workstreams)
-        workstreams = [w for w in workstreams if w.source != WorkstreamSource.issue]
-        issue_items = [w for w in all_workstreams if w.source == WorkstreamSource.issue]
-        ws_lines = []
-        for ws in workstreams:
-            desc = ws.description[:200] + ("…" if len(ws.description) > 200 else "")
-            line = f"- [{ws.status}] {ws.id} '{ws.title}': {desc}"
-            if ws.parked_reason:
-                line += f" (parked: {ws.parked_reason})"
-            ws_lines.append(line)
+        plan = plans.latest_plan(self.store, self.project)
+        if plan is None:
+            plan_lines = ["(no plan — propose_plan when the spec warrants work)"]
+        else:
+            plan_lines = [f"[{plan.status}] plan {plan.id} goal: {plan.goal[:300]}"]
+            for item in plans.plan_items(self.store, plan):
+                line = f"- [{item.status}] {item.order + 1}. '{item.title}' ({item.id})"
+                if item.story:
+                    line += f" story: {item.story[:150]}"
+                if item.parked_reason:
+                    line += f"\n  parked: {item.parked_reason[:400]}"
+                plan_lines.append(line)
+        issue_items = [
+            w
+            for w in self.store.list(Workstream, project_id=self.project.id)
+            if w.source == WorkstreamSource.issue
+        ]
         issue_lines = []
         for ws in sorted(issue_items, key=lambda w: (w.order, w.issue_number))[-20:]:
             line = f"- [{ws.status}] issue #{ws.issue_number} {ws.id} '{ws.title}'"
@@ -578,8 +385,8 @@ class Tools:
                 "AGENT ALLOWANCE (sessions/day; disallowed tasks cannot dispatch): "
                 + allowances.describe(p.agent_grants, allowance_left),
                 "",
-                "WORK ITEMS:",
-                *(ws_lines or ["(none yet)"]),
+                "ITERATION PLAN (executes via the deterministic pipeline once the human approves):",
+                *plan_lines,
                 "",
                 "GITHUB ISSUE WORK ITEMS (deterministic pipeline, read-only to planner):",
                 *(issue_lines or ["(none)"]),

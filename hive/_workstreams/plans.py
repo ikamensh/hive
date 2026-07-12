@@ -249,7 +249,7 @@ def retry_item(store, project: Project, plan: Plan, item: PlanItem) -> PlanItem:
         saved.updated_at = now_s()
 
     updated = store.update(PlanItem, item.id, mutate) or item
-    advance_plan(store, project, plan)
+    advance_plan(store, project, store.get(Plan, plan.id) or plan)
     return updated
 
 

@@ -110,6 +110,37 @@ def test_goal_complete_only_when_project_is_quiescent_and_verified():
     assert compute_state(p, [done_ws], 0, [accepted_verify], set()) == ProjectState.idle_goal_complete
 
 
+def test_plan_states_surface_as_attention_or_work():
+    """A draft plan awaits the human (needs_attention); a parked item stalls
+    the strict-order plan (needs_attention); queued items on an approved plan
+    without live tasks still read as working, not idle."""
+    from hive.models import PlanItem, PlanItemStatus, PlanStatus
+
+    p = Project(name="p", spec_repo="x")
+
+    def item(status):
+        return PlanItem(project_id=p.id, plan_id="pl", title="t", status=status)
+
+    assert compute_state(
+        p, [], 0, [], set(), plan_status=PlanStatus.draft,
+        plan_items=[item(PlanItemStatus.proposed)],
+    ) == ProjectState.needs_attention
+    assert compute_state(
+        p, [], 0, [], set(), plan_status=PlanStatus.approved,
+        plan_items=[item(PlanItemStatus.blocked_clarity), item(PlanItemStatus.queued)],
+    ) == ProjectState.needs_attention
+    assert compute_state(
+        p, [], 0, [], set(), plan_status=PlanStatus.approved,
+        plan_items=[item(PlanItemStatus.rejected)],
+    ) == ProjectState.needs_attention
+    assert compute_state(
+        p, [], 0, [], set(), plan_status=PlanStatus.approved,
+        plan_items=[item(PlanItemStatus.queued)],
+    ) == ProjectState.working
+    # A finished plan leaves no residue: state falls through to the usual rules.
+    assert compute_state(p, [], 0, [], set()) == ProjectState.idle
+
+
 def test_running_task_means_working():
     p = Project(name="p", spec_repo="x")
     t = Task(project_id=p.id, workstream_id="w", repo="r", instructions="i",

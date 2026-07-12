@@ -23,6 +23,8 @@ from hive.models import (
     HumanTask,
     HumanTaskStatus,
     OrchestratorRun,
+    Plan,
+    PlanItemStatus,
     Project,
     ProjectState,
     Question,
@@ -38,6 +40,7 @@ from hive.models import (
     WorkstreamStatus,
 )
 from hive._control.orchestrator import Orchestrator, Tools
+from hive._workstreams import plans
 from hive.persistence.store import MemoryStore
 from hive._control.supervisor import Supervisor
 
@@ -99,8 +102,9 @@ def _create_started(client, name, spec_repo="https://example.com/spec.git"):
 
 
 class ScriptedOrchestrator:
-    """Plays the orchestrator: plans one workstream/task, verifies after work,
-    asks a question after verify, completes the goal after the answer."""
+    """Plays the planner: proposes a one-item plan when none exists, asks a
+    question when the plan completes, marks the goal complete after the answer.
+    Execution in between belongs to the deterministic pipeline, not to it."""
 
     def __init__(self, store):
         self.store = store
@@ -110,29 +114,23 @@ class ScriptedOrchestrator:
         self.invocations.append(events)
         project = self.store.get(Project, project_id)
         tools = Tools(self.store, project, spec=None)
-        tasks = self.store.list(Task, project_id=project_id)
-        questions = self.store.list(Question, project_id=project_id)
 
-        if not self.store.list(Workstream, project_id=project_id):
-            ws_id = tools.create_workstream("build", "build the thing").split("=")[1]
-            tools.create_task(ws_id, "https://example.com/app.git", "implement feature")
-        elif any("answered question" in e for e in events):
-            tools.mark_goal_complete("done after clarification")
-        elif any(t.kind == TaskKind.work and t.status == "done" for t in tasks) and not any(
-            t.kind == TaskKind.verify for t in tasks
-        ):
-            work = next(t for t in tasks if t.kind == TaskKind.work and t.status == "done")
-            tools.create_task(work.workstream_id, "https://example.com/app.git", "verify it", kind="verify")
-        elif any(t.kind == TaskKind.verify and t.status == "done" for t in tasks) and not questions:
-            work = next(t for t in tasks if t.kind == TaskKind.work)
+        if any("answered question" in e for e in events):
+            tools.mark_goal_complete("done after clarification. Try it: run the demo")
+        elif any("plan complete" in e.lower() for e in events):
             tools.ask_user(
-                "## Include B in this iteration?\n\n"
-                "The accepted verify covered A, but the spec leaves B adjacent to the same user journey.\n\n"
+                "## Include B in the next iteration?\n\n"
+                "The plan landed A, but the spec leaves B adjacent to the same user journey.\n\n"
                 "**Options:**\n\n"
-                "1. Add B now while the code is warm.\n"
-                "2. Ship A only and schedule B for a later iteration.\n\n"
-                "**Recommendation:** add B now; it is cheap to include and avoids another partial pass.",
-                work.workstream_id,
+                "1. Add B in the next plan.\n"
+                "2. Ship A only and revisit later.\n\n"
+                "**Recommendation:** add B next; it is cheap and avoids another partial pass."
+            )
+        elif not self.store.list(Plan, project_id=project_id):
+            tools.propose_plan(
+                "Ship the first loop",
+                '[{"title": "build the thing", "story": "a user can run the demo",'
+                ' "constraints": "keep it minimal"}]',
             )
 
 
@@ -214,57 +212,87 @@ def test_lifespan_releases_leader_for_immediate_restart(tmp_path):
     sup2.acquire_leadership()
 
 
-def test_full_loop(harness):
+def test_full_loop(harness, tmp_path, monkeypatch):
+    """The whole new-model journey: planner proposes → human approves (blind
+    path) → pipeline resolves, reviews, merges → plan completes → planner asks
+    → answer → goal complete. Landing transport is faked; the plan document
+    commit runs against a real local git origin."""
     client, store, orch = harness
+    merged = {}
 
-    # 1. create + configure + start → orchestrator plans a workstream + task
-    project = _create_started(client, "demo")
+    def fake_merge(repo, head, token, message=""):
+        merged["head"] = head
+        merged["message"] = message
+
+    monkeypatch.setattr("hive.api.merge_branch", fake_merge)
+    monkeypatch.setattr(
+        "hive.api.delete_branch", lambda repo, branch, token: merged.setdefault("deleted", branch)
+    )
+    origin = _spec_origin(tmp_path, {"mission.md": "# Mission\nShip.\n"})
+
+    # 1. create + configure + start → planner proposes a plan for human review
+    project = _create_started(client, "demo", spec_repo=str(origin))
     pid = project["id"]
     _pump(client, store)
     detail = client.get(f"/api/projects/{pid}").json()
     # The project payload contract: every section the UI reads is present.
     assert {
-        "project", "workstreams", "work_items", "tasks", "questions",
+        "project", "workstreams", "work_items", "tasks", "questions", "plan",
         "human_todos", "conversations", "issue_runs", "stories",
         "findings", "test_episodes", "directives", "checkouts", "spend_today",
     } <= detail.keys()
-    iteration_stream = next(w for w in detail["workstreams"] if w["kind"] == "iteration")
     assert any(w["kind"] == "testing" for w in detail["workstreams"])
-    assert len(detail["work_items"]) == 1
-    assert detail["work_items"][0]["workstream_id"] == iteration_stream["id"]
-    assert len(detail["tasks"]) == 1
+    plan = detail["plan"]
+    assert plan["plan"]["status"] == "draft" and plan["plan"]["proposed_by"] == "agent"
+    (item,) = plan["items"]
+    assert item["status"] == "proposed" and item["story"] == "a user can run the demo"
+    assert detail["tasks"] == []  # invariant: nothing executes before approval
+    assert detail["project"]["state"] == "needs_attention"  # the draft awaits review
 
-    # 2. runner registers and polls — gets the task after dispatch
-    rid = _register_usable_runner(client)
+    # 2. one click: approve all & start → item queued and immediately resolving
+    approved = client.post(f"/api/plans/{plan['plan']['id']}/approve").json()
+    assert approved["items"][0]["status"] == "resolving"
+    # The durable record landed in the spec home's git origin.
+    committed = subprocess.run(
+        ["git", "--git-dir", str(origin), "show", "main:iteration-plan.md"],
+        capture_output=True, text=True,
+    )
+    assert committed.returncode == 0 and "build the thing" in committed.stdout
+
+    # 3. runner registers and polls — gets the resolve task with the item doc
+    rid = _register_usable_runner(client, backend="codex")
     _pump(client, store)
     task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
-    assert task is not None and task["kind"] == "work"
-    assert task["work_item_id"] == detail["work_items"][0]["id"]
+    assert task is not None and task["kind"] == "resolve"
+    assert task["work_item_id"] == item["id"]
+    assert "a user can run the demo" in task["instructions"]
 
-    # 3. work result → orchestrator queues a verify task
+    # 4. FIXED → fresh-agent review task chains automatically
     client.post(
         f"/api/tasks/{task['id']}/result",
-        json={"text": "implemented, tests pass", "cost_usd": 0.5},
+        json={"text": "built it\nOUTCOME: FIXED", "cost_usd": 0.5},
         headers=RUNNER_HEADERS,
     )
     _pump(client, store)
-    verify = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
-    assert verify is not None and verify["kind"] == "verify"
-    assert "VERDICT" in verify["instructions"]
+    review = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert review is not None and review["kind"] == "review"
+    assert "REVIEW" in review["instructions"]
 
-    # 4. verify result → orchestrator asks a question, workstream parks
+    # 5. ACCEPT → merged on the default branch, plan complete, planner asks
     client.post(
-        f"/api/tasks/{verify['id']}/result",
-        json={"text": "VERDICT: ACCEPT"},
+        f"/api/tasks/{review['id']}/result",
+        json={"text": "story holds\nREVIEW: ACCEPT"},
         headers=RUNNER_HEADERS,
     )
     _pump(client, store)
-    assert store.get(Task, verify["id"]).verdict == "accept"  # parsed deterministically
+    assert merged["head"].startswith("hive/plan-")
+    assert merged["deleted"] == merged["head"]
     detail = client.get(f"/api/projects/{pid}").json()
+    assert detail["plan"]["plan"]["status"] == "complete"
+    assert detail["plan"]["items"][0]["status"] == "done"
     assert len(detail["questions"]) == 1
-    assert detail["work_items"][0]["status"] == "parked"
 
-    # 5. answer → goal complete; resource usage was recorded
+    # 6. answer → goal complete; resource usage was recorded
     qid = detail["questions"][0]["id"]
     client.post(f"/api/questions/{qid}/answer", json={"answer": "yes, add B"})
     _pump(client, store)
@@ -273,7 +301,7 @@ def test_full_loop(harness):
     assert project["state"] == "idle_goal_complete"
 
     resources = client.get("/api/resources").json()
-    assert resources["resources"][0]["total_tasks"] == 3
+    assert resources["resources"][0]["total_tasks"] == 3  # probe + resolve + review
     assert resources["resources"][0]["total_cost_usd"] == 0.5
 
 
@@ -493,8 +521,8 @@ def test_openai_orchestrator_tool_loop(tmp_path):
                                     "id": "call-1",
                                     "type": "function",
                                     "function": {
-                                        "name": "create_workstream",
-                                        "arguments": '{"title":"Basics","description":"local setup"}',
+                                        "name": "propose_plan",
+                                        "arguments": '{"goal":"Basics","items_json":"[{\\"title\\": \\"local setup\\"}]"}',
                                     },
                                 }
                             ],
@@ -519,11 +547,11 @@ def test_openai_orchestrator_tool_loop(tmp_path):
     orch._record_cost(project, result)
     [run] = store.list(OrchestratorRun, project_id=project.id)
     assert run.input_tokens == 2500 and run.output_tokens == 500 and run.cost_usd == 0.0
-    assert store.list(Workstream, project_id=project.id)[0].title == "Basics"
+    assert store.list(Plan, project_id=project.id)[0].goal == "Basics"
     assert adapter.posts[0]["model"] == "gpt-test"
     assert adapter.posts[0]["tools"][0]["type"] == "function"
     assert any(
-        m["role"] == "tool" and "workstream_id=" in m["content"] for m in adapter.posts[1]["messages"]
+        m["role"] == "tool" and "plan_id=" in m["content"] for m in adapter.posts[1]["messages"]
     )
 
 
@@ -950,13 +978,21 @@ def test_local_runner_autostart_writes_machine_config(tmp_path, monkeypatch):
     assert config_file.stat().st_mode & 0o777 == 0o600
 
 
-def test_cancel_pending_task(harness):
+def test_cancel_pending_task_releases_plan_item(harness, monkeypatch):
+    """Hard-cancelling a never-dispatched plan task must also park its item —
+    otherwise the plan is stuck 'resolving' with no task behind it."""
     client, store, _orch = harness
+    monkeypatch.setattr("hive.api.SpecRepo", _NullSpecRepo)
     _create_started(client, "c")
-    _pump(client, store)  # orchestrator queues a work task; no runner online → stays pending
+    _pump(client, store)  # planner drafts the plan
+    plan = store.list(Plan)[0]
+    client.post(f"/api/plans/{plan.id}/approve")
     task = store.list(Task)[0]
-    assert task.status == "pending"
+    assert task.status == "pending"  # no runner online → never dispatched
     assert client.post(f"/api/tasks/{task.id}/cancel").json()["status"] == "cancelled"
+    item = plans.plan_items(store, store.get(Plan, plan.id))[0]
+    assert item.status == PlanItemStatus.blocked_clarity
+    assert "cancelled by the operator" in item.parked_reason
 
 
 def test_dismiss_question_wakes(harness):
@@ -1406,6 +1442,19 @@ def test_intake_start_rejects_unknown_backend(harness):
     bad = client.post(f"/api/projects/{pid}/intake/start", json={"backend": "gemini-cli"})
     assert bad.status_code == 400
     assert "trusted scout" in bad.json()["detail"]
+
+
+class _NullSpecRepo:
+    """SpecRepo stand-in for tests whose spec_repo URL is not clonable."""
+
+    def __init__(self, url, base, token):
+        pass
+
+    def sync(self):
+        return None
+
+    def commit_files(self, files, message):
+        return "0000feed"
 
 
 def _pump(client, store, rounds: int = 4):

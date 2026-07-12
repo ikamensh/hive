@@ -6,9 +6,8 @@ The promises tested here (design: wiki/agent-allowances.md):
   limited "any" capacity survives for tasks nothing else covers;
 - dispatch is the hard gate (a disallowed pending task waits, per task, not
   per project) and exempt kinds (probe/preflight) never consume a session;
-- the planner and the deterministic pipelines are steered at creation:
-  create_task rejects disallowed pairs, pipelines remap their configured
-  default onto a permitted pair.
+- the deterministic pipelines (issues, testing, plans) are steered at
+  creation: each remaps its configured default onto a permitted pair.
 """
 
 import time
@@ -228,28 +227,20 @@ def planner_tools(store, project) -> Tools:
     return Tools(store, project, spec=None)
 
 
-def test_create_task_rejects_disallowed_pair_and_names_the_allowance():
+def test_plan_pipeline_remaps_agent_onto_grants():
+    """Plan items are steered at creation like the other pipelines: the
+    configured default (backend, model) is remapped onto what the project's
+    grants permit before the resolve task exists. (The planner itself no
+    longer creates tasks — the old create_task advisory gate went with it.)"""
+    from hive._workstreams import plans
+
     store = MemoryStore()
     project = store.put(Project(name="p", spec_repo="s", agent_grants=[CHEAP]))
-    ws = store.put(Workstream(project_id=project.id, title="w"))
-    tools = planner_tools(store, project)
-    out = tools.create_task(ws.id, "https://example.com/a.git", "do it", backend="cursor")
-    assert out.startswith("error:") and "allowance" in out and "gpt-5.4-mini" in out
-    ok = tools.create_task(ws.id, "https://example.com/a.git", "do it",
-                           backend="codex", model="gpt-5.4-mini")
-    assert ok.startswith("task_id=")
+    plan = plans.create_draft(store, project, "goal", [{"title": "A"}])
+    plans.approve_all(store, plan)
+    plans.activate(store, project, plan)
     task = store.list(Task, project_id=project.id)[-1]
     assert (task.backend, task.model) == ("codex", "gpt-5.4-mini")
-
-
-def test_create_task_rejects_when_sessions_spent():
-    store = MemoryStore()
-    project = store.put(Project(name="p", spec_repo="s",
-                                agent_grants=[AgentGrant(sessions_per_day=1)]))
-    store.put(started_task("cursor").model_copy(update={"project_id": project.id}))
-    ws = store.put(Workstream(project_id=project.id, title="w"))
-    out = planner_tools(store, project).create_task(ws.id, "r", "do it", backend="cursor")
-    assert out.startswith("error:") and "0/1 left today" in out
 
 
 def test_snapshot_shows_the_allowance_line():

@@ -44,8 +44,14 @@ def harness(tmp_path):
     yield TestClient(create_app(store, supervisor, config)), store
 
 
-def test_cli_drives_full_loop(harness, tmp_path):
+def test_cli_drives_full_loop(harness, tmp_path, monkeypatch):
     client, store = harness
+    merged = {}
+    monkeypatch.setattr(
+        "hive.api.merge_branch",
+        lambda repo, head, token, message="": merged.setdefault("head", head),
+    )
+    monkeypatch.setattr("hive.api.delete_branch", lambda repo, branch, token: None)
     origin = _spec_origin(tmp_path, {
         "mission.md": "# Mission\nShip the demo.\n",
         "iteration.md": "# Iteration\nBuild the first loop.\n",
@@ -67,7 +73,7 @@ def test_cli_drives_full_loop(harness, tmp_path):
             "text": (
                 "Mission:\nShip the demo.\n\n"
                 "Next iteration:\nBuild the first loop.\n\n"
-                "Likely next steps:\n- Queue the first workstream\n- Verify the loop\n\n"
+                "Likely next steps:\n- Propose the first plan\n- Land it\n\n"
                 "Assumptions:\n- Direct push is acceptable.\n\n"
                 "Questions:\n(none)"
             ),
@@ -78,29 +84,29 @@ def test_cli_drives_full_loop(harness, tmp_path):
     approved = cli(client, "intake-approve", conversation["id"])
     assert approved["conversation"]["status"] == "done"
     assert approved["spec_status"]["ready"] is True
-    # The scripted planner queues normal work on cursor; make that resource
-    # visible before planning so the resource-aware tool accepts the task.
-    rid = _register_usable_runner(client, name="fake")
     cli(client, "start", pid)
     assert cli(client, "projects")[0]["id"] == pid
     _pump(client, store)
 
-    detail = cli(client, "project", pid)
-    build_tasks = [task for task in detail["tasks"] if task["kind"] not in ("intake", "probe")]
-    assert len(detail["work_items"]) == 1 and len(build_tasks) == 1
-    assert detail["workstreams"][0]["kind"] == "iteration"
+    # The scripted planner proposed a plan; the CLI reviews and approves it.
+    payload = cli(client, "plan", pid)
+    assert payload["plan"]["status"] == "draft"
+    (item,) = payload["items"]
+    started = cli(client, "plan-approve", pid)
+    assert started["items"][0]["status"] == "resolving"
 
-    # fake runner executes work + verify tasks over the real protocol
-    for text in ("implemented, tests pass", "VERDICT: ACCEPT"):
+    # fake runner executes the pipeline's resolve + review over the real protocol
+    for text in ("built it\nOUTCOME: FIXED", "story holds\nREVIEW: ACCEPT"):
         _pump(client, store)
-        task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+        task = client.post(f"/api/runners/{scout_rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+        assert item["title"] in task["instructions"]
         client.post(f"/api/tasks/{task['id']}/result", json={"text": text},
                     headers=RUNNER_HEADERS)
     _pump(client, store)
+    assert merged["head"].startswith("hive/plan-")
+    assert cli(client, "plan", pid)["plan"]["status"] == "complete"
 
     assert cli(client, "resources")["runners"][0]["online"]
-    full_task = cli(client, "task", build_tasks[0]["id"])
-    assert "implement feature" in full_task["instructions"]
 
     question = cli(client, "project", pid)["questions"][0]
     cli(client, "answer", question["id"], "yes, add B")

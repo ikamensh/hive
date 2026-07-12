@@ -31,6 +31,11 @@ from hive.models import (
     HumanTaskStatus,
     Machine,
     OrchestratorRun,
+    PLAN_ITEM_PARKED,
+    Plan,
+    PlanItem,
+    PlanItemStatus,
+    PlanStatus,
     Project,
     ProjectState,
     Question,
@@ -75,6 +80,8 @@ def compute_state(
     over_budget: bool = False,
     available_capacity: set[str] | None = None,
     grant_blocked: set[str] | None = None,
+    plan_status: PlanStatus | None = None,
+    plan_items: list[PlanItem] | None = None,
 ) -> ProjectState:
     running = [t for t in tasks if t.status == TaskStatus.running]
     pending = [t for t in tasks if t.status == TaskStatus.pending]
@@ -96,6 +103,17 @@ def compute_state(
             # midnight-reset semantics as the money budget.
             return ProjectState.blocked_budget
         return ProjectState.blocked_resources
+    items = plan_items or []
+    if any(i.status in PLAN_ITEM_PARKED for i in items):
+        # A parked item stalls the strict-order plan until the human acts.
+        return ProjectState.needs_attention
+    if plan_status == PlanStatus.draft:
+        # A drafted plan awaiting the human's review is the project's next step.
+        return ProjectState.needs_attention
+    if plan_status == PlanStatus.approved and any(
+        i.status == PlanItemStatus.queued for i in items
+    ):
+        return ProjectState.blocked_budget if over_budget else ProjectState.working
     active = [
         w
         for w in workstreams
@@ -294,7 +312,10 @@ class Supervisor:
                 )
                 if t.kind not in (TaskKind.intake, TaskKind.probe)
             ]
-            if not workstreams and not tasks:
+            plans_exist = bool(
+                self.store.list(Plan, workspace_id=self.workspace_id, project_id=project.id)
+            )
+            if not workstreams and not tasks and not plans_exist:
                 if project.state != ProjectState.intake:
                     project.state = ProjectState.intake
                     self.store.put(project)
@@ -315,6 +336,12 @@ class Supervisor:
             and t.status in (TaskStatus.pending, TaskStatus.running)
         ]
         available_capacity = self.available_capacity()
+        live_plans = [
+            p
+            for p in self.store.list(Plan, workspace_id=self.workspace_id, project_id=project.id)
+            if p.status in (PlanStatus.draft, PlanStatus.approved)
+        ]
+        plan = live_plans[-1] if live_plans else None
         state = compute_state(
             project,
             workstreams,
@@ -324,6 +351,12 @@ class Supervisor:
             self.over_budget(project),
             available_capacity,
             self._grant_blocked(project, all_tasks),
+            plan_status=plan.status if plan else None,
+            plan_items=(
+                self.store.list(PlanItem, workspace_id=self.workspace_id, plan_id=plan.id)
+                if plan
+                else None
+            ),
         )
         if state == ProjectState.blocked_resources:
             self._file_testing_capability_blocker(project, tasks, available_capacity)

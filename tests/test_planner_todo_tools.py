@@ -1,13 +1,11 @@
 """The planner acts on Hive itself instead of delegating to the human (G25):
-cancel_task stops its own stuck work, withdraw_question retracts moot
-questions, and create_human_task is guarded so planner-authored todos carry a
-kind, share the system's dedup keys, and get server-side login recipes rather
-than LLM-remembered commands.
+withdraw_question retracts moot questions, and create_human_task is guarded so
+planner-authored todos carry a kind, share the system's dedup keys, and get
+server-side login recipes rather than LLM-remembered commands. (The old
+cancel_task tool went with planner-queued build tasks: the pipeline owns
+execution now, and the operator cancels through the API.)
 
 Properties verified:
-- cancel_task honors the operator-cancel transition (pending stops outright,
-  delivered running work is flagged for cooperative stop) and refuses tasks
-  it does not own (other projects, deterministic pipeline kinds);
 - a withdrawn question stops gating mark_goal_complete without human action;
 - planner and system filings for the same condition collapse onto one todo;
 - an access todo is org-wide, auto-closing, and carries the registry recipe.
@@ -17,6 +15,8 @@ from hive.models import (
     HumanTask,
     HumanTaskKind,
     HumanTaskStatus,
+    Plan,
+    PlanItemStatus,
     Project,
     Question,
     QuestionStatus,
@@ -24,14 +24,12 @@ from hive.models import (
     ResourceUsability,
     Runner,
     Task,
-    TaskKind,
     TaskStatus,
-    Workstream,
-    WorkstreamStatus,
 )
 from hive.persistence.store import MemoryStore
 from hive._control.escalation import escalate, resolve_open_todos
 from hive._control.orchestrator import Tools
+from hive._workstreams import plans
 
 
 def _tools(store):
@@ -39,49 +37,17 @@ def _tools(store):
     return Tools(store, project, spec=None), project
 
 
-def _task(store, project, **kwargs):
-    defaults = dict(project_id=project.id, workstream_id="w", repo="r", instructions="i")
-    defaults.update(kwargs)
-    return store.put(Task(**defaults))
-
-
-# -- cancel_task ----------------------------------------------------------------
-
-
-def test_cancel_pending_task_stops_it_outright():
-    store = MemoryStore()
-    tools, project = _tools(store)
-    task = _task(store, project)
-
-    assert tools.cancel_task(task.id, "backend is dead") == "cancelled"
-    task = store.get(Task, task.id)
-    assert task.status == TaskStatus.cancelled
-    assert "backend is dead" in task.result_text
-    assert task.finished_at > 0
-
-
-def test_cancel_delivered_running_task_is_cooperative():
-    store = MemoryStore()
-    tools, project = _tools(store)
-    task = _task(store, project, status=TaskStatus.running, delivered=True)
-
-    assert "runner will stop it" in tools.cancel_task(task.id, "obsolete")
-    task = store.get(Task, task.id)
-    assert task.status == TaskStatus.running and task.cancel_requested
-
-
-def test_cancel_refuses_foreign_and_pipeline_tasks():
-    store = MemoryStore()
-    tools, project = _tools(store)
-    other = store.put(Project(name="other", spec_repo="y"))
-    foreign = _task(store, other)
-    pipeline = _task(store, project, kind=TaskKind.resolve)
-    finished = _task(store, project, status=TaskStatus.done)
-
-    assert "error" in tools.cancel_task(foreign.id, "r")
-    assert "error" in tools.cancel_task(pipeline.id, "r")
-    assert "error" in tools.cancel_task(finished.id, "r")
-    assert store.get(Task, foreign.id).status == TaskStatus.pending
+def _completed_plan(store, project):
+    plan = plans.create_draft(store, project, "goal", [{"title": "A"}])
+    plans.approve_all(store, plan)
+    plans.activate(store, project, plan)
+    item = plans.plan_items(store, plan)[0]
+    plans.set_item_status(store, item.id, PlanItemStatus.done, "")
+    # Drop the resolve task activation queued: the item is landed.
+    for task in store.list(Task, project_id=project.id):
+        task.status = TaskStatus.cancelled
+        store.put(task)
+    return plans.refresh_plan(store, store.get(Plan, plan.id))
 
 
 # -- withdraw_question ------------------------------------------------------------
@@ -93,16 +59,9 @@ def test_withdrawn_question_unblocks_completion():
     questions gate mark_goal_complete. Withdrawing must clear the gate."""
     store = MemoryStore()
     tools, project = _tools(store)
-    ws_id = tools.create_workstream("w", "d").split("=")[1]
+    _completed_plan(store, project)
     q_id = tools.ask_user("Context. Options: a/b. Recommendation: a.").split("=")[1].split()[0]
 
-    ws = store.get(Workstream, ws_id)
-    ws.status = WorkstreamStatus.done
-    store.put(ws)
-    _task(
-        store, project, workstream_id=ws_id, kind=TaskKind.verify,
-        status=TaskStatus.done, verdict="accept",
-    )
     assert "open questions" in tools.mark_goal_complete("done. Try it: run x")
 
     out = tools.withdraw_question(q_id, "answered by the spec meanwhile")
@@ -111,17 +70,6 @@ def test_withdrawn_question_unblocks_completion():
     assert q.status == QuestionStatus.withdrawn
     assert "answered by the spec meanwhile" in q.answer
     assert tools.mark_goal_complete("done. Try it: run x") == "goal marked complete"
-
-
-def test_withdraw_names_workstreams_still_parked_on_the_question():
-    store = MemoryStore()
-    tools, _project = _tools(store)
-    ws_id = tools.create_workstream("w", "d").split("=")[1]
-    q_id = tools.ask_user("Ctx. Options: a/b. Recommendation: a.", ws_id).split("=")[1].split()[0]
-    assert store.get(Workstream, ws_id).status == WorkstreamStatus.parked
-
-    out = tools.withdraw_question(q_id, "moot")
-    assert ws_id in out and "parked" in out
 
 
 def test_withdraw_refuses_foreign_or_settled_questions():

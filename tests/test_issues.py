@@ -265,21 +265,17 @@ def test_compute_state_issue_items_are_project_attention():
     assert compute_state(p, [_ws(p, WorkstreamStatus.cancelled)], 0, [], set()) == ProjectState.idle
 
 
-def test_create_task_rejected_for_non_active_issue():
-    store = MemoryStore()
-    project = issues_project(store)
-    reconcile(store, project, [issue(1)])  # status resolving, not active
-    ws = store.list(Workstream, project_id=project.id)[0]
-    out = Tools(store, project, spec=None).create_task(ws.id, "r", "do it", backend="cursor")
-    assert "deterministic issue pipeline" in out
-    assert not store.list(Task, project_id=project.id)
-
-
-def test_planner_tool_surface_is_single_project_surface():
+def test_planner_tool_surface_plans_only_never_executes():
+    """The planner proposes and amends plans, asks, files todos — it has no
+    tool that queues, cancels, or completes execution (the pipeline owns
+    that), and no issue-pipeline verbs."""
     store = MemoryStore()
     tools = {f.__name__ for f in Tools(store, issues_project(store), spec=None).functions()}
-    assert {"create_workstream", "complete_workstream", "mark_goal_complete"} <= tools
-    assert {"order_issues", "resolve_issue"}.isdisjoint(tools)
+    assert {"propose_plan", "amend_plan", "mark_goal_complete", "ask_user"} <= tools
+    assert {
+        "create_task", "create_workstream", "complete_workstream", "cancel_task",
+        "order_issues", "resolve_issue",
+    }.isdisjoint(tools)
 
 
 # -- end to end: scan → resolve → review → land ------------------------------
