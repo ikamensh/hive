@@ -15,6 +15,10 @@ import type {
   LicensingMode,
   MachineGroup,
   Overview,
+  Plan,
+  PlanItem,
+  PlanItemPatch,
+  PlanPayload,
   Project,
   ProjectCreate,
   ProjectDetail,
@@ -92,6 +96,98 @@ const mockGithubRepos: GithubRepo[] = [
     description: "Beacon — issue-solving demo repo",
   },
 ];
+
+const plans: Plan[] = [
+  {
+    id: "plan-atlas-1",
+    project_id: "p-atlas",
+    goal: "Mobile support: the whole console is usable on a phone",
+    status: "approved",
+    proposed_by: "agent",
+    spec_ref: "iteration-plan.md",
+    created_at: now - 86400,
+    approved_at: now - 82000,
+    finished_at: 0,
+  },
+  {
+    id: "plan-beacon-1",
+    project_id: "p-beacon",
+    goal: "First playable loop: place towers, waves spawn, win/lose",
+    status: "draft",
+    proposed_by: "agent",
+    spec_ref: "",
+    created_at: now - 3600,
+    approved_at: 0,
+    finished_at: 0,
+  },
+];
+
+const planItems: PlanItem[] = [
+  {
+    id: "pi-a1", plan_id: "plan-atlas-1", order: 0, repo: "",
+    title: "Responsive layout for the project page",
+    story: "On a phone, the project page reads top-to-bottom without pinching or sideways scrolling.",
+    constraints: "CSS only — no new framework. Keep the three columns as stacked sections under 760px.",
+    notes: "", status: "done", parked_reason: "", authored_by: "agent", edited_by_human: false,
+  },
+  {
+    id: "pi-a2", plan_id: "plan-atlas-1", order: 1, repo: "",
+    title: "Touch-friendly controls",
+    story: "Every button and toggle is comfortably tappable (44px targets) on iOS Safari and Android Chrome.",
+    constraints: "No hover-only affordances anywhere.",
+    notes: "", status: "resolving", parked_reason: "", authored_by: "agent", edited_by_human: true,
+  },
+  {
+    id: "pi-a3", plan_id: "plan-atlas-1", order: 2, repo: "",
+    title: "Mobile navigation",
+    story: "A user can reach every page from a compact menu on a phone.",
+    constraints: "",
+    notes: "", status: "blocked_clarity",
+    parked_reason: "The spec doesn't say whether Resources should appear in the mobile menu — it exposes runner tokens. Recommend hiding it behind Settings; confirm and retry.",
+    authored_by: "agent", edited_by_human: false,
+  },
+  {
+    id: "pi-a4", plan_id: "plan-atlas-1", order: 3, repo: "",
+    title: "Viewport + PWA meta",
+    story: "Adding the app to a home screen opens it full-screen with the right icon.",
+    constraints: "", notes: "one-evening item",
+    status: "queued", parked_reason: "", authored_by: "human", edited_by_human: false,
+  },
+  {
+    id: "pi-b1", plan_id: "plan-beacon-1", order: 0, repo: "",
+    title: "Grid map + tower placement",
+    story: "A player can click a tile to place a tower; invalid tiles refuse.",
+    constraints: "Keep rendering in the existing canvas module.",
+    notes: "", status: "approved", parked_reason: "", authored_by: "agent", edited_by_human: false,
+  },
+  {
+    id: "pi-b2", plan_id: "plan-beacon-1", order: 1, repo: "",
+    title: "Enemy waves",
+    story: "Waves spawn on a timer and follow the path; towers shoot them.",
+    constraints: "Fixed path for now — no pathfinding.",
+    notes: "", status: "proposed", parked_reason: "", authored_by: "agent", edited_by_human: false,
+  },
+  {
+    id: "pi-b3", plan_id: "plan-beacon-1", order: 2, repo: "",
+    title: "Win/lose + restart",
+    story: "Surviving all waves shows a win screen; leaking 10 enemies loses; either offers restart.",
+    constraints: "", notes: "",
+    status: "proposed", parked_reason: "", authored_by: "agent", edited_by_human: false,
+  },
+];
+
+function planPayload(projectId: string): PlanPayload | null {
+  const candidates = plans.filter((p) => p.project_id === projectId);
+  const active = candidates.find((p) => p.status === "draft" || p.status === "approved");
+  const plan = active ?? candidates[candidates.length - 1];
+  if (!plan) return null;
+  return {
+    plan,
+    items: planItems
+      .filter((i) => i.plan_id === plan.id)
+      .sort((a, b) => a.order - b.order),
+  };
+}
 
 const projects: Project[] = [
   {
@@ -1488,6 +1584,7 @@ export const api = {
       test_episodes: testEpisodes.filter((e) => e.project_id === id),
       directives: directives.filter((d) => d.project_id === id),
       checkouts: checkoutsForProject(id),
+      plan: planPayload(id),
       allowance,
       decision_ledger: decisionLedgers[id] ?? {
         decisions: [],
@@ -1537,6 +1634,97 @@ export const api = {
       parked_workstream_ids: parked.map((w) => w.id),
       commit: "mock",
     });
+  },
+
+  createPlan: async (projectId: string, goal: string, items: PlanItemPatch[] = []): Promise<PlanPayload> => {
+    const plan: Plan = {
+      id: `plan-${Math.random().toString(36).slice(2, 8)}`,
+      project_id: projectId,
+      goal,
+      status: "draft",
+      proposed_by: "human",
+      spec_ref: "",
+      created_at: Date.now() / 1000,
+      approved_at: 0,
+      finished_at: 0,
+    };
+    plans.push(plan);
+    items.forEach((item, order) =>
+      planItems.push({
+        id: `pi-${Math.random().toString(36).slice(2, 8)}`,
+        plan_id: plan.id, order, repo: item.repo ?? "",
+        title: item.title ?? "untitled", story: item.story ?? "",
+        constraints: item.constraints ?? "", notes: item.notes ?? "",
+        status: "proposed", parked_reason: "", authored_by: "human", edited_by_human: false,
+      }),
+    );
+    return structuredClone(planPayload(projectId)!);
+  },
+  proposePlan: async (_projectId: string) => ({ ok: true }),
+  addPlanItem: async (planId: string, item: PlanItemPatch & { title: string }): Promise<PlanItem> => {
+    const siblings = planItems.filter((i) => i.plan_id === planId);
+    const created: PlanItem = {
+      id: `pi-${Math.random().toString(36).slice(2, 8)}`,
+      plan_id: planId,
+      order: siblings.length ? Math.max(...siblings.map((i) => i.order)) + 1 : 0,
+      repo: item.repo ?? "", title: item.title, story: item.story ?? "",
+      constraints: item.constraints ?? "", notes: item.notes ?? "",
+      status: "proposed", parked_reason: "", authored_by: "human", edited_by_human: false,
+    };
+    planItems.push(created);
+    return structuredClone(created);
+  },
+  patchPlanItem: async (itemId: string, patch: PlanItemPatch): Promise<PlanItem> => {
+    const item = planItems.find((i) => i.id === itemId)!;
+    Object.assign(item, patch, { edited_by_human: true });
+    return structuredClone(item);
+  },
+  approvePlanItem: async (itemId: string): Promise<PlanItem> => {
+    const item = planItems.find((i) => i.id === itemId)!;
+    const plan = plans.find((p) => p.id === item.plan_id)!;
+    item.status = plan.status === "approved" ? "queued" : "approved";
+    return structuredClone(item);
+  },
+  unapprovePlanItem: async (itemId: string): Promise<PlanItem> => {
+    const item = planItems.find((i) => i.id === itemId)!;
+    item.status = "proposed";
+    return structuredClone(item);
+  },
+  cancelPlanItem: async (itemId: string, reason = ""): Promise<PlanItem> => {
+    const item = planItems.find((i) => i.id === itemId)!;
+    item.status = "cancelled";
+    item.parked_reason = reason;
+    return structuredClone(item);
+  },
+  retryPlanItem: async (itemId: string): Promise<PlanItem> => {
+    const item = planItems.find((i) => i.id === itemId)!;
+    item.status = "resolving";
+    item.parked_reason = "";
+    return structuredClone(item);
+  },
+  approvePlan: async (planId: string) => {
+    const plan = plans.find((p) => p.id === planId)!;
+    for (const item of planItems.filter((i) => i.plan_id === planId)) {
+      if (item.status === "proposed" || item.status === "approved") {
+        item.status = "queued";
+      }
+    }
+    const first = planItems
+      .filter((i) => i.plan_id === planId && i.status === "queued")
+      .sort((a, b) => a.order - b.order)[0];
+    if (first) first.status = "resolving";
+    plan.status = "approved";
+    plan.approved_at = Date.now() / 1000;
+    return structuredClone({ notes: ["plan approved"], ...planPayload(plan.project_id)! });
+  },
+  abandonPlan: async (planId: string) => {
+    const plan = plans.find((p) => p.id === planId)!;
+    plan.status = "abandoned";
+    plan.finished_at = Date.now() / 1000;
+    for (const item of planItems.filter((i) => i.plan_id === planId)) {
+      if (item.status !== "done" && item.status !== "cancelled") item.status = "cancelled";
+    }
+    return structuredClone(planPayload(plan.project_id)!);
   },
 
   createDirective: async (id: string, text: string): Promise<Directive> => {

@@ -12,8 +12,8 @@ import {
 import {
   GoalBanner,
   ProjectActions,
-  WorkstreamCard,
 } from "../features/project/controls";
+import { PlanPanel } from "../features/project/plan";
 import { IssueCard, IssuesToolbar, IssuesView } from "../features/project/issues";
 import {
   DirectiveComposer,
@@ -32,12 +32,11 @@ import type { ProjectPatch } from "../types";
 export default function ProjectPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
-  const [drill, setDrill] = useState<"none" | "build" | "issues" | "tests">("none");
+  const [drill, setDrill] = useState<"none" | "issues" | "tests">("none");
   const [selectedIssueStreamId, setSelectedIssueStreamId] = useState("");
   const [selectedIssueNumbers, setSelectedIssueNumbers] = useState<number[]>([]);
   const [selectedTestingStreamId, setSelectedTestingStreamId] = useState("");
   const [selectedStoryKeys, setSelectedStoryKeys] = useState<string[]>([]);
-  const [launchingBuild, setLaunchingBuild] = useState(false);
   const [launchMessage, setLaunchMessage] = useState("");
   const [launchError, setLaunchError] = useState("");
   const { data, failed, refresh } = usePoll(() => api.project(id), [id]);
@@ -69,7 +68,6 @@ export default function ProjectPage() {
     testingEpisodes,
     testingActivityVersion,
     testingNeeds,
-    manualWorkItems,
     inboxCount,
     needsSetup,
     availableScoutBackends,
@@ -137,22 +135,6 @@ export default function ProjectPage() {
     refresh();
   };
 
-  const startBuild = async () => {
-    if (launchingBuild) return;
-    setLaunchingBuild(true);
-    setLaunchError("");
-    setLaunchMessage("");
-    try {
-      await api.startProject(id);
-      setLaunchMessage("build planning requested");
-      refreshProjectAndOverview();
-    } catch (e) {
-      setLaunchError((e as Error).message || "could not start build");
-    } finally {
-      setLaunchingBuild(false);
-    }
-  };
-
   const needsStart = false;
   const showInbox = inboxCount > 0;
   const toggleIssueSelection = (issueNumber: number) => {
@@ -207,14 +189,6 @@ export default function ProjectPage() {
       hint: testingStories.length > 0 ? `${testingStories.length} stories` : "set up testing",
     },
     {
-      kind: "build",
-      icon: "ti-hammer",
-      label: "Advance build",
-      hint: launchingBuild ? "starting" : project.paused ? "paused" : `${manualWorkItems.length} work items`,
-      disabled: project.paused || launchingBuild,
-      busy: launchingBuild,
-    },
-    {
       kind: "sync",
       icon: "ti-git-merge",
       label: "Sync a machine",
@@ -228,11 +202,7 @@ export default function ProjectPage() {
       document.getElementById("machines-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
-    if (kind === "build") {
-      startBuild();
-      return;
-    }
-    setDrill(kind);
+    if (kind === "issues" || kind === "tests") setDrill(kind);
   };
 
   const launchpadHome = (
@@ -259,6 +229,12 @@ export default function ProjectPage() {
             {launchError || launchMessage}
           </p>
         )}
+      </div>
+      <div className="launch-block">
+        <h2 className="col-title">
+          iteration plan
+        </h2>
+        <PlanPanel projectId={id} payload={data.plan} onChanged={refreshProjectAndOverview} />
       </div>
       {directives.length > 0 && (
         <div className="launch-block">
@@ -442,17 +418,6 @@ export default function ProjectPage() {
                   selectedStoryKeys={selectedStoryKeys}
                   onToggle={toggleStorySelection}
                 />
-              </section>
-            ) : drill === "build" ? (
-              <section className="col col-ws">
-                {drillBackBar}
-                <h2 className="col-title">
-                  work items <span className="col-count">{manualWorkItems.length}</span>
-                </h2>
-                {manualWorkItems.length === 0 && <p className="muted">none yet - the supervisor will plan some</p>}
-                {manualWorkItems.map((w) => (
-                  <WorkstreamCard key={w.id} ws={w} />
-                ))}
               </section>
             ) : (
               launchpadHome

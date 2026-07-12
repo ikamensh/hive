@@ -238,6 +238,63 @@ export interface TestabilityView {
   open_decisions: number;
 }
 
+export type PlanStatus = "draft" | "approved" | "complete" | "abandoned";
+
+export type PlanItemStatus =
+  | "proposed"
+  | "approved"
+  | "queued"
+  | "resolving"
+  | "blocked_clarity"
+  | "reviewing"
+  | "rejected"
+  | "done"
+  | "cancelled";
+
+/** The ordered item list for one iteration (server: Plan). */
+export interface Plan {
+  id: string;
+  project_id: string;
+  goal: string;
+  status: PlanStatus;
+  proposed_by: "agent" | "human" | string;
+  spec_ref: string;
+  created_at: number;
+  approved_at: number;
+  finished_at: number;
+}
+
+/** One durable unit of plan work — review state, then pipeline state
+ *  (server: PlanItem). */
+export interface PlanItem {
+  id: string;
+  plan_id: string;
+  order: number;
+  repo: string;
+  title: string;
+  story: string;
+  constraints: string;
+  notes: string;
+  status: PlanItemStatus;
+  parked_reason: string;
+  authored_by: "agent" | "human" | string;
+  edited_by_human: boolean;
+}
+
+export interface PlanPayload {
+  plan: Plan;
+  items: PlanItem[];
+}
+
+export interface PlanItemPatch {
+  title?: string;
+  story?: string;
+  constraints?: string;
+  notes?: string;
+  repo?: string;
+  order?: number;
+}
+
 export interface ProjectDetail {
   project: Project;
   testing_health?: Record<string, TestingHealth>;
@@ -254,6 +311,7 @@ export interface ProjectDetail {
   test_episodes: TestEpisode[];
   directives?: Directive[];
   checkouts?: Checkout[];
+  plan?: PlanPayload | null;
   decision_ledger?: DecisionLedger;
   allowance?: Allowance;
 }

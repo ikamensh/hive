@@ -11,6 +11,9 @@ import type {
   IssueRun,
   IssueRunResult,
   Overview,
+  PlanItem,
+  PlanItemPatch,
+  PlanPayload,
   Project,
   ProjectCreate,
   ProjectDetail,
@@ -120,6 +123,38 @@ const realApi = {
       method: "POST",
       body: JSON.stringify({ text }),
     }),
+  createPlan: (projectId: string, goal: string, items: PlanItemPatch[] = []) =>
+    http<PlanPayload>(`/api/projects/${projectId}/plan`, {
+      method: "POST",
+      body: JSON.stringify({ goal, items }),
+    }),
+  proposePlan: (projectId: string) =>
+    http<{ ok: boolean }>(`/api/projects/${projectId}/plan/propose`, { method: "POST" }),
+  addPlanItem: (planId: string, item: PlanItemPatch & { title: string }) =>
+    http<PlanItem>(`/api/plans/${planId}/items`, {
+      method: "POST",
+      body: JSON.stringify(item),
+    }),
+  patchPlanItem: (itemId: string, patch: PlanItemPatch) =>
+    http<PlanItem>(`/api/plan-items/${itemId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  approvePlanItem: (itemId: string) =>
+    http<PlanItem>(`/api/plan-items/${itemId}/approve`, { method: "POST" }),
+  unapprovePlanItem: (itemId: string) =>
+    http<PlanItem>(`/api/plan-items/${itemId}/unapprove`, { method: "POST" }),
+  cancelPlanItem: (itemId: string, reason = "") =>
+    http<PlanItem>(`/api/plan-items/${itemId}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+  retryPlanItem: (itemId: string) =>
+    http<PlanItem>(`/api/plan-items/${itemId}/retry`, { method: "POST" }),
+  approvePlan: (planId: string) =>
+    http<PlanPayload & { notes: string[] }>(`/api/plans/${planId}/approve`, { method: "POST" }),
+  abandonPlan: (planId: string) =>
+    http<PlanPayload>(`/api/plans/${planId}/abandon`, { method: "POST" }),
   patchProject: (id: string, patch: ProjectPatch) =>
     http<Project>(`/api/projects/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   updateWorkstream: (projectId: string, workstreamId: string, patch: WorkstreamPatch) =>
