@@ -169,33 +169,55 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [specText, setSpecText] = useState("");
+  const [repoMode, setRepoMode] = useState<"create" | "existing">("create");
+  const [repoUrl, setRepoUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  // One submit does the whole handover (parity with `hive new`): create the
+  // project, wire or create the repo, and launch the intake scout. If a later
+  // step fails the project still exists — finish on its page.
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (repoMode === "existing" && !repoUrl.trim()) {
+      setError("paste the repo URL, or switch to 'create one for me'");
+      return;
+    }
     setBusy(true);
     setError("");
+    let p;
     try {
-      const p = await api.createProject({ name: name.trim(), spec_text: specText.trim() });
-      navigate(`/p/${p.id}`);
+      p = await api.createProject({ name: name.trim(), spec_text: specText.trim() });
     } catch {
       setError("create failed — is the chief up?");
       setBusy(false);
+      return;
     }
+    try {
+      if (repoMode === "create") {
+        await api.createProjectRepo(p.id, { name: "", private: true });
+      } else {
+        const url = repoUrl.trim();
+        await api.patchProject(p.id, { spec_repo: url, member_repos: [url] });
+      }
+      await api.startIntake(p.id);
+    } catch {
+      // repo or scout hiccup: the project page names the problem and the fix
+    }
+    navigate(`/p/${p.id}`);
   };
 
   return (
     <div className="modal-veil" onClick={onClose}>
       <form className="modal modal-narrow" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
         <h2>New project</h2>
-        <p className="modal-hint">Configure repos and goals on the project page.</p>
+        <p className="modal-hint">One step: hive takes the spec, wires the repo, and starts intake.</p>
         <label>
           name
           <input value={name} onChange={(e) => setName(e.target.value)} required autoFocus placeholder="atlas" />
         </label>
         <label>
-          spec <span className="muted">(optional — paste what you want built)</span>
+          spec <span className="muted">(paste what you want built)</span>
           <textarea
             value={specText}
             onChange={(e) => setSpecText(e.target.value)}
@@ -203,13 +225,40 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
             placeholder="Mission, the first iteration's outcome, anything you already know…"
           />
         </label>
+        <div className="repo-mode">
+          <label className="repo-mode-option">
+            <input
+              type="radio"
+              name="repo-mode"
+              checked={repoMode === "create"}
+              onChange={() => setRepoMode("create")}
+            />
+            create a private repo for me
+          </label>
+          <label className="repo-mode-option">
+            <input
+              type="radio"
+              name="repo-mode"
+              checked={repoMode === "existing"}
+              onChange={() => setRepoMode("existing")}
+            />
+            use an existing repo
+          </label>
+          {repoMode === "existing" && (
+            <input
+              value={repoUrl}
+              onChange={(e) => setRepoUrl(e.target.value)}
+              placeholder="https://github.com/org/project.git"
+            />
+          )}
+        </div>
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions">
           <button type="button" className="ghost" onClick={onClose}>
             cancel
           </button>
           <button type="submit" disabled={busy}>
-            {busy ? "creating…" : "create project"}
+            {busy ? "starting…" : "create & start intake"}
           </button>
         </div>
       </form>
