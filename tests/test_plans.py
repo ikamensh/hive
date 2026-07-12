@@ -497,9 +497,9 @@ def test_plan_api_activation_refuses_partial_approval(app, monkeypatch):
     client, store = app
     monkeypatch.setattr("hive.api.SpecRepo", FakeSpecRepo)
     pid = _api_project(client)
-    payload = client.post(
+    client.post(
         f"/api/projects/{pid}/plan", json={"goal": "g", "items": [{"title": "A"}]}
-    ).json()
+    ).raise_for_status()
     # approve with zero items approved works via approve-all; an empty plan doesn't
     empty = client.post(f"/api/projects/{pid}/plan", json={"goal": "g2", "items": []}).json()
     r = client.post(f"/api/plans/{empty['plan']['id']}/approve")

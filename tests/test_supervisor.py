@@ -25,7 +25,6 @@ from hive.models import (
     Task,
     TaskKind,
     TaskStatus,
-    Verdict,
     IssueItem,
     IssueItemStatus,
 )

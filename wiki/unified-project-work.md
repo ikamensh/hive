@@ -164,13 +164,13 @@ Make workstream ownership explicit for the current smaller rows:
 ```python
 workstream_id: str = ""
 repo: str = ""
-source: WorkstreamSource = manual | issue
 external_ref: dict = {}  # issue number, URL, labels, attachment names
 ```
 
-The existing issue-specific fields can be migrated gradually or kept as cached
-columns for now. The important invariant is that every GitHub issue row
-belongs to a GitHub issues workstream and a concrete repo.
+Done: the smaller row is `IssueItem` (collection `workstreams` kept for data),
+purely the GitHub-issue work item — the manual/`source` split died with the
+legacy build path. The invariant holds: every issue row belongs to a GitHub
+issues workstream and a concrete repo.
 
 ### IssueRun
 

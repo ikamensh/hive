@@ -37,7 +37,6 @@ from hive.models import (
     TaskStatus,
     Verdict,
     IssueItem,
-    IssueItemStatus,
 )
 from hive._control.orchestrator import Orchestrator, Tools
 from hive._workstreams import plans

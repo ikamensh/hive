@@ -257,7 +257,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="run a workstream's GitHub issues: all open now, --issue picks some, --scan-only just mirrors",
     )
     p.add_argument("project_id")
-    p.add_argument("workstream_id", help="the github_issues workstream for the repo (see `hive project`)")
+    p.add_argument("workstream_id", nargs="?", default="", help="only needed when the project has several issues workstreams")
     scope = p.add_mutually_exclusive_group()
     scope.add_argument(
         "--issue", action="append", type=int, default=[],
@@ -268,26 +268,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="record the run and mirror open issues without queueing fixes",
     )
 
-    p = sub.add_parser("issue-sync", help="refresh a workstream's mirrored GitHub issues (no fixes queued)")
+    p = sub.add_parser("issue-sync", help="refresh the mirrored GitHub issues (no fixes queued)")
     p.add_argument("project_id")
-    p.add_argument("workstream_id")
+    p.add_argument("workstream_id", nargs="?", default="")
 
     p = sub.add_parser("preflight", help="check issue-solving preconditions (token, perms, runner push/gh auth)")
     p.add_argument("project_id")
 
     p = sub.add_parser("check-ci", help="check a repo's CI; file+fix an issue if it's red")
     p.add_argument("project_id")
-    p.add_argument("workstream_id", help="the github_issues workstream for the repo (see `hive project`)")
+    p.add_argument("workstream_id", nargs="?", default="", help="only needed when the project has several issues workstreams")
 
     p = sub.add_parser("test-refresh", help="draft/align acceptance stories from the spec (no sweep)")
     p.add_argument("project_id")
-    p.add_argument("workstream_id")
+    p.add_argument("workstream_id", nargs="?", default="")
     p.add_argument("--backend", default="", help="agent backend (default: server config)")
     p.add_argument("--model", default="", help="model (default: backend default)")
 
     p = sub.add_parser("test-run", help="run a testing episode: refresh -> sweep as a user -> confirm -> file bugs")
     p.add_argument("project_id")
-    p.add_argument("workstream_id")
+    p.add_argument("workstream_id", nargs="?", default="")
     p.add_argument("--scope", choices=["priority", "full", "selected"], default="priority")
     p.add_argument("--story", action="append", default=[], help="story key to sweep (repeatable; implies --scope selected)")
     p.add_argument("--max", type=int, default=0, dest="max_stories", help="cap on stories swept (priority scope)")
@@ -300,13 +300,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("testability-draft", help="have Hive explore the repo and draft/repair testability.md")
     p.add_argument("project_id")
-    p.add_argument("workstream_id")
+    p.add_argument("workstream_id", nargs="?", default="")
     p.add_argument("--backend", default="", help="agent backend (default: server config)")
     p.add_argument("--model", default="", help="model (default: backend default)")
 
     p = sub.add_parser("testability-probe", help="prove the contract: stand the app up per testability.md")
     p.add_argument("project_id")
-    p.add_argument("workstream_id")
+    p.add_argument("workstream_id", nargs="?", default="")
     p.add_argument("--backend", default="", help="agent backend (default: server config)")
     p.add_argument("--model", default="", help="model (default: backend default)")
 
@@ -661,6 +661,36 @@ PLAN_GLYPHS = {
     "proposed": "?",
     "cancelled": "✗",
 }
+
+
+# Commands scoped to one workstream; the id is resolvable when the project
+# has exactly one workstream of the needed kind (the single-repo norm).
+WS_KIND_BY_COMMAND = {
+    "issue-run": "github_issues",
+    "issue-sync": "github_issues",
+    "check-ci": "github_issues",
+    "test-refresh": "testing",
+    "test-run": "testing",
+    "testability-draft": "testing",
+    "testability-probe": "testing",
+}
+
+
+def resolve_workstream(client, project_id: str, kind: str, given: str) -> str:
+    """The workstream id nobody should have to look up: with one workstream of
+    the kind (the single-repo norm) it resolves itself; several = name one."""
+    if given:
+        return given
+    detail = client.get(f"/api/projects/{project_id}").raise_for_status().json()
+    matching = [w for w in detail.get("workstreams", []) if w.get("kind") == kind]
+    if len(matching) == 1:
+        return matching[0]["id"]
+    if not matching:
+        raise SystemExit(f"project has no {kind} workstream — set a spec repo first")
+    listing = "\n".join(f"  {w['id']}  {w.get('repo', '')}" for w in matching)
+    raise SystemExit(
+        f"project has {len(matching)} {kind} workstreams; name one:\n{listing}"
+    )
 
 
 def parse_grants(specs: list[str]) -> list[dict]:
@@ -1208,6 +1238,10 @@ def run(args: argparse.Namespace, client) -> dict | list:
     """Execute one command against an httpx-compatible client and return the
     response payload. Non-2xx responses raise (clear failure over silence)."""
     c = args.command
+    if c in WS_KIND_BY_COMMAND:
+        args.workstream_id = resolve_workstream(
+            client, args.project_id, WS_KIND_BY_COMMAND[c], args.workstream_id
+        )
     if c == "whoami":
         me = client.get("/api/auth/me").raise_for_status().json()
         return {"target": str(client.base_url), "cli_version": version_payload(), **me}

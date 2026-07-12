@@ -41,7 +41,6 @@ from hive.models import (
     Task,
     TaskKind,
     TaskStatus,
-    IssueItem,
 )
 from hive.persistence.store import MemoryStore
 

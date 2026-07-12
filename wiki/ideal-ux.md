@@ -60,7 +60,7 @@ Ideal:
 | 3 | (waits; answers rare questions) | Work→verify loop, lands green changes, keeps acceptance stories honest |
 | 4 | Runs the one-line try-it command from the completion note | Demonstrated completion with evidence |
 
-Current path (2026-07-05, before project A ran):
+Path as it was on 2026-07-05, before project A ran (historical — see the gap list for what changed):
 
 | Step | Verdict |
 |------|---------|
@@ -132,11 +132,11 @@ Numbered for reference from commits/fixes. Status: `open` | `fixing` | `done`.
 | G2 | Directive brain stubbed: launchpad's primary input dispatches nothing | C | high | done — a directive files a GitHub issue (provenance marker in body) + starts a selected-scope issue run; landing → `done`, external close → `cancelled`, filing failure → `triaging` with the reason |
 | G3 | Budget semantics split: 0 = uncapped manual spend but disabled autonomy; silent no-op | A,B | med | done — one universal daily cap; new projects default $10; 0 pauses paid work (visible blocked_budget) |
 | G4 | Manual probe step (`hive probe <resource_id>`) in the first-work path | all | med | done — was stale docs, not product: registration auto-probes unknown backends (`should_auto_probe`); README quickstart rewritten; `hive probe` stays as the after-a-fix re-check |
-| G5 | `repo-create` is a separate user step for greenfield projects | A | low | open |
-| G6 | No scheduled issue scan — new GitHub issues wait for a human `hive scan` | B,C | med | open |
+| G5 | `repo-create` is a separate user step for greenfield projects | A | low | done — `hive new` without `--repo` creates the private repo; the web New Project modal defaults to 'create a private repo for me' and starts intake in the same submit |
+| G6 | No scheduled issue scan — new GitHub issues wait for a human `hive scan` | B,C | med | done — supervisor `issue_scan` poller ingests every `ISSUE_SCAN_INTERVAL_S` (10 min) |
 | G7 | Completion evidence unverified: does `goal_complete_note` carry a runnable demo? | A | med | mostly done — live note carried claims, not a try-it line (the verify tasks did run real checks; the operator independently confirmed: fresh clone, 34 tests green, playable window). `mark_goal_complete`'s contract now requires a 'Try it:' line + evidence; deterministic enforcement deferred |
 | G8 | `repo-create` (gh CLI path) made a commit-less repo; the scout's first checkout died on `origin/main is not a commit` — the recommended greenfield flow broke at turn 1 | A | high | done — gh path adds `--add-readme`; `checkout()` handles an empty origin (unborn branch, first push creates it) |
-| G9 | CLI rough edges met on the way: every command prints chief-discovery noise; `hive trace` on a task that never ran an agent surfaces raw `{"detail":"Not Found"}` | all | low | open |
+| G9 | CLI rough edges met on the way: every command prints chief-discovery noise; `hive trace` on a task that never ran an agent surfaces raw `{"detail":"Not Found"}` | all | low | done — discovery walks candidates quietly, trace 404 explains itself; `projects`/`project`/`inbox` render readable summaries with `--json` for scripts |
 | G10 | Approval drifted into a two-command tail (`intake-write-mission` + `intake-approve`); the design doc's "approve = finalize and go" existed only as dead `finalize`-turn handling nothing queued | A,B | med | done — approve with missing spec files queues the scout finalize turn; its completion wakes planning |
 | G11 | Chief verifies/reads the spec repo by *ssh* clone when the repo was wired via `repo-create` (stores `ssh_url`) — `Host key verification failed` on approve; the fleet's auth model is https+token everywhere | A | high | done — `authed_url` normalizes GitHub ssh remotes; `repo-create` stores the https clone URL |
 
@@ -157,6 +157,16 @@ Numbered for reference from commits/fixes. Status: `open` | `fixing` | `done`.
 | G26 | Todo "done" is claim-based: "Fix codex login on hive-vm" was marked done 3× and refiled each time because nothing verified the fix (only the login-probe path proves it) | all | med | fixing — resolution predicates make closure evidence-based where a store fact exists; manual done stays for `external` todos only |
 
 (Gaps found during the validation projects get appended here.)
+
+**Simplification pass (2026-07-13).** Ten UX/logic cuts landed in one sweep:
+dead knobs deleted (mode, guess dial, prod-deploys); the dead pre-plans build
+path removed and `Workstream` renamed to what it is (`IssueItem`); every state
+badge now ships a `state_reason` sentence (reasons, not states); intake is one
+project-keyed verb (`hive intake`) and write-mission is gone (approve
+finalizes); `hive new` / the web modal are the single creation path
+(`create`/`start` deleted); `hive projects`/`project`/`inbox` read like status
+lines; grants use `--grant claude:5/day`; workstream ids resolve themselves on
+single-repo projects.
 
 ## Under the hood: efficiency findings (2026-07-05/06)
 

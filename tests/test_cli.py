@@ -1179,3 +1179,23 @@ def test_cli_inbox_is_the_one_needs_you_surface(harness):
     assert q["id"] in text and "Which db?" in text
     assert t["id"] in text and "Log in codex on hive-vm" in text
     assert "hive answer" in text and "hive todo-done" in text
+
+
+def test_cli_resolves_the_only_workstream_so_nobody_hunts_ids(harness, monkeypatch):
+    """Single-repo projects (the norm) have exactly one issues workstream —
+    naming its id on every command was pure friction. Omitting it resolves;
+    an unconfigured project gets a clear sentence instead of a traceback."""
+    import pytest
+
+    client, store = harness
+    project = client.post("/api/projects", json={"name": "solo"}).json()
+    client.patch(f"/api/projects/{project['id']}", json={"spec_repo": "https://github.com/o/r.git"})
+    monkeypatch.setattr("hive.api.preflight_checks", lambda store, config, project, repo=None: [])
+    monkeypatch.setattr("hive.api.fetch_open_issues_full", lambda repo, token: [])
+
+    synced = cli(client, "issue-sync", project["id"])
+    assert synced["open_issues"] == 0
+
+    bare = client.post("/api/projects", json={"name": "bare"}).json()
+    with pytest.raises(SystemExit, match="no github_issues workstream"):
+        cli(client, "issue-sync", bare["id"])
