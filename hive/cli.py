@@ -432,6 +432,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("sub-rm", help="delete a subscription")
     p.add_argument("sub_id")
 
+    p = sub.add_parser(
+        "inbox",
+        help="everything that needs you, across projects: questions to answer, todos, offers",
+    )
+    p.add_argument("--json", action="store_true", help="raw payload instead of the readable summary")
+
     sub.add_parser("todos", help="list human todos")
     p = sub.add_parser("todo-add", help="file a human todo")
     p.add_argument("title")
@@ -742,6 +748,41 @@ def format_project(payload: dict) -> str:
         lines += ["", "RECENT TASKS:"]
         for t in tasks[-5:]:
             lines.append(f"  [{t['status']}] {t['kind']} on {t['backend']}  ({t['id']})")
+    return "\n".join(lines)
+
+
+def format_inbox(payload: dict) -> str:
+    """Readable cross-project inbox: what needs the human, with the command
+    that acts on each item."""
+    questions = payload.get("questions", [])
+    todos = payload.get("human_todos", [])
+    offers = payload.get("offers", [])
+    lines = []
+    if payload.get("paused"):
+        lines.append("hive is PAUSED — `hive resume` to continue")
+    count = payload.get("count", len(questions) + len(todos))
+    if count == 0:
+        lines.append("nothing needs you — the hive is unblocked")
+    else:
+        lines.append(f"{count} thing(s) need you ({len(questions)} question(s), {len(todos)} todo(s))")
+    if questions:
+        lines += ["", "QUESTIONS — `hive answer <id> '<text>'`:"]
+        for q in questions:
+            scope = q.get("project_name") or "project"
+            first_line = q["text"].strip().splitlines()[0][:110]
+            lines.append(f"  {q['id']}  [{scope}]  {first_line}")
+    if todos:
+        lines += ["", "TODOS — `hive todos` for instructions, `hive todo-done <id>` when finished:"]
+        for t in todos:
+            scope = t.get("project_name") or "org-wide"
+            lines.append(f"  {t['id']}  [{scope}]  {t['title'][:110]}")
+    shown = len(questions) + len(todos)
+    if count > shown:
+        lines.append(f"  …+{count - shown} more — clear a few and the rest surface")
+    if offers:
+        lines += ["", "HIVE OFFERS — things Hive does itself once allowed:"]
+        for o in offers:
+            lines.append(f"  [{o.get('project_name', '')}] {o.get('summary', '')} {o.get('offer', '')}".rstrip())
     return "\n".join(lines)
 
 
@@ -1449,6 +1490,9 @@ def run(args: argparse.Namespace, client) -> dict | list:
         })
     elif c == "sub-rm":
         r = client.delete(f"/api/subscriptions/{args.sub_id}")
+    elif c == "inbox":
+        data = client.get("/api/overview").raise_for_status().json()
+        return {"paused": data["paused"], **data["attention"]}
     elif c == "todos":
         r = client.get("/api/human-todos")
     elif c == "todo-add":
@@ -1604,6 +1648,8 @@ def main(argv: list[str] | None = None) -> None:
                 print(format_projects(payload))
             elif args.command == "project" and not args.json:
                 print(format_project(payload))
+            elif args.command == "inbox" and not args.json:
+                print(format_inbox(payload))
             else:
                 print(json.dumps(payload, indent=2))
             return

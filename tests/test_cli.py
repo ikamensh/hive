@@ -1151,3 +1151,31 @@ def test_parse_grants_human_syntax_round_trips_to_agent_grants():
         parse_grants(["claude"])  # no quota
     with pytest.raises(SystemExit):
         parse_grants(["claude:often"])  # gibberish quota
+
+
+def test_cli_inbox_is_the_one_needs_you_surface(harness):
+    """`hive inbox` mirrors the web Needs-You page: open questions and todos
+    across all projects in one list, each with the id the act-on-it command
+    needs. Parity check for the one-inbox principle."""
+    from hive.cli import format_inbox
+    from hive.models import Question
+
+    client, store = harness
+    p1 = client.post("/api/projects", json={"name": "alpha"}).json()
+    store.put(Question(project_id=p1["id"], text="## Which db?\nPick one."))
+    client.post(
+        "/api/human-todos",
+        json={"title": "Log in codex on hive-vm", "instructions": "run `hive login codex`"},
+    )
+
+    payload = cli(client, "inbox")
+    assert payload["count"] == 2
+    [q] = payload["questions"]
+    assert q["project_name"] == "alpha"
+    [t] = payload["human_todos"]
+
+    text = format_inbox(payload)
+    assert "2 thing(s) need you" in text
+    assert q["id"] in text and "Which db?" in text
+    assert t["id"] in text and "Log in codex on hive-vm" in text
+    assert "hive answer" in text and "hive todo-done" in text

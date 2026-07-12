@@ -137,6 +137,7 @@ hive whoami                        # resolved target URL + authenticated identit
 hive new myproj --spec spec.md     # one-step start: repo + spec handover + intake scout
 hive intake <project_id> [--approve | -m "answer"]   # the one intake verb
 hive projects                      # list with live states + reasons
+hive inbox                         # everything that needs you: questions, todos, offers
 hive project <project_id>          # workstreams, tasks, questions
 hive show [machines|agents|subscriptions|autonomy]  # fleet, launchable agents, license gaps, autonomous jobs
 hive answer <question_id> "yes, add B"
