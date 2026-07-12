@@ -165,10 +165,11 @@ def add_item(store, project: Project, plan: Plan, fields: dict, authored_by: str
 EDITABLE_FIELDS = ("title", "story", "constraints", "notes", "repo", "order")
 
 
-def update_item(store, item: PlanItem, fields: dict, by_human: bool = True) -> PlanItem:
-    """Rewrite any part of an item. Allowed whenever no agent is working on it
-    and it is not terminal — editing a parked item's constraints before a retry
-    is the human's direct amendment path. Editing does not change approval."""
+def update_item(store, item: PlanItem, fields: dict) -> PlanItem:
+    """Rewrite any part of an item — the human's edit (the AI only adds via
+    amendments). Allowed whenever no agent is working on it and it is not
+    terminal: editing a parked item's constraints before a retry is the direct
+    amendment path. Editing does not change approval."""
     if item.status in PLAN_ITEM_IN_FLIGHT:
         raise ValueError("an agent is working on this item; cancel its task first")
     if item.status in PLAN_ITEM_TERMINAL:
@@ -178,8 +179,7 @@ def update_item(store, item: PlanItem, fields: dict, by_human: bool = True) -> P
         for key in EDITABLE_FIELDS:
             if key in fields and fields[key] is not None:
                 setattr(saved, key, int(fields[key]) if key == "order" else str(fields[key]).strip())
-        if by_human:
-            saved.edited_by_human = True
+        saved.edited_by_human = True
         saved.updated_at = now_s()
 
     return store.update(PlanItem, item.id, mutate) or item

@@ -1125,7 +1125,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         enter `proposed` like any draft — approval stays one explicit act."""
         project = require_project(project_id, ctx)
         try:
-            plan = plans.create_draft(store, project, body.goal, body.items, proposed_by="human")
+            plans.create_draft(store, project, body.goal, body.items, proposed_by="human")
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return plan_payload(project)

@@ -11,7 +11,6 @@ be lost at any time — every invocation also receives a full state snapshot.
 
 import json
 import logging
-import time
 from pathlib import Path
 
 from hive.agents import REGISTRY

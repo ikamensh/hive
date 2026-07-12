@@ -20,8 +20,8 @@ hive/
   agents/              [standalone] coding-agent CLIs: registry, run_agent, probes, usage gauges
   fleet/               [standalone] machine identity + liveness policy
   worker/              [standalone] worker lifecycle: chief roster + register/poll/execute/report loop
-  _control/            the brain: supervisor, orchestrator, escalation
-  _workstreams/        the work pipelines: issues, testing, critique, preflight
+  _control/            the brain: supervisor, planner (orchestrator), escalation
+  _workstreams/        the work pipelines: plans, issues, testing, critique, preflight
   runner/              hive's runner: daemon composition, chief-side registration, task results
   _integrations/       external services: github_repos, specrepo, auth
 ```
