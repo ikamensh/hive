@@ -107,7 +107,9 @@ In MVP the only channel is the web UI inbox (user visits the page, sees work sta
 - **Drift detection (post-MVP but committed)**: periodic inventory sync (e.g. GCP Asset Inventory) vs `infrastructure.md`; minor drift is self-repaired, otherwise the project enters `blocked: infra` with an alert — autonomy requires self-repair or a clear escalation, never silent rot.
 - Prod deploys are gated by a per-project toggle (default off).
 
-## 9. Web UI (web-first)
+## 9. Web UI (web-first) + CLI parity
+
+**Parity principle: the CLI supports everything the UI supports.** The web UI is the human's surface; the `hive` CLI is the agent's. Agents (and scripts) must be able to work hive fluently — create and review plans, answer questions, trigger runs, inspect state — without a browser, so every UI capability ships with its CLI verb in the same change. The check lives in the CLI tests (`tests/test_cli.py` replays whole loops CLI-side; feature tests add their commands).
 
 Screens, in priority order:
 

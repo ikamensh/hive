@@ -323,7 +323,27 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("plan-abandon", help="abandon the active plan (cancels its queued items and tasks)")
     p.add_argument("project_id")
 
+    p = sub.add_parser("plan-item-add", help="add an item to the current plan (draft, or amendment on a live one)")
+    p.add_argument("project_id")
+    p.add_argument("title")
+    p.add_argument("--story", default="")
+    p.add_argument("--constraints", default="")
+    p.add_argument("--notes", default="")
+    p.add_argument("--repo", default="")
+
+    p = sub.add_parser("plan-item-edit", help="rewrite parts of a plan item; --order reorders")
+    p.add_argument("item_id")
+    p.add_argument("--title")
+    p.add_argument("--story")
+    p.add_argument("--constraints")
+    p.add_argument("--notes")
+    p.add_argument("--repo")
+    p.add_argument("--order", type=int)
+
     p = sub.add_parser("plan-item-approve", help="approve one proposed plan item")
+    p.add_argument("item_id")
+
+    p = sub.add_parser("plan-item-unapprove", help="flip an approved (not yet queued) item back to unreviewed")
     p.add_argument("item_id")
 
     p = sub.add_parser("plan-retry", help="retry a blocked/rejected plan item")
@@ -1131,8 +1151,23 @@ def run(args: argparse.Namespace, client) -> dict | list:
         r = client.post(f"/api/plans/{_plan_id(client, args.project_id)}/approve")
     elif c == "plan-abandon":
         r = client.post(f"/api/plans/{_plan_id(client, args.project_id)}/abandon")
+    elif c == "plan-item-add":
+        r = client.post(
+            f"/api/plans/{_plan_id(client, args.project_id)}/items",
+            json={"title": args.title, "story": args.story, "constraints": args.constraints,
+                  "notes": args.notes, "repo": args.repo},
+        )
+    elif c == "plan-item-edit":
+        body = {
+            k: getattr(args, k)
+            for k in ("title", "story", "constraints", "notes", "repo", "order")
+            if getattr(args, k) is not None
+        }
+        r = client.patch(f"/api/plan-items/{args.item_id}", json=body)
     elif c == "plan-item-approve":
         r = client.post(f"/api/plan-items/{args.item_id}/approve")
+    elif c == "plan-item-unapprove":
+        r = client.post(f"/api/plan-items/{args.item_id}/unapprove")
     elif c == "plan-retry":
         r = client.post(f"/api/plan-items/{args.item_id}/retry")
     elif c == "plan-item-cancel":

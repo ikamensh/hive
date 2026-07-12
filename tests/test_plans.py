@@ -525,8 +525,9 @@ def test_plan_api_abandon_cancels_pending_tasks(app, monkeypatch):
 
 
 def test_cli_plan_commands(app, monkeypatch):
-    """CLI parity: plan-new → plan-item-approve → plan-approve → plan → abandon
-    all round-trip through the same routes the web uses."""
+    """CLI/UI parity (a design principle: agents drive hive through the CLI):
+    every plan action the web UI offers — draft, add, edit, reorder, flip,
+    unapprove, approve-all, abandon — round-trips through the same routes."""
     from hive.cli import build_parser, run as cli_run
 
     def cli(client, *argv):
@@ -541,7 +542,18 @@ def test_cli_plan_commands(app, monkeypatch):
     assert [i["title"] for i in payload["items"]] == ["A", "B"]
     assert cli(client, "plan", pid)["plan"]["status"] == "draft"
 
-    cli(client, "plan-item-approve", payload["items"][0]["id"])
+    added = cli(client, "plan-item-add", pid, "C", "--story", "user can C")
+    edited = cli(client, "plan-item-edit", added["id"],
+                 "--constraints", "keep it tiny", "--order", "0")
+    assert edited["constraints"] == "keep it tiny" and edited["edited_by_human"]
+    # Reorder = swap, exactly what the UI's move-up does.
+    cli(client, "plan-item-edit", payload["items"][0]["id"], "--order", str(added["order"]))
+    assert [i["title"] for i in cli(client, "plan", pid)["items"]][0] == "C"
+
+    first = payload["items"][0]
+    assert cli(client, "plan-item-approve", first["id"])["status"] == "approved"
+    assert cli(client, "plan-item-unapprove", first["id"])["status"] == "proposed"
+
     started = cli(client, "plan-approve", pid)
     assert {i["status"] for i in started["items"]} == {"resolving", "queued"}
     assert cli(client, "plan-abandon", pid)["plan"]["status"] == "abandoned"

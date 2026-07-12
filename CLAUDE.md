@@ -30,6 +30,7 @@ For what each module does and how the pipelines wire together, see `wiki/code-ma
 
 ## Conventions
 
+- **CLI/UI parity is a design principle**: every capability the web UI exposes has a `hive` CLI command, so agents can drive hive as fluently as humans drive the browser. Shipping a UI-only feature is a bug — when you add a route for the UI, add the CLI verb (and a CLI test) in the same change.
 - Tests use `MemoryStore` + scripted orchestrator; no network, no LLM. Real-LLM behavior is checked with `scripts/smoke_orchestrator.py` (needs `OPENAI_API_KEY` or `GEMINI_API_KEY`).
 - Secrets live in Scaleway Secret Manager, region `fr-par` (`hive-gemini-api-key`, `hive-gh-token`, `hive-runner-token`, `hive-github-webhook-secret`, `hive-web-password`, `hive-gcp-sa-key`); the VM startup script materializes `/etc/hive/env`. Key for the `scw` CLI: `~/secrets/scaleway.md`.
 - The data plane is still GCP: project `hive-ikamen`, Firestore `(default)` + bucket `hive-ikamen-blobs`, both `europe-west1`, reached from anywhere via the `hive-scw` service-account key (`GOOGLE_APPLICATION_CREDENTIALS`, materialized from `hive-gcp-sa-key`).
