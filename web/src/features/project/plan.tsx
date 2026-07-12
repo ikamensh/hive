@@ -113,12 +113,14 @@ function ItemRow({
   expanded,
   onToggle,
   onChanged,
+  onMoveUp,
 }: {
   item: PlanItem;
   reviewing: boolean; // plan still draft: show flip controls
   expanded: boolean;
   onToggle: () => void;
   onChanged: () => void;
+  onMoveUp?: () => Promise<void>; // review mode, not the first item
 }) {
   const [busy, setBusy] = useState(false);
   const act = (fn: () => Promise<unknown>) => async () => {
@@ -155,6 +157,12 @@ function ItemRow({
           <span className="plan-item-authored muted">{authored}</span>
         </button>
         <div className="plan-item-actions">
+          {onMoveUp && (
+            <button type="button" className="ghost plan-item-move" title="move up"
+              aria-label="move this item up" onClick={act(onMoveUp)}>
+              ↑
+            </button>
+          )}
           {reviewing && item.status === "proposed" && (
             <button type="button" title="approve this item" onClick={act(() => api.approvePlanItem(item.id))}>
               <i className="ti ti-check" aria-hidden /> approve
@@ -358,16 +366,32 @@ export function PlanPanel({
       </header>
 
       <div className="plan-items">
-        {items.map((item) => (
-          <ItemRow
-            key={item.id}
-            item={item}
-            reviewing={reviewing}
-            expanded={expandedId === item.id}
-            onToggle={() => setExpandedId(expandedId === item.id ? "" : item.id)}
-            onChanged={onChanged}
-          />
-        ))}
+        {items.map((item, position) => {
+          const previous = items[position - 1];
+          const movable =
+            reviewing && previous !== undefined &&
+            !TERMINAL.includes(item.status) && !TERMINAL.includes(previous.status);
+          return (
+            <ItemRow
+              key={item.id}
+              item={item}
+              reviewing={reviewing}
+              expanded={expandedId === item.id}
+              onToggle={() => setExpandedId(expandedId === item.id ? "" : item.id)}
+              onChanged={onChanged}
+              onMoveUp={
+                movable
+                  ? async () => {
+                      // Swap positions with the item above.
+                      await api.patchPlanItem(item.id, { order: previous.order });
+                      await api.patchPlanItem(previous.id, { order: item.order });
+                      onChanged();
+                    }
+                  : undefined
+              }
+            />
+          );
+        })}
       </div>
 
       {(reviewing || plan.status === "approved") && (

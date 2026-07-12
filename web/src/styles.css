@@ -3926,3 +3926,4 @@ a.needs-scope:hover { color: var(--accent); }
   min-width: 260px;
 }
 .plan-starter-manual input { flex: 1; }
+.plan-item-move { padding: 3px 7px; color: var(--ink-faint); }
