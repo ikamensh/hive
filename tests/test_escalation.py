@@ -242,3 +242,32 @@ def test_project_state_not_predicate():
     store.put(project)
     resolve_open_todos(store)
     assert open_todos(store) == []
+
+
+def test_goal_completion_moots_story_todos_and_archive_moots_everything():
+    """Live-audit regression (the only zombies the LLM triage ever caught):
+    an env/story todo must not outlive its iteration — goal completion moots
+    it — and archiving a project moots every todo it scoped, predicate or not."""
+    store = MemoryStore()
+    project = store.put(Project(name="td", spec_repo="x"))
+    story = store.put(Story(project_id=project.id, workstream_id="w", key="play"))
+    escalate(
+        store, "Unblock testing sweep for play", "x",
+        project_id=project.id,
+        dedup_key=f"env:story:{story.id}",
+        resolution={"check": "story_verdict", "story_id": story.id},
+    )
+    resolve_open_todos(store)
+    assert len(open_todos(store)) == 1  # story unresolved, goal not complete
+
+    project.goal_complete = True
+    store.put(project)
+    (closed,) = resolve_open_todos(store)
+    assert "moot" in closed.resolved_reason and "goal completed" in closed.resolved_reason
+
+    other = store.put(Project(name="old", spec_repo="y"))
+    escalate(store, "Manual chore", "x", project_id=other.id, dedup_key="chore")
+    other.archived = True
+    store.put(other)
+    (closed,) = resolve_open_todos(store)
+    assert closed.resolved_reason == "moot: the project was archived"

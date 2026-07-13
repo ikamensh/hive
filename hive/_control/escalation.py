@@ -174,6 +174,11 @@ def _story_verdict(store, todo: HumanTask) -> str:
         return "the story no longer exists"
     if story.status in (StoryStatus.passing, StoryStatus.failing):
         return f"story `{story.key}` reached a verdict: {story.status}"
+    # Iteration-scoped condition: a completed goal moots the ask (live audit:
+    # these were the zombies only the LLM triage caught).
+    project = store.get(Project, todo.project_id) if todo.project_id else None
+    if project is not None and project.goal_complete:
+        return "moot: the iteration goal completed before this story reached a verdict"
     return ""
 
 
@@ -254,7 +259,18 @@ def resolve_open_todos(store, workspace_id: str = DEFAULT_WORKSPACE_ID) -> list[
     """Close every open todo whose resolution predicate holds, recording the
     evidence in `resolved_reason`. Returns what it closed."""
     resolved = []
+    archived_projects: dict[str, bool] = {}
     for todo in store.list(HumanTask, workspace_id=workspace_id, status=HumanTaskStatus.open):
+        # Archiving a project is the operator saying "done with this" — its
+        # todos are moot regardless of their predicate (or lack of one).
+        if todo.project_id:
+            if todo.project_id not in archived_projects:
+                project = store.get(Project, todo.project_id)
+                archived_projects[todo.project_id] = bool(project and project.archived)
+            if archived_projects[todo.project_id]:
+                close_todo(store, todo, "moot: the project was archived")
+                resolved.append(todo)
+                continue
         check = RESOLUTION_CHECKS.get(todo.resolution.get("check", ""))
         if check is None:
             continue

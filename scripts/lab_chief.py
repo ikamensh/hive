@@ -20,7 +20,7 @@ import logging
 import os
 from pathlib import Path
 
-from hive.api import create_app, make_ci_check, make_issue_scan, make_testing_check, make_todo_triage
+from hive.api import create_app, make_ci_check, make_issue_scan, make_testing_check, make_todo_triage, mount_spa
 from hive.config.settings import Config
 from hive.persistence.blobstore import LocalBlobStore
 from hive.persistence.store import FileStore
@@ -44,4 +44,6 @@ def lab_app():
         issue_scan=make_issue_scan(store, config, blobs=blobs),
         todo_triage=make_todo_triage(store, config),
     )
-    return create_app(store, supervisor, config, blobs=blobs)
+    app = create_app(store, supervisor, config, blobs=blobs)
+    mount_spa(app, Path(os.environ.get("HIVE_WEB_DIST", "web/dist")))
+    return app
