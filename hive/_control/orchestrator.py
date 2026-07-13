@@ -24,6 +24,7 @@ from hive.models import (
     HumanTaskKind,
     HumanTaskStatus,
     OrchestratorRun,
+    Plan,
     PlanStatus,
     Project,
     Question,
@@ -114,9 +115,17 @@ class Tools:
             return items
         # A completed plan awaits the human's goal verdict — the next iteration
         # is theirs to set. Inventing one here is scope creep, not planning
-        # (observed live: the planner drafted 'improve usability' instead of
-        # declaring the built iteration done).
-        latest = plans.latest_plan(self.store, self.project)
+        # (observed live twice: the planner drafted 'improve usability' instead
+        # of declaring the built iteration done — the second time hiding behind
+        # an abandoned draft, hence the abandoned-plans filter).
+        finished = [
+            pl
+            for pl in self.store.list(
+                Plan, workspace_id=self.project.workspace_id, project_id=self.project.id
+            )
+            if pl.status != PlanStatus.abandoned
+        ]
+        latest = finished[-1] if finished else None
         if latest is not None and latest.status == PlanStatus.complete and not self.project.goal_complete:
             return (
                 "rejected: the completed plan awaits the goal verdict. Call "

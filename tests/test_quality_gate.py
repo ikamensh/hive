@@ -118,6 +118,13 @@ def test_propose_plan_refused_while_completed_plan_awaits_goal_verdict():
     answer = tools.propose_plan("improve usability", '[{"title": "polish"}]')
     assert "rejected" in answer and "mark_goal_complete" in answer
 
+    # Observed live: a drafted-then-abandoned invention must not lift the
+    # guard — the completed plan still awaits its verdict behind it.
+    draft = plans.create_draft(store, project, "invented", [{"title": "x"}], proposed_by="agent")
+    plans.abandon_plan(store, draft)
+    answer = tools.propose_plan("improve usability again", '[{"title": "y"}]')
+    assert "rejected" in answer
+
     # After the goal verdict, planning for a human-set goal reopens.
     project = store.get(Project, project.id)
     project.goal_complete = True
