@@ -301,6 +301,7 @@ def activate(store, project: Project, plan: Plan, spec=None) -> list[str]:
         raise ValueError(problem)
 
     notes: list[str] = []
+    queued_count = 0
     for item in items:
         if item.status != PlanItemStatus.approved:
             continue
@@ -310,13 +311,14 @@ def activate(store, project: Project, plan: Plan, spec=None) -> list[str]:
             saved.updated_at = now_s()
 
         store.update(PlanItem, item.id, queue)
+        queued_count += 1
 
     def approve(saved: Plan) -> None:
         saved.status = PlanStatus.approved
         saved.approved_at = now_s()
 
     plan = store.update(Plan, plan.id, approve) or plan
-    notes.append(f"plan approved: {len(items)} item(s) queued")
+    notes.append(f"plan approved: {queued_count} item(s) queued")
 
     if spec is not None:
         try:
