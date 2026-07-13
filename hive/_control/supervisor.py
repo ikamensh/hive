@@ -821,12 +821,47 @@ class Supervisor:
             # capacity exists elsewhere: nudge the orchestrator to replan onto
             # an available backend instead of waiting forever.
             replan = state == ProjectState.blocked_resources and bool(avail) and heartbeat_due
-            if events or needs_decision or replan:
+            # A quiet project whose completed plan still awaits the goal
+            # verdict must not pend silently (observed live: the verdict was
+            # blocked by draining tasks once, and nothing ever woke the
+            # planner again).
+            verdict_due = (
+                state == ProjectState.idle
+                and heartbeat_due
+                and self._goal_verdict_pending(project)
+            )
+            if events or needs_decision or replan or verdict_due:
                 if not events:
-                    events = [self._replan_note(avail) if replan else self._heartbeat_note()]
+                    if replan:
+                        events = [self._replan_note(avail)]
+                    elif verdict_due:
+                        events = [self._verdict_note()]
+                    else:
+                        events = [self._heartbeat_note()]
                     self._last_heartbeat[project.id] = time.time()
                 self._busy.add(project.id)
                 asyncio.get_running_loop().create_task(self._orchestrate(project.id, events))
+
+    def _goal_verdict_pending(self, project: Project) -> bool:
+        """A completed (non-abandoned) plan exists but the goal verdict never
+        landed — the project looks idle while actually owing the human a
+        completion note."""
+        if project.goal_complete:
+            return False
+        plans_ = [
+            p
+            for p in self.store.list(Plan, workspace_id=self.workspace_id, project_id=project.id)
+            if p.status != PlanStatus.abandoned
+        ]
+        return bool(plans_) and plans_[-1].status == PlanStatus.complete
+
+    @staticmethod
+    def _verdict_note() -> str:
+        return (
+            "The iteration plan is complete but the goal verdict never landed. "
+            "Call mark_goal_complete with the 'Try it:' evidence, or ask_user if "
+            "the iteration goal is genuinely not met."
+        )
 
     @staticmethod
     def _heartbeat_note() -> str:

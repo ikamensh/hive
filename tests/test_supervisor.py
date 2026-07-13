@@ -527,3 +527,24 @@ def test_state_reason_names_the_missing_backend_and_the_blocked_items():
     )
     reason = state_reason(store, attention, set(), 0.0)
     assert "question" in reason and "#7" in reason
+
+
+def test_quiet_project_owing_goal_verdict_gets_woken():
+    """Nothing silently pends: a project whose completed plan never got its
+    goal verdict must receive a heartbeat wake telling the planner to declare
+    (observed live: the verdict was blocked once by draining tasks, then
+    nothing ever woke the planner again)."""
+    from hive.models import Plan, PlanStatus
+
+    store = MemoryStore()
+    project = store.put(Project(name="p", spec_repo="x", state=ProjectState.idle))
+    store.put(Plan(project_id=project.id, goal="ship v1", status=PlanStatus.complete))
+    sup = make_supervisor(store)
+
+    assert sup._goal_verdict_pending(project)
+    note = sup._verdict_note()
+    assert "mark_goal_complete" in note
+
+    project.goal_complete = True
+    store.put(project)
+    assert not sup._goal_verdict_pending(store.get(Project, project.id))
