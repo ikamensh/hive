@@ -1,7 +1,33 @@
 # Backlog
 
-Deferred gap-closing work (Phase 3). Captured, not yet started — see chat
-context for the full gap analysis these came from.
+Deferred gap-closing work. Captured, not yet started — see wiki/ideal-ux.md
+for the gap list these tie back to.
+
+## Round 3 structural simplifications (validated priorities, 2026-07-13)
+
+Ordered by the 2026-07-13 lab-tally live run. Each is a deep refactor that
+wants a fresh session:
+
+1. **One execution pipeline over work docs** — issues.py + plans.py are the
+   same resolve→review→merge machine with different feeders; _task_results.py
+   lands each separately. Extract the shared pipeline; GitHub issues, plan
+   items, and directives become feeders. Fold in the Task per-kind payload
+   diet (issue_doc/conversation_turn/fresh_branch/...) while task kinds are
+   renegotiated.
+2. **Delete the ProjectWorkstream layer if it only routes ids** — the
+   iteration kind is a stub row; issues/testing key by repo. Removing it also
+   removes the CLI workstream-id resolution and the Task.workstream_id /
+   work_item_id dual foreign key. Do after (1).
+3. **Shrink the testing state space** — live evidence: one episode on a
+   4-command CLI fanned out to 9+ agent sessions (refresh + 5 sweeps + 3
+   repros); Finding has 7 states tracking what the filed issue already
+   records. Fold repro/judge into confirm; a confirmed finding IS the issue.
+4. **One ask-the-human ledger** — Questions, testability decision-questions,
+   and the wiki decision ledger are three shapes of "hive needs a ruling".
+   One decision record, mirrored to the spec repo, answered from the inbox.
+5. **Small**: HIVE_RUNNER_STATE_DIR should default under HIVE_DATA_DIR when
+   set (a second runner on one box currently inherits the fleet pause flag,
+   observed in the lab).
 
 ## Scheduled scan: eligibility on big external backlogs
 The unattended issue scan advances the lowest-order queued issue — on a
