@@ -72,12 +72,9 @@ and wiki/architecture.md (provider rulebook, user resource policy).
 ## Remote control — convenience gaps
 The laptop-off workflow (README "Keep Hive working while your laptop is off") works
 today, but the story has friction worth smoothing:
-- **Per-user CLI auth.** The remote sits behind one shared Caddy basic-auth password
-  (the app itself runs `dev` mode behind it); driving it means copying the
-  `hive-web-password` secret into `HIVE_BASIC_AUTH`. Build `hive login` + a minted,
-  revocable per-user token: the server signs a `typ:"cli"` token via the existing
-  `AuthManager` HMAC machinery, surfaced in the UI / via `hive login`, stored as
-  `HIVE_TOKEN` (the CLI already sends it as a bearer). Then `github` auth mode is
+- **Per-user CLI auth: built** (`hive connect <url>` mints a typ:"cli" bearer and
+  stores HIVE_URL + HIVE_TOKEN). Remaining ops step: switch the VM to `github`
+  auth mode and drop the Caddy basic-auth password. Then `github` auth mode is
   reachable from the CLI without the browser, and the shared password can retire.
 - **Backend continuity is on the operator.** Work routed to a backend only the
   (off) laptop has parks as `blocked: resources`. The VM startup now installs claude +

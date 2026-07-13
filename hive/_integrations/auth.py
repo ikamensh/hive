@@ -36,6 +36,9 @@ STATE_TTL_S = 10 * 60
 # pasted into `hive enroll` on the laptop. Short-lived — it hands out the
 # runner token, and the machine it enrolls is claimed for the minting user.
 ENROLL_TTL_S = 60 * 60
+# CLI tokens are the operator's long-lived remote credential (stored in
+# ~/.config/hive/config.env). Rotating HIVE_AUTH_SECRET revokes them all.
+CLI_TOKEN_TTL_S = 90 * 24 * 3600
 
 
 @dataclass(frozen=True)
@@ -234,7 +237,7 @@ class AuthManager:
         if not token:
             raise HTTPException(401, "login required")
         payload = self._verify(token)
-        if payload.get("typ") != "session" or payload.get("workspace_id") != self.workspace.id:
+        if payload.get("typ") not in ("session", "cli") or payload.get("workspace_id") != self.workspace.id:
             raise HTTPException(401, "bad session")
         user = self.store.get(User, payload.get("sub", ""))
         if not user:
@@ -249,6 +252,23 @@ class AuthManager:
         user.last_seen = time.time()
         self.store.put(user)
         return AuthContext(user=user, workspace=self.workspace, role=memberships[0].role)
+
+    def cli_token(self, user: User) -> tuple[str, float]:
+        """A bearer token for the hive CLI: the operator authenticates once
+        (`hive connect`) and every later command rides this instead of a
+        copied perimeter password."""
+        expires_at = time.time() + CLI_TOKEN_TTL_S
+        return (
+            self._sign(
+                {
+                    "typ": "cli",
+                    "sub": user.id,
+                    "workspace_id": self.workspace.id,
+                    "exp": expires_at,
+                }
+            ),
+            expires_at,
+        )
 
     def enroll_token(self, user: User) -> str:
         return self._sign(

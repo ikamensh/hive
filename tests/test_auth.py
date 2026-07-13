@@ -1,6 +1,7 @@
 from urllib.parse import parse_qs, urlparse
 
 import json
+import time
 
 from fastapi.testclient import TestClient
 
@@ -265,3 +266,38 @@ def test_github_login_rejects_non_allowlisted_user(monkeypatch):
     )
 
     assert callback.status_code == 403
+
+
+def test_cli_token_mint_and_bearer_roundtrip(monkeypatch):
+    """`hive connect`'s server side: an authenticated user mints a typ:cli
+    token, and that bearer authorizes later API calls exactly like a session —
+    the operator never copies the perimeter password again."""
+    store = MemoryStore()
+    client, _config = make_client(
+        store,
+        auth_mode="github",
+        github_client_id="client-id",
+        github_client_secret="client-secret",
+        auth_secret="auth-secret",
+        public_url="http://testserver",
+    )
+    start = client.get("/api/auth/github/start", follow_redirects=False)
+    state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
+    monkeypatch.setattr(
+        "hive._integrations.auth.httpx.post",
+        lambda *a, **k: FakeResponse({"access_token": "gho_test"}),
+    )
+    monkeypatch.setattr(
+        "hive._integrations.auth.httpx.get",
+        lambda *a, **k: FakeResponse({"login": "ikamensh", "name": "Ikamen"}),
+    )
+    client.get(f"/api/auth/github/callback?code=abc&state={state}", follow_redirects=False)
+
+    minted = client.post("/api/auth/cli-token").json()
+    assert minted["token"] and minted["expires_at"] > time.time()
+
+    bare = client.__class__(client.app, base_url="http://testserver")
+    assert bare.get("/api/auth/me").status_code == 401  # no credential, no entry
+    me = bare.get("/api/auth/me", headers={"Authorization": f"Bearer {minted['token']}"})
+    assert me.status_code == 200
+    assert me.json()["user"]["id"] == minted["user_id"]

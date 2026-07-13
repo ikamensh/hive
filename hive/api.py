@@ -599,6 +599,13 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     # ---- auth ---------------------------------------------------------------
 
+    @app.post("/api/auth/cli-token")
+    def mint_cli_token(ctx: AuthContext = Depends(current)):
+        """Mint the operator's long-lived CLI bearer token (`hive connect`
+        stores it as HIVE_TOKEN) — no more copying the perimeter password."""
+        token, expires_at = auth.cli_token(ctx.user)
+        return {"token": token, "expires_at": expires_at, "user_id": ctx.user.id}
+
     @app.get("/api/auth/me")
     def auth_me(response: Response, ctx: AuthContext = Depends(current)):
         if config.auth_mode == "dev":

@@ -168,6 +168,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub.add_parser("version", help="show the local CLI version and the target chief version")
 
+    p = sub.add_parser(
+        "connect",
+        help="one-time: point the CLI at a chief and mint your personal token",
+        description="Authenticates once (browser session cookie is not needed; pass "
+        "--basic-auth if the chief sits behind a perimeter password), mints a "
+        "long-lived personal CLI token, and stores HIVE_URL + HIVE_TOKEN in "
+        "~/.config/hive/config.env. Every later command rides the token.",
+    )
+    p.add_argument("url", help="chief base URL, e.g. https://hive.example.org")
+    p.add_argument("--basic-auth", default="", help="user:pass for a perimeter (Caddy) password")
+
     sub.add_parser("pause", help="pause all of hive: nothing new starts, running tasks finish")
     sub.add_parser("resume", help="undo `hive pause`; queued work dispatches again")
     p = sub.add_parser("projects", help="list projects (readable; --json for the raw payload)")
@@ -984,6 +995,38 @@ def detect_config(env: dict[str, str]) -> dict[str, str]:
     return found
 
 
+def _run_connect(args: argparse.Namespace) -> None:
+    import httpx
+
+    url = args.url.rstrip("/")
+    if not url.startswith(("http://", "https://")):
+        url = f"https://{url}"
+    basic = args.basic_auth or os.environ.get("HIVE_BASIC_AUTH", "")
+    auth = tuple(basic.split(":", 1)) if ":" in basic else None
+    with httpx.Client(base_url=url, auth=auth, timeout=30.0) as client:
+        try:
+            me = client.get("/api/auth/me").raise_for_status().json()
+            minted = client.post("/api/auth/cli-token").raise_for_status().json()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (401, 403):
+                raise SystemExit(
+                    f"Not authorized at {url}. If the chief sits behind a perimeter "
+                    "password, pass --basic-auth user:pass for this one command."
+                ) from exc
+            raise SystemExit(f"chief at {url} answered HTTP {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise SystemExit(f"could not reach {url}: {exc}") from exc
+    path = config_path()
+    stored = load_stored_config(path)
+    stored["HIVE_URL"] = url
+    stored["HIVE_TOKEN"] = minted["token"]
+    save_stored_config(stored, path)
+    days = max(0, int((minted["expires_at"] - time.time()) / 86400))
+    login = me.get("user", {}).get("github_login") or me.get("user", {}).get("id", "you")
+    print(f"connected to {url} as {login}; personal token stored in {path} (expires in ~{days} days)")
+    print("every `hive` command now targets this chief — check with `hive whoami`")
+
+
 def _run_config(args: argparse.Namespace) -> None:
     path = config_path()
     stored = load_stored_config(path)
@@ -1643,6 +1686,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "enroll":
         _run_enroll(args)
+        return
+    if args.command == "connect":
+        _run_connect(args)
         return
     if args.command == "config":
         _run_config(args)
