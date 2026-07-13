@@ -21,3 +21,9 @@ def test_current_claude_rates_resolve_via_dotted_prefix():
 def test_unknown_model_is_free_not_an_error():
     assert estimate_cost("some-future-model", 1_000_000, 1_000_000) == 0.0
     assert estimate_cost("", 100, 100) == 0.0
+
+
+def test_router_vendor_prefix_is_priced():
+    """OpenRouter-style ids (vendor/model) price as the underlying model —
+    a bridged planner must not report $0 spend all day (seen live)."""
+    assert estimate_cost("openai/gpt-5.1", 1_000_000, 0) == estimate_cost("gpt-5.1", 1_000_000, 0) > 0

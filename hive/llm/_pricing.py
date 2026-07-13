@@ -25,8 +25,10 @@ PRICING: dict[str, tuple[float, float]] = {
 
 def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     """Estimated USD for a call. Longest-prefix match against PRICING; 0 for
-    unknown models (tokens are recorded regardless)."""
-    name = (model or "").lower()
+    unknown models (tokens are recorded regardless). Router ids carry a vendor
+    prefix ("openai/gpt-5.1" via OpenRouter) — priced by the part after the
+    slash, so a bridged planner doesn't report $0 all day."""
+    name = (model or "").lower().rsplit("/", 1)[-1]
     match = max((p for p in PRICING if name.startswith(p)), key=len, default="")
     if not match:
         return 0.0
