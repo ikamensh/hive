@@ -125,6 +125,18 @@ def test_propose_plan_refused_while_completed_plan_awaits_goal_verdict():
     answer = tools.propose_plan("improve usability again", '[{"title": "y"}]')
     assert "rejected" in answer
 
+    # ...and symmetrically, the abandoned draft must not BLOCK the verdict:
+    # mark_goal_complete judges the completed plan, not the abandoned one.
+    # (activate() queued a resolve task for the done item; finish it first —
+    # the quiescence rule is a separate, correct gate.)
+    from hive.models import TaskStatus
+
+    for t in store.list(Task, project_id=project.id):
+        t.status = TaskStatus.done
+        store.put(t)
+    verdict = tools.mark_goal_complete("Shipped. Try it: python3 tally.py report")
+    assert verdict == "goal marked complete"
+
     # After the goal verdict, planning for a human-set goal reopens.
     project = store.get(Project, project.id)
     project.goal_complete = True

@@ -118,14 +118,7 @@ class Tools:
         # (observed live twice: the planner drafted 'improve usability' instead
         # of declaring the built iteration done — the second time hiding behind
         # an abandoned draft, hence the abandoned-plans filter).
-        finished = [
-            pl
-            for pl in self.store.list(
-                Plan, workspace_id=self.project.workspace_id, project_id=self.project.id
-            )
-            if pl.status != PlanStatus.abandoned
-        ]
-        latest = finished[-1] if finished else None
+        latest = self._latest_meaningful_plan()
         if latest is not None and latest.status == PlanStatus.complete and not self.project.goal_complete:
             return (
                 "rejected: the completed plan awaits the goal verdict. Call "
@@ -138,6 +131,19 @@ class Tools:
             return f"error: {exc}"
         self.actions.append(f"proposed plan {plan.id} with {len(items)} item(s)")
         return f"plan_id={plan.id} drafted with {len(items)} item(s); awaiting the human's review"
+
+    def _latest_meaningful_plan(self) -> Plan | None:
+        """The newest plan that isn't an abandoned draft — abandoning an
+        invention must neither lift the goal-verdict guard nor block the
+        verdict itself (both observed live)."""
+        finished = [
+            pl
+            for pl in self.store.list(
+                Plan, workspace_id=self.project.workspace_id, project_id=self.project.id
+            )
+            if pl.status != PlanStatus.abandoned
+        ]
+        return finished[-1] if finished else None
 
     def amend_plan(self, items_json: str) -> str:
         """Propose additional items for the live plan (same JSON shape as
@@ -271,7 +277,8 @@ class Tools:
         not a completion note."""
         # The quality gate is structural: every plan item landed only through
         # an accepted fresh-agent review, so a complete plan IS the evidence.
-        plan = plans.latest_plan(self.store, self.project)
+        # Abandoned drafts don't count — they must not block the verdict.
+        plan = self._latest_meaningful_plan()
         if plan is None:
             return (
                 "rejected: no iteration plan exists. The goal completes only through "
