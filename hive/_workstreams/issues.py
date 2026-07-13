@@ -28,6 +28,7 @@ from hive._integrations.github_repos import _GH_HEADERS, parse_repo_ref
 from hive.models import (
     Directive,
     DirectiveStatus,
+    ISSUE_BLOCKED,
     IssueRun,
     IssueRunScope,
     IssueRunStatus,
@@ -51,7 +52,6 @@ DEFAULT_ISSUE_MODEL = ""
 LANDING_FAILED_PREFIX = "accepted but landing failed"
 # How long a just-created issue may be missing from the (eventually consistent)
 # GitHub list API before its absence counts as an external close.
-GITHUB_LIST_LAG_GRACE_S = 180.0
 
 _IMG_MD = re.compile(r"!\[[^\]]*\]\(([^)\s]+)\)")
 _IMG_HTML = re.compile(r"""<img[^>]+src=["']([^"']+)["']""", re.IGNORECASE)
@@ -106,9 +106,8 @@ def list_open_issues(repo_ref: str, token: str) -> list[dict]:
 
 
 def create_issue(repo_ref: str, title: str, body: str, token: str) -> dict:
-    """Create a GitHub issue; returns {"number", "html_url"}. Directive intake
-    files the user's ask as a real issue so the resolve→review pipeline owns
-    it end to end and the ask is durable outside Hive's store."""
+    """Create a GitHub issue; returns {"number", "html_url"}. Used by flows
+    whose record belongs on GitHub (CI auto-fix, testing findings)."""
     owner_repo = parse_repo_ref(repo_ref)
     response = httpx.post(
         f"https://api.github.com/repos/{owner_repo}/issues",
@@ -122,66 +121,70 @@ def create_issue(repo_ref: str, title: str, body: str, token: str) -> dict:
     return {"number": int(data["number"]), "html_url": str(data.get("html_url") or "")}
 
 
-def directive_issue_content(directive: Directive) -> tuple[str, str]:
-    """The GitHub issue title/body for a directive: first line as the title,
-    the full ask as the body, plus a provenance marker."""
+def is_directive_item(item: IssueItem) -> bool:
+    """Directive-born work items run the same resolve→review→merge pipeline but
+    have no GitHub issue behind them — GitHub is a source of work in, never
+    hive's internal ledger."""
+    return item.external_ref.get("origin") == "directive"
+
+
+def item_branch(item: IssueItem) -> str:
+    """The work branch for one pipeline item."""
+    if is_directive_item(item):
+        return f"hive/ask-{item.id[:8]}"
+    return f"hive/issue-{item.issue_number}"
+
+
+def seed_directive_item(
+    store, project: Project, workstream: ProjectWorkstream, directive: Directive
+) -> IssueItem:
+    """Turn an operator directive into a queued pipeline work item, ahead of
+    any mirrored GitHub backlog (a direct ask outranks ambient issues)."""
     first = directive.text.strip().splitlines()[0].strip()
     title = first if len(first) <= 80 else first[:77] + "..."
-    body = (
-        directive.text.strip()
-        + f"\n\n<!-- hive-directive id={directive.id} -->\n"
-        "_Filed by Hive from a launchpad directive._"
-    )
-    return title, body
-
-
-def seed_filed_issue(
-    store, project: Project, workstream: ProjectWorkstream, number: int, url: str, title: str, body: str
-) -> IssueItem:
-    """Upsert the work item for an issue Hive itself just filed.
-
-    The GitHub list API is eventually consistent: a create→list round trip can
-    miss the new issue for a few seconds. We know it exists — seed the work
-    item directly; the next scan reconciles content and comments."""
-    existing = [
-        w for w in _issue_workstreams(store, project, workstream) if w.issue_number == number
-    ]
-    if existing:
-        return existing[0]
+    existing = _issue_workstreams(store, project, workstream)
+    front = min((w.order for w in existing), default=1) - 1
     return store.put(
         IssueItem(
             workspace_id=project.workspace_id,
             project_id=project.id,
             workstream_id=workstream.id,
             repo=workstream.repo,
-            title=f"#{number} {title}",
-            description=build_issue_doc(title, body, []),
+            title=title,
+            description=directive.text.strip(),
             status=IssueItemStatus.queued,
-            issue_number=number,
-            issue_url=url,
-            issue_attachments=extract_image_urls(body),
-            external_ref={"provider": "github", "issue_number": number, "url": url},
-            order=number,
+            external_ref={"origin": "directive", "directive_id": directive.id},
+            order=front,
         )
     )
 
 
-def sync_directives_for_issue(
-    store, project: Project, issue_number: int, status: DirectiveStatus, note: str
-) -> None:
-    """Reflect an issue's terminal event onto the directive that filed it."""
-    for directive in store.list(
-        Directive, workspace_id=project.workspace_id, project_id=project.id
-    ):
-        if directive.issue_number != issue_number or directive.status in (
-            DirectiveStatus.done,
-            DirectiveStatus.cancelled,
-        ):
-            continue
-        directive.status = status
-        directive.routing_note = note
-        directive.updated_at = now_s()
-        store.put(directive)
+DIRECTIVE_NOTES = {
+    IssueItemStatus.queued: (DirectiveStatus.working, "queued; runs when the pipeline frees up"),
+    IssueItemStatus.resolving: (DirectiveStatus.working, "an agent is working the ask"),
+    IssueItemStatus.reviewing: (DirectiveStatus.working, "fix ready; an independent reviewer is checking it"),
+    IssueItemStatus.blocked_clarity: (DirectiveStatus.working, "needs you: the agent could not proceed"),
+    IssueItemStatus.rejected: (DirectiveStatus.working, "needs you: the review rejected the fix"),
+    IssueItemStatus.done: (DirectiveStatus.done, "landed on the default branch"),
+    IssueItemStatus.cancelled: (DirectiveStatus.cancelled, "cancelled"),
+}
+
+
+def sync_directive_for_item(store, item: IssueItem) -> None:
+    """Reflect a directive-born item's pipeline state onto its directive."""
+    directive_id = item.external_ref.get("directive_id", "")
+    if not directive_id:
+        return
+    directive = store.get(Directive, directive_id)
+    if directive is None or directive.status in (DirectiveStatus.done, DirectiveStatus.cancelled):
+        return
+    status, note = DIRECTIVE_NOTES.get(item.status, (DirectiveStatus.working, str(item.status)))
+    if item.parked_reason and item.status in ISSUE_BLOCKED:
+        note = f"{note}: {item.parked_reason[:200]}"
+    directive.status = status
+    directive.routing_note = note
+    directive.updated_at = now_s()
+    store.put(directive)
 
 
 def fetch_issue_comments(repo_ref: str, number: int, token: str) -> list[dict]:
@@ -487,7 +490,7 @@ def _issue_workstreams(
     return [
         w
         for w in store.list(IssueItem, project_id=project.id)
-        if w.issue_number and _item_in_workstream(w, workstream)
+        if (w.issue_number or is_directive_item(w)) and _item_in_workstream(w, workstream)
     ]
 
 
@@ -530,10 +533,6 @@ def refresh_issue_run(store, project: Project, run: IssueRun) -> IssueRun:
     return store.update(IssueRun, run.id, update) or run
 
 
-def issue_branch(number: int) -> str:
-    return f"hive/issue-{number}"
-
-
 def reconcile(
     store,
     project: Project,
@@ -553,9 +552,26 @@ def reconcile(
     a failed issue is a deliberate (human scan) act, not something a periodic
     tick should burn quota on forever."""
     workstream = workstream or ensure_issue_workstream(store, project)
-    by_number = {w.issue_number: w for w in _issue_workstreams(store, project, workstream)}
+    items = _issue_workstreams(store, project, workstream)
+    by_number = {w.issue_number: w for w in items if w.issue_number}
     open_numbers = {i["number"] for i in issues}
     notes: list[str] = []
+
+    # Directive-born items live outside the GitHub mirror: no external close,
+    # but a stalled one (errored mid-flight) is re-queued on a deliberate scan.
+    for item in items:
+        if not is_directive_item(item):
+            continue
+        if (
+            requeue_stalled
+            and item.status not in (IssueItemStatus.done, IssueItemStatus.queued, IssueItemStatus.cancelled)
+            and not _has_live_task(store, project, item.id)
+        ):
+            item.status = IssueItemStatus.queued
+            item.parked_reason = ""
+            store.put(item)
+            sync_directive_for_item(store, item)
+            notes.append(f"re-queued directive item '{item.title}' for another attempt")
 
     for issue in issues:
         ws = by_number.get(issue["number"])
@@ -599,25 +615,15 @@ def reconcile(
             IssueItemStatus.cancelled,
         ):
             continue
-        if ws.created_at > now_s() - GITHUB_LIST_LAG_GRACE_S:
-            # Just filed (e.g. by a directive): the eventually-consistent list
-            # API may not show it yet. Don't mistake lag for an external close.
-            continue
         if ws.status == IssueItemStatus.rejected and ws.parked_reason.startswith(LANDING_FAILED_PREFIX):
             ws.status = IssueItemStatus.done
             ws.parked_reason = ""
             store.put(ws)
-            sync_directives_for_issue(
-                store, project, number, DirectiveStatus.done, "landed; issue closed on GitHub"
-            )
             notes.append(f"marked #{number} done: issue closed on GitHub after landing retry")
             continue
         ws.status = IssueItemStatus.cancelled
         ws.parked_reason = "issue closed on GitHub"
         store.put(ws)
-        sync_directives_for_issue(
-            store, project, number, DirectiveStatus.cancelled, "issue closed on GitHub without landing"
-        )
         notes.append(f"cancelled #{number}: issue closed on GitHub")
 
     return notes
@@ -632,14 +638,23 @@ def _has_live_task(store, project: Project, workstream_id: str) -> bool:
 
 def _instructions(ws: IssueItem, prompt_name: str, context: str = "") -> tuple[str, dict]:
     prompt, version = load_prompt(prompt_name)
-    path = ISSUE_DIR.format(n=ws.issue_number)
-    branch = issue_branch(ws.issue_number)
-    header = (
-        f"GitHub issue #{ws.issue_number} ({ws.issue_url}).\n"
-        f"The full issue (title, body, comments) is in `{path}/ISSUE.md`; "
-        f"image attachments, if any, are in `{path}/attachments/`.\n"
-        f"You are on git branch `{branch}` (already checked out).\n"
-    )
+    branch = item_branch(ws)
+    if is_directive_item(ws):
+        header = (
+            "Operator directive (a direct ask through Hive — there is NO GitHub "
+            "issue for this work; where the instructions below mention commenting "
+            "on the issue, put that content in your final report instead).\n"
+            f"The ask:\n\n{ws.description.strip()}\n\n"
+            f"You are on git branch `{branch}` (already checked out).\n"
+        )
+    else:
+        path = ISSUE_DIR.format(n=ws.issue_number)
+        header = (
+            f"GitHub issue #{ws.issue_number} ({ws.issue_url}).\n"
+            f"The full issue (title, body, comments) is in `{path}/ISSUE.md`; "
+            f"image attachments, if any, are in `{path}/attachments/`.\n"
+            f"You are on git branch `{branch}` (already checked out).\n"
+        )
     extra = f"\n{context.strip()}\n" if context.strip() else ""
     return f"{header}{extra}\n{prompt}", {prompt_name: version}
 
@@ -668,7 +683,7 @@ def _make_issue_task(
             work_item_id=ws.id,
             run_id=run.id if run else "",
             repo=project.spec_repo,
-            branch=issue_branch(ws.issue_number),
+            branch=item_branch(ws),
             fresh_branch=kind == TaskKind.resolve,
             kind=kind,
             instructions=instructions,

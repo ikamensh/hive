@@ -63,26 +63,29 @@ A `Directive` is a persisted, human-authored ask to a project — the hero box o
 the launchpad. It is distinct from the iteration goal (standing strategy, one at
 a time) and from issues authored on GitHub (external origin).
 
-The brain is deliberately **not a new pipeline**: Hive files the ask as a
-GitHub issue on the project repo and hands it to the proven issue pipeline
-(resolve → review → merge, wiki/issue-solving.md) as a selected-scope run. The
-issue is the durable record of the ask; the directive tracks it to done.
+The brain is deliberately **not a new pipeline**: Hive seeds the ask straight
+into the proven resolve → review → merge pipeline as a front-of-queue work
+item (`IssueItem` with `external_ref.origin = "directive"`). No GitHub
+round-trip — GitHub is a source of work in, never hive's internal ledger; the
+first version filed a GitHub issue and re-ingested it, which bought an
+eventual-consistency race (the G19 grace hack) for nothing the store didn't
+already record.
 
-- Submitting a directive files the issue (provenance marker
-  `<!-- hive-directive id=… -->` in the body) and starts a selected-scope
-  issue run → status `working`, with the issue linked on the card.
-- Landing (merge + close by Hive) flips the directive to `done`; an issue
-  closed on GitHub without landing flips it to `cancelled`.
-- When filing is impossible (no repo, no token, preflight failure), the
-  directive stays `triaging` with the exact reason in `routing_note` — never a
-  silent dead end.
+- Submitting a directive seeds the work item ahead of any mirrored backlog
+  (a direct ask outranks ambient issues) and advances the pipeline → status
+  `working`, with the live pipeline state mirrored into `routing_note`.
+- Landing (merge into the default branch) flips the directive to `done`;
+  a blocked resolve or rejected review reads "needs you: …" on the card.
+- When seeding is impossible (no repo, workstream disabled), the directive
+  stays `triaging` with the exact reason in `routing_note` — never a silent
+  dead end.
 
 ```python
 class DirectiveStatus(StrEnum):
     triaging = "triaging"        # received; not yet handed over (see routing_note)
-    working = "working"          # filed as a GitHub issue; pipeline owns it
-    done = "done"                # landed: merged + closed by Hive
-    cancelled = "cancelled"      # issue closed externally without landing
+    working = "working"          # a pipeline work item owns it
+    done = "done"                # landed on the default branch
+    cancelled = "cancelled"      # the operator cancelled the work item
 
 class Directive(BaseModel):
     id; workspace_id; project_id

@@ -38,9 +38,8 @@ from hive._integrations.specrepo import SpecRepo
 from hive._workstreams.issues import (
     advance_issues,
     attachment_key,
-    create_issue,
     delete_branch,
-    directive_issue_content,
+    seed_directive_item,
     download_issue_attachments,
     ensure_issue_workstream,
     fetch_open_issues_full,
@@ -51,7 +50,6 @@ from hive._workstreams.issues import (
     refresh_issue_run,
     RESOLVE_BACKEND,
     resolve_issue_on_github,
-    seed_filed_issue,
 )
 from hive._workstreams import plans
 from hive._workstreams.ci import check_and_autofix
@@ -1587,11 +1585,11 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def create_directive(
         project_id: str, body: DirectiveCreate, ctx: AuthContext = Depends(editor)
     ):
-        """File the ask as a GitHub issue on the project repo and hand it to the
-        issue pipeline (resolve → review → merge), scoped to just that issue.
-        The issue is the durable record; the directive tracks it to done. When
-        filing fails (no token, no repo, preflight), the directive stays
-        `triaging` with the reason in routing_note — never a silent dead end."""
+        """Seed the ask straight into the resolve → review → merge pipeline as
+        a front-of-queue work item — no GitHub round-trip (GitHub is a source
+        of work in, never hive's ledger). When seeding fails (no repo, disabled
+        workstream), the directive stays `triaging` with the reason in
+        routing_note — never a silent dead end."""
         project = require_project(project_id, ctx)
         text = body.text.strip()
         if not text:
@@ -1604,37 +1602,15 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 raise RuntimeError("configure a repo for this project first")
             workstream = ensure_issue_workstream(store, project, repo=project.spec_repo)
             require_enabled_workstream(workstream)
-            title, issue_body = directive_issue_content(directive)
-            created = create_issue(workstream.repo, title, issue_body, config.gh_token)
-            directive.issue_number = created["number"]
-            directive.issue_url = created["html_url"]
-            # Seed the work item from what we just filed instead of re-fetching:
-            # the GitHub list API is eventually consistent and can miss the new
-            # issue for seconds (observed live on the first real directive).
-            seed_filed_issue(
-                store, project, workstream,
-                created["number"], created["html_url"], title, issue_body,
-            )
-            run = store.put(
-                IssueRun(
-                    workspace_id=ctx.workspace_id,
-                    project_id=project.id,
-                    workstream_id=workstream.id,
-                    repo=workstream.repo,
-                    scope=IssueRunScope.selected,
-                    issue_numbers=[created["number"]],
-                    status=IssueRunStatus.queued,
-                    started_at=time.time(),
-                )
-            )
+            item = seed_directive_item(store, project, workstream, directive)
+            directive.work_item_id = item.id
             queued = advance_issues(
-                store, project, workstream=workstream, run=run,
+                store, project, workstream=workstream,
                 backend=config.issue_backend, model=config.issue_model,
             )
             directive.status = DirectiveStatus.working
             directive.routing_note = (
-                f"filed issue #{created['number']}; "
-                + ("resolve task queued" if queued else "queued behind the issue in flight")
+                "agent started on it" if queued else "queued behind the work item in flight"
             )
         except HTTPException as exc:
             directive.routing_note = f"needs attention: {exc.detail}"

@@ -42,17 +42,17 @@ from hive._workstreams.issues import (
     create_landing_integration_task,
     create_review_task,
     delete_branch as default_delete_branch,
-    issue_branch,
+    item_branch,
     issue_is_closed as default_issue_is_closed,
     merge_branch as default_merge_branch,
     refresh_issue_run,
+    is_directive_item,
     resolve_issue_on_github as default_resolve_issue_on_github,
-    sync_directives_for_issue,
+    sync_directive_for_item,
 )
 from hive.models import (
     AgentConversation,
     ConversationStatus,
-    DirectiveStatus,
     Finding,
     FindingStatus,
     HumanTask,
@@ -191,7 +191,10 @@ def _set_ws_status(store, ws_id: str, status: IssueItemStatus, reason: str) -> I
         ws.status = status
         ws.parked_reason = reason
 
-    return store.update(IssueItem, ws_id, mutate)
+    item = store.update(IssueItem, ws_id, mutate)
+    if item is not None and is_directive_item(item):
+        sync_directive_for_item(store, item)
+    return item
 
 
 def cancel_issue_work(store, task: Task) -> None:
@@ -686,11 +689,17 @@ class TaskResultProcessor:
                 ws.parked_reason = ""
             else:
                 ws.status = IssueItemStatus.blocked_clarity
-                ws.parked_reason = "blocked at clarify step — see the GitHub issue comment"
+                ws.parked_reason = (
+                    f"blocked at clarify step — {body.text.strip()[:300]}"
+                    if is_directive_item(ws)
+                    else "blocked at clarify step — see the GitHub issue comment"
+                )
 
         ws = self.store.update(IssueItem, task.workstream_id, transition)
         if ws is None:
             return
+        if is_directive_item(ws):
+            sync_directive_for_item(self.store, ws)
         log.info(
             "resolve task %s (issue #%s) verdict=%s → workstream %s",
             task.id,
@@ -766,7 +775,7 @@ class TaskResultProcessor:
             )
             self._refresh_run(task)
             return
-        branch = issue_branch(ws.issue_number)
+        branch = item_branch(ws)
         log.info(
             "review task %s ACCEPTED issue #%s — merging %s and closing the issue",
             task.id,
@@ -774,13 +783,19 @@ class TaskResultProcessor:
             branch,
         )
         try:
-            self.merge_branch(task.repo, branch, self.config.gh_token, message=f"Resolve #{ws.issue_number} via Hive")
-            self.resolve_issue_on_github(
-                task.repo,
-                ws.issue_number,
-                comment=self._issue_resolution_comment(task, body.text, branch),
-                token=self.config.gh_token,
+            merge_message = (
+                f"Land operator ask '{ws.title[:60]}' via Hive"
+                if is_directive_item(ws)
+                else f"Resolve #{ws.issue_number} via Hive"
             )
+            self.merge_branch(task.repo, branch, self.config.gh_token, message=merge_message)
+            if not is_directive_item(ws):
+                self.resolve_issue_on_github(
+                    task.repo,
+                    ws.issue_number,
+                    comment=self._issue_resolution_comment(task, body.text, branch),
+                    token=self.config.gh_token,
+                )
         except Exception as exc:
             if _is_merge_conflict(exc):
                 project = self.store.get(Project, task.project_id)
@@ -828,15 +843,6 @@ class TaskResultProcessor:
         except Exception as exc:  # never fail a completed landing over branch cleanup
             log.info("issue #%s landed; leftover branch %s not deleted: %s", ws.issue_number, branch, exc)
         _set_ws_status(self.store, ws.id, IssueItemStatus.done, "")
-        project = self.store.get(Project, task.project_id)
-        if project:
-            sync_directives_for_issue(
-                self.store,
-                project,
-                ws.issue_number,
-                DirectiveStatus.done,
-                f"landed: issue #{ws.issue_number} merged and closed",
-            )
         self._refresh_run(task)
 
     # -- iteration-plan items (doc-fed pipeline, wiki/iteration-plan.md) -------
@@ -959,7 +965,7 @@ class TaskResultProcessor:
         return LANDING_INTEGRATION_PROMPT in task.prompt_versions
 
     def _escalate_landing_needs_human(self, task: Task, ws: IssueItem, report: str) -> None:
-        branch = issue_branch(ws.issue_number)
+        branch = item_branch(ws)
         _set_ws_status(
             self.store,
             ws.id,

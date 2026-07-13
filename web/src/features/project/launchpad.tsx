@@ -113,20 +113,7 @@ export function DirectivesList({ directives }: { directives: Directive[] }) {
             </span>
           </header>
           <div className="directive-routing">
-            {d.issue_url ? (
-              <>
-                <i className="ti ti-route" aria-hidden />
-                <a href={d.issue_url} target="_blank" rel="noreferrer">
-                  issue #{d.issue_number}
-                </a>
-                <span className="muted"> · {d.routing_note}</span>
-              </>
-            ) : (
-              <>
-                <i className="ti ti-clock" aria-hidden />
-                <span className="muted">{d.routing_note}</span>
-              </>
-            )}
+            <span className="muted">{d.routing_note}</span>
           </div>
         </article>
       ))}

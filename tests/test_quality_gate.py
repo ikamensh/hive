@@ -4,7 +4,9 @@ retries only through the human — there is no automatic fix loop left to cap.
 """
 
 from hive.models import (
+    Plan,
     PlanItemStatus,
+    PlanStatus,
     Project,
     Question,
     QuestionStatus,
@@ -93,3 +95,33 @@ def test_ask_user_requires_options_and_recommendation():
 
     assert "error:" in result
     assert store.list(Question) == []
+
+
+def test_propose_plan_refused_while_completed_plan_awaits_goal_verdict():
+    """Live-run regression: after the plan completed, the planner drafted a
+    self-invented next iteration instead of declaring the goal. The next
+    iteration is the human's verdict — propose_plan must refuse until
+    mark_goal_complete (or a human-set goal) resolves the completed plan."""
+    from hive._workstreams import plans
+
+    store = MemoryStore()
+    project = store.put(Project(name="p", spec_repo="https://example.com/r.git"))
+    plan = plans.create_draft(store, project, "ship v1", [{"title": "build it"}], proposed_by="agent")
+    plans.approve_all(store, plan)
+    plans.activate(store, project, plan)
+    (item,) = plans.plan_items(store, plan)
+    plans.set_item_status(store, item.id, PlanItemStatus.done, "")
+    plans.refresh_plan(store, store.get(Plan, plan.id))
+    assert store.get(Plan, plan.id).status == PlanStatus.complete
+
+    tools = Tools(store, store.get(Project, project.id), spec=None)
+    answer = tools.propose_plan("improve usability", '[{"title": "polish"}]')
+    assert "rejected" in answer and "mark_goal_complete" in answer
+
+    # After the goal verdict, planning for a human-set goal reopens.
+    project = store.get(Project, project.id)
+    project.goal_complete = True
+    store.put(project)
+    tools = Tools(store, project, spec=None)
+    answer = tools.propose_plan("next goal from the human", '[{"title": "next"}]')
+    assert "drafted" in answer

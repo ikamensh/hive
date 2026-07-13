@@ -345,8 +345,7 @@ export interface Directive {
   project_id: string;
   text: string;
   status: DirectiveStatus;
-  issue_number: number;
-  issue_url: string;
+  work_item_id: string;
   routing_note: string;
   created_at: number;
   updated_at: number;

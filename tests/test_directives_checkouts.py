@@ -46,26 +46,15 @@ def test_directive_without_repo_stays_triaging_with_reason():
     assert [d["id"] for d in payload["directives"]] == [body["id"]]
 
 
-def test_directive_files_issue_and_hands_to_pipeline(monkeypatch):
-    """The launchpad ask becomes a GitHub issue plus a selected-scope issue run
-    — the directive records the issue and reports the pipeline engaged."""
+def test_directive_seeds_internal_work_item_no_github(monkeypatch):
+    """The launchpad ask becomes a front-of-queue pipeline work item directly —
+    no GitHub issue is filed (GitHub is a source of work in, never the ledger),
+    and the resolve task starts with the ask inlined."""
+    from hive.models import IssueItem, Task
+
     store = MemoryStore()
     client = make_client(store)
     pid = make_project(client, spec_repo="https://github.com/o/r.git")
-
-    filed = {}
-
-    def fake_create_issue(repo, title, body, token):
-        filed["repo"], filed["title"], filed["body"] = repo, title, body
-        return {"number": 7, "html_url": "https://github.com/o/r/issues/7"}
-
-    monkeypatch.setattr("hive.api.create_issue", fake_create_issue)
-    monkeypatch.setattr("hive.api.preflight_checks", lambda store, config, project, repo=None: [])
-    monkeypatch.setattr(
-        "hive.api.fetch_open_issues_full",
-        lambda repo, token: [{"number": 7, "title": filed["title"], "doc": filed["body"],
-                              "url": "https://github.com/o/r/issues/7", "attachments": []}],
-    )
 
     body = client.post(
         f"/api/projects/{pid}/directives",
@@ -73,11 +62,15 @@ def test_directive_files_issue_and_hands_to_pipeline(monkeypatch):
     ).json()
 
     assert body["status"] == "working"
-    assert body["issue_number"] == 7
-    assert body["issue_url"].endswith("/issues/7")
-    assert filed["title"] == "Upgrade deps"
-    assert "hive-directive id=" in filed["body"]
-    assert "resolve task queued" in body["routing_note"]
+    assert "agent started" in body["routing_note"]
+    (item,) = store.list(IssueItem, project_id=pid)
+    assert body["work_item_id"] == item.id
+    assert item.external_ref["origin"] == "directive"
+    assert item.issue_number == 0 and item.status == "resolving"
+    (task,) = store.list(Task, project_id=pid)
+    assert task.branch == f"hive/ask-{item.id[:8]}"
+    assert "Upgrade deps" in task.instructions
+    assert "NO GitHub issue" in task.instructions
 
 
 def test_empty_directive_rejected():
@@ -140,17 +133,6 @@ def test_cli_ask_files_directive(monkeypatch):
     store = MemoryStore()
     client = make_client(store)
     pid = make_project(client, spec_repo="https://github.com/o/r.git")
-    monkeypatch.setattr(
-        "hive.api.create_issue",
-        lambda repo, title, body, token: {"number": 5, "html_url": "https://github.com/o/r/issues/5"},
-    )
-    monkeypatch.setattr("hive.api.preflight_checks", lambda store, config, project, repo=None: [])
-    monkeypatch.setattr(
-        "hive.api.fetch_open_issues_full",
-        lambda repo, token: [{"number": 5, "title": "Add a doctor command", "doc": "…",
-                              "url": "https://github.com/o/r/issues/5", "attachments": []}],
-    )
-
     out = run(build_parser().parse_args(["ask", pid, "Add a doctor command"]), client)
 
-    assert out["status"] == "working" and out["issue_number"] == 5
+    assert out["status"] == "working" and out["work_item_id"]

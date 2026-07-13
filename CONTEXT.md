@@ -71,5 +71,5 @@ The operator's word for a unit of work you launch from a project's [[Launchpad]]
 _Avoid_: task (the persisted execution unit), run (only the bounded-batch forms are runs)
 
 **Directive**:
-A persisted, human-authored ask to a project — the "just tell Hive what you want" entry on the [[Launchpad]]. Hive triages it, assigns an executor (backend/model) and a [[Machine]], may seed work items, and tracks it to done. Distinct from the iteration goal (the project's standing strategic objective, one at a time) and from a GitHub issue (an external source): a directive is the user's own direct request. Reserve "task" for runner execution plumbing.
+A persisted, human-authored ask to a project — the "just tell Hive what you want" entry on the [[Launchpad]]. Hive seeds it straight into the resolve→review→merge pipeline as a front-of-queue work item (no GitHub round-trip) and tracks it to done. Distinct from the iteration goal (the project's standing strategic objective, one at a time) and from a GitHub issue (an external source): a directive is the user's own direct request. Reserve "task" for runner execution plumbing.
 _Avoid_: task, goal, request, job (a directive is one kind of job, not the umbrella)

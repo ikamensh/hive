@@ -112,6 +112,17 @@ class Tools:
         items = self._parse_items(items_json)
         if isinstance(items, str):
             return items
+        # A completed plan awaits the human's goal verdict — the next iteration
+        # is theirs to set. Inventing one here is scope creep, not planning
+        # (observed live: the planner drafted 'improve usability' instead of
+        # declaring the built iteration done).
+        latest = plans.latest_plan(self.store, self.project)
+        if latest is not None and latest.status == PlanStatus.complete and not self.project.goal_complete:
+            return (
+                "rejected: the completed plan awaits the goal verdict. Call "
+                "mark_goal_complete with the Try-it evidence, or ask_user if the "
+                "iteration goal is genuinely not met. The human sets the next iteration."
+            )
         try:
             plan = plans.create_draft(self.store, self.project, goal, items, proposed_by="agent")
         except ValueError as exc:
