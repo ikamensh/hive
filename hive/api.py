@@ -1855,17 +1855,20 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         store.put(machine)
         # Re-point this machine's open todos so they land in the right inbox
         # immediately, not on the next escalation tick.
-        for runner in store.list(Runner, workspace_id=ctx.workspace_id):
-            if runner.machine_id != machine_id:
-                continue
-            for todo in store.list(HumanTask, workspace_id=ctx.workspace_id):
-                if (
-                    todo.status == HumanTaskStatus.open
-                    and todo.title.endswith(f" login on {runner.name}")
-                    and todo.assignee_user_id != new_owner
-                ):
-                    todo.assignee_user_id = new_owner
-                    store.put(todo)
+        # Login todos may name the machine (current) or a runner (older rows).
+        box_names = {machine.name} | {
+            r.name
+            for r in store.list(Runner, workspace_id=ctx.workspace_id)
+            if r.machine_id == machine_id
+        }
+        for todo in store.list(HumanTask, workspace_id=ctx.workspace_id):
+            if (
+                todo.status == HumanTaskStatus.open
+                and any(todo.title.endswith(f" login on {name}") for name in box_names)
+                and todo.assignee_user_id != new_owner
+            ):
+                todo.assignee_user_id = new_owner
+                store.put(todo)
         for todo in store.list(HumanTask, workspace_id=ctx.workspace_id):
             if (
                 todo.status == HumanTaskStatus.open
