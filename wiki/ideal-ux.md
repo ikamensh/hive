@@ -164,6 +164,10 @@ Numbered for reference from commits/fixes. Status: `open` | `fixing` | `done`.
 | G30 | Directive round-trip through GitHub: filing + eventually-consistent re-ingest (the G19 grace) for work the store already recorded | C | med | done — `hive ask` seeds a front-of-queue internal work item; proven live with zero issues on the repo |
 | G31 | Plan granularity ignores scope: 6 items (= 12 agent sessions) drafted for a ~100-line CLI | A | med | done — prompt scales items to the goal (small iteration = 1–3); approve note counts only truly queued items |
 | G32 | Glance-formatter gaps: `hive plan` and `hive stories` still print raw JSON; plan verbs mix project-ids and item-ids with argparse walls on a wrong guess | all | low | open |
+| G33 | Silent verdict pend: heartbeat wakes covered only working-state projects, so a quiet project whose completed plan never got its goal verdict slept forever (observed after test tasks drained) | A | high | done — idle + completed non-abandoned plan + no verdict → heartbeat wake routing the planner to mark_goal_complete |
+| G34 | "One number for money" lied under a router: vendor-prefixed model ids (openai/gpt-5.1 via OpenRouter) priced at $0 while the planner burned 230k tokens | all | med | done — ids price by the part after the slash |
+| G35 | Backlog inflation is a pattern, not one bug: 6 plan items and 8 acceptance stories (incl. a readme-workflows story) for a 4-command CLI; each unit fans out agent sessions | A | med | done — both the planner and the acceptance-refresh prompts carry an explicit scale-to-scope rule; watch the next greenfield run |
+
 
 **Validation run 2 (2026-07-13, lab-tally, archetype A on the new UX).** One
 `hive new --spec` + one brief approval + one plan approval produced a working,
