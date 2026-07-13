@@ -67,8 +67,10 @@ from hive.models import (
     ProjectWorkstream,
     Resource,
     ResourceUsability,
+    Machine,
     Runner,
     Story,
+    Subscription,
     StoryFidelity,
     StoryStatus,
     Task,
@@ -495,7 +497,34 @@ class TaskResultProcessor:
             and not body.resource_exhausted
             and HUMAN_FIX_PATTERNS.search(body.text)
         ):
+            # A failed probe of a backend nobody asked for is fleet telemetry,
+            # not an operator todo — day one of a fresh install must not open
+            # with "fix cursor login" for a CLI the user never wanted. The
+            # failure stays visible as the resource's reason (`hive show
+            # agents`); real tasks hitting auth blocks always escalate.
+            if not self._backend_wanted(task.backend, workspace_id):
+                log.info(
+                    "probe of %s failed but no subscription/grant/pending work wants it; "
+                    "not filing a todo", task.backend,
+                )
+                return
             self._escalate_backend_login(task, body.text, workspace_id)
+
+    def _backend_wanted(self, backend: str, workspace_id: str) -> bool:
+        """Is any operator intent attached to this backend? A subscription row,
+        a project grant naming it, or pending work targeting it."""
+        if any(
+            s.provider == backend
+            for s in self.store.list(Subscription, workspace_id=workspace_id)
+        ):
+            return True
+        for project in self.store.list(Project, workspace_id=workspace_id):
+            if any(backend in g.backends for g in project.agent_grants):
+                return True
+        return any(
+            t.status == TaskStatus.pending and t.backend == backend and t.kind != TaskKind.probe
+            for t in self.store.list(Task, workspace_id=workspace_id)
+        )
 
     def _escalate_backend_login(self, task: Task, text: str, workspace_id: str) -> None:
         """File (idempotently) the operator todo to repair a backend's broken
@@ -504,13 +533,16 @@ class TaskResultProcessor:
         Filed from both the probe path and any real task that hits an auth block."""
         runner = self.store.get(Runner, task.runner_id)
         runner_name = runner.name if runner else task.runner_id
+        machine = self.store.get(Machine, runner.machine_id) if runner and runner.machine_id else None
+        # One name per box: the human knows the machine, not the runner process.
+        box = machine.name if machine else runner_name
         hint = REGISTRY.get(task.backend).login_hint if task.backend in REGISTRY else ""
         escalate(
             self.store,
-            f"Fix {task.backend} login on {runner_name}",
+            f"Fix {task.backend} login on {box}",
             instructions=(
-                f"Refresh or repair the `{task.backend}` CLI login on runner "
-                f"`{runner_name}`, then rerun the resource probe."
+                f"Refresh or repair the `{task.backend}` CLI login on machine "
+                f"`{box}`, then rerun the resource probe."
                 f"{chr(10) + chr(10) + hint if hint else ''}\n\n"
                 f"Recent output:\n\n```\n{text[:1500]}\n```"
             ),

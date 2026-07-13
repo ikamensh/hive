@@ -798,6 +798,7 @@ def test_resource_probe_marks_usable_and_failed(harness):
     assert resource.usability_status == "usable"
     assert resource.available()
 
+    # A failed probe of a backend nobody wants is telemetry, not a todo.
     queued = client.post(f"/api/resources/{resource.id}/probe").json()
     task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
     client.post(
@@ -808,6 +809,19 @@ def test_resource_probe_marks_usable_and_failed(harness):
     resource = store.get(Resource, resource.id)
     assert resource.usability_status == "failed"
     assert not resource.available()
+    assert store.list(HumanTask) == []
+
+    # With a subscription row (operator intent), the same failure files the fix.
+    from hive.models import Subscription
+
+    store.put(Subscription(provider="cursor", plan="Pro"))
+    queued = client.post(f"/api/resources/{resource.id}/probe").json()
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    client.post(
+        f"/api/tasks/{task['id']}/result",
+        json={"text": "codex login required", "is_error": True},
+        headers=RUNNER_HEADERS,
+    )
     assert store.list(HumanTask)[0].title == "Fix cursor login on probe-runner"
 
     queued = client.post(f"/api/resources/{resource.id}/probe").json()
