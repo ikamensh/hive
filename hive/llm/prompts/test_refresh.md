@@ -4,8 +4,11 @@ Read only intention artifacts: `mission.md`, `iteration.md`, `wiki/`, and `input
 Do not edit product code.
 Do not scan source files, tests, build output, dependencies, or git history to invent stories.
 
-If `acceptance/` is empty or missing, create a bounded first backlog of 5-8 core
-user-facing stories. Prefer the stories most central to the current iteration and
+If `acceptance/` is empty or missing, create a bounded first backlog scaled to the
+product: a small CLI or single-feature product earns 3-5 stories, 5-8 only for
+genuinely multi-surface products. Every story costs sweep/repro agent sessions —
+never pad with meta-stories (documentation workflows, style preferences).
+Prefer the stories most central to the current iteration and
 most likely to catch real operator pain. Do not try to enumerate every possible
 feature in one refresh.
 

@@ -305,6 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("stories", help="testing coverage: stories x status, plus Hive's standing offer")
     p.add_argument("project_id")
+    p.add_argument("--json", action="store_true", help="raw payload instead of the readable summary")
 
     p = sub.add_parser("testability", help="testability contract: state, decisions needing you, Hive's offer")
     p.add_argument("project_id")
@@ -333,6 +334,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("plan", help="show the project's iteration plan (items + statuses)")
     p.add_argument("project_id")
+    p.add_argument("--json", action="store_true", help="raw payload instead of the readable summary")
 
     p = sub.add_parser("plan-propose", help="ask the planner to draft an iteration plan")
     p.add_argument("project_id")
@@ -824,6 +826,53 @@ def format_inbox(payload: dict) -> str:
         lines += ["", "HIVE OFFERS — things Hive does itself once allowed:"]
         for o in offers:
             lines.append(f"  [{o.get('project_name', '')}] {o.get('summary', '')} {o.get('offer', '')}".rstrip())
+    return "\n".join(lines)
+
+
+STORY_GLYPHS = {
+    "passing": "✓",
+    "failing": "✗",
+    "blocked": "⚠",
+    "untested": "○",
+    "stale": "~",
+}
+
+
+def format_plan(payload: dict) -> str:
+    """Readable plan rail: goal, then one glyphed line per item."""
+    if "note" in payload:
+        return payload["note"]
+    head = payload.get("plan") or {}
+    lines = [f"PLAN [{head.get('status', '?')}] {head.get('goal', '')[:140]}"]
+    for item in payload.get("items", []):
+        glyph = PLAN_GLYPHS.get(item["status"], "·")
+        line = f"  {glyph} {item['title'][:110]}  ({item['id']})"
+        if item.get("parked_reason"):
+            line += f"\n      {item['parked_reason'][:140]}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def format_stories(report: dict) -> str:
+    """Readable coverage view: per testing workstream the health verdict and
+    one glyphed row per story."""
+    streams = report.get("testing", [])
+    if not streams:
+        return "no testing workstream yet — set a spec repo first"
+    lines = []
+    for stream in streams:
+        health = stream.get("health", {})
+        lines.append(f"{stream.get('repo', '')}  [{health.get('state', '?')}]")
+        if health.get("summary"):
+            lines.append(f"  {health['summary']}")
+        if health.get("offer"):
+            lines.append(f"  offer: {health['offer']}")
+        for story in stream.get("stories", []):
+            glyph = STORY_GLYPHS.get(story.get("status", ""), "·")
+            lines.append(f"  {glyph} {story.get('key', '')}  [{story.get('status', '')}]")
+        episode = stream.get("latest_episode")
+        if episode:
+            lines.append(f"  latest episode: {episode['id']} [{episode['status']}]")
     return "\n".join(lines)
 
 
@@ -1730,6 +1779,10 @@ def main(argv: list[str] | None = None) -> None:
                 print(format_project(payload))
             elif args.command == "inbox" and not args.json:
                 print(format_inbox(payload))
+            elif args.command == "plan" and not args.json:
+                print(format_plan(payload))
+            elif args.command == "stories" and not args.json:
+                print(format_stories(payload))
             else:
                 print(json.dumps(payload, indent=2))
             return
