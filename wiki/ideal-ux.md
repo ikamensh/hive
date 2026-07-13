@@ -158,6 +158,20 @@ Numbered for reference from commits/fixes. Status: `open` | `fixing` | `done`.
 
 (Gaps found during the validation projects get appended here.)
 
+| G27 | Day-one inbox noise: fresh install filed org-wide "Fix cursor/gemini-cli login" todos from auto-probes of backends nobody asked for; gemini's failure was account tier, so "login" misdiagnosed the fix | all | med | done — probe failures file todos only when operator intent exists (subscription / grant / pending work); otherwise the reason stays on the agent in `hive show agents` |
+| G28 | Two names for one box: agents said "@ lab-mac" (machine), todos said "on raven" (runner process) | all | low | done — login todos name the machine |
+| G29 | Planner completion aversion: plan completed → planner drafted a self-invented next iteration (twice; the second hid behind an abandoned draft) instead of mark_goal_complete; the user never saw a completion note or Try-it line | A | high | done — prompt routes plan completion to the goal verdict; propose_plan code-guarded (ignores abandoned drafts) until the verdict lands |
+| G30 | Directive round-trip through GitHub: filing + eventually-consistent re-ingest (the G19 grace) for work the store already recorded | C | med | done — `hive ask` seeds a front-of-queue internal work item; proven live with zero issues on the repo |
+| G31 | Plan granularity ignores scope: 6 items (= 12 agent sessions) drafted for a ~100-line CLI | A | med | done — prompt scales items to the goal (small iteration = 1–3); approve note counts only truly queued items |
+| G32 | Glance-formatter gaps: `hive plan` and `hive stories` still print raw JSON; plan verbs mix project-ids and item-ids with argparse walls on a wrong guess | all | low | open |
+
+**Validation run 2 (2026-07-13, lab-tally, archetype A on the new UX).** One
+`hive new --spec` + one brief approval + one plan approval produced a working,
+tested CLI (fresh clone: `python3 tally.py add/done/report/streak`, 15 tests
+green) with zero manual repo/planning steps; a live `hive ask` landed a feature
+through the internal pipeline with no GitHub issue. G27–G32 above are the
+run's friction harvest.
+
 **Simplification pass (2026-07-13).** Ten UX/logic cuts landed in one sweep:
 dead knobs deleted (mode, guess dial, prod-deploys); the dead pre-plans build
 path removed and `Workstream` renamed to what it is (`IssueItem`); every state
