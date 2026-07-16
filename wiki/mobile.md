@@ -3,7 +3,14 @@
 How hive works on software that cannot run on a generic cloud VM — mobile
 apps being the first case. Design decided 2026-07-15; the android pack,
 project-level `required_capabilities`, and runner-VM provisioning
-(`deploy/create_runner_vm.sh --packs android`) landed 2026-07-16.
+(`deploy/create_runner_vm.sh --packs android`) landed 2026-07-16 and were
+battle-proven the same day: hive took the greenfield `droid-tally` spec
+through intake → plan → three landed items on the `hive-droid` VM
+(PLAY2-MICRO + android pack, gemini-3.5-flash agents) — a working Kotlin
+XML-Views counter app with SharedPreferences persistence, 9 JVM/Robolectric
+tests green and an APK built from a fresh clone, with every task having run
+on that VM and none anywhere else. Operational lessons: `wiki/runbooks.md`
+("Adding a capability VM to the fleet").
 
 ## The general primitive: environment packs
 

@@ -748,60 +748,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         ctx: AuthContext = Depends(editor),
     ):
         project = require_project(project_id, ctx)
-        if not project.spec_repo.strip():
-            raise HTTPException(400, "spec_repo must be set before intake")
-        prefer_backend = body.backend.strip()
-        if project.intake_conversation_id:
-            existing = store.get(AgentConversation, project.intake_conversation_id)
-            # An active conversation already owns intake — return it. A failed or
-            # done one is a fresh start: mint a new conversation below (the retry
-            # path the UI uses to recover from a blocked scout).
-            if existing and existing.status in (
-                ConversationStatus.open,
-                ConversationStatus.running,
-                ConversationStatus.finalizing,
-            ):
-                live_turns = [
-                    t
-                    for t in store.list(
-                        Task,
-                        workspace_id=ctx.workspace_id,
-                        kind=TaskKind.intake,
-                        conversation_id=existing.id,
-                    )
-                    if t.status in (TaskStatus.pending, TaskStatus.running)
-                ]
-                if existing.status != ConversationStatus.open and not live_turns:
-                    # Claims to be working but no turn is live: the turn died
-                    # without reporting. Treat as failed — mint a fresh scout.
-                    store.update(
-                        AgentConversation,
-                        existing.id,
-                        lambda c: setattr(c, "status", ConversationStatus.failed),
-                    )
-                elif (
-                    existing.status == ConversationStatus.open
-                    and not live_turns
-                    and prefer_backend
-                    and prefer_backend != existing.backend
-                ):
-                    # Deliberate re-pin of an idle scout (e.g. the picked
-                    # backend turned out unusable on every capable machine).
-                    backend, model, _ = intake.trusted_capacity(
-                        store, ctx.workspace_id, prefer_backend, grants=project.agent_grants
-                    )
-
-                    def repin(conversation: AgentConversation) -> None:
-                        conversation.backend = backend
-                        conversation.model = model
-                        conversation.session_handle = ""
-
-                    return store.update(AgentConversation, existing.id, repin).model_dump()
-                else:
-                    return existing.model_dump()
-        conversation = intake.create_conversation(store, project, prefer_backend)
-        intake.queue_turn(store, project, conversation, "initial")
-        return store.get(AgentConversation, conversation.id).model_dump()
+        return intake.start(store, project, body.backend.strip()).model_dump()
 
     @app.post("/api/projects/{project_id}/intake/finalize")
     def finalize_intake(project_id: str, ctx: AuthContext = Depends(editor)):

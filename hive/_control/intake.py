@@ -147,6 +147,63 @@ def create_conversation(store, project: Project, prefer_backend: str = "") -> Ag
     return conversation
 
 
+def start(store, project: Project, prefer_backend: str = "") -> AgentConversation:
+    """(Re)start intake and return its conversation.
+
+    An active conversation owns intake — returned unchanged, except: one that
+    claims `running`/`finalizing` with no live turn is stale (its task died
+    without reporting) and is failed so a fresh scout can mint, and an idle
+    `open` one accepts a deliberate backend re-pin (the recovery when the
+    picked backend turns out to have no capable machine). A failed or done
+    conversation is a fresh start."""
+    if not project.spec_repo.strip():
+        raise HTTPException(400, "spec_repo must be set before intake")
+    if project.intake_conversation_id:
+        existing = store.get(AgentConversation, project.intake_conversation_id)
+        if existing and existing.status in (
+            ConversationStatus.open,
+            ConversationStatus.running,
+            ConversationStatus.finalizing,
+        ):
+            live_turns = [
+                t
+                for t in store.list(
+                    Task,
+                    workspace_id=project.workspace_id,
+                    kind=TaskKind.intake,
+                    conversation_id=existing.id,
+                )
+                if t.status in (TaskStatus.pending, TaskStatus.running)
+            ]
+            if existing.status != ConversationStatus.open and not live_turns:
+                store.update(
+                    AgentConversation,
+                    existing.id,
+                    lambda c: setattr(c, "status", ConversationStatus.failed),
+                )
+            elif (
+                existing.status == ConversationStatus.open
+                and not live_turns
+                and prefer_backend
+                and prefer_backend != existing.backend
+            ):
+                backend, model, _ = trusted_capacity(
+                    store, project.workspace_id, prefer_backend, grants=project.agent_grants
+                )
+
+                def repin(conversation: AgentConversation) -> None:
+                    conversation.backend = backend
+                    conversation.model = model
+                    conversation.session_handle = ""
+
+                return store.update(AgentConversation, existing.id, repin)
+            else:
+                return existing
+    conversation = create_conversation(store, project, prefer_backend)
+    queue_turn(store, project, conversation, "initial")
+    return store.get(AgentConversation, conversation.id)
+
+
 def accept(
     store,
     supervisor,
