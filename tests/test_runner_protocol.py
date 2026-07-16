@@ -195,6 +195,23 @@ def test_boot_auto_probes_stale_claude_and_codex_states_after_healthy_discovery(
     assert len(store.list(Task)) == 2
 
 
+def test_register_mirrors_capabilities_onto_resources():
+    """The runner's advertised machine environments (docker/android/...) land
+    verbatim on each backend resource — that list is what capability-gated
+    dispatch reads, so a re-register with fewer capabilities must shrink it."""
+    store = MemoryStore()
+    client = make_client(store)
+    body = {"name": "r", "backends": ["codex"], "capabilities": ["docker", "android"]}
+    client.post("/api/runners/register", json=body, headers=H)
+    (resource,) = store.list(Resource, backend="codex")
+    assert resource.capabilities == ["android", "docker"]
+
+    body["capabilities"] = ["docker"]
+    client.post("/api/runners/register", json=body, headers=H)
+    (resource,) = store.list(Resource, backend="codex")
+    assert resource.capabilities == ["docker"]
+
+
 def test_register_records_machine_metadata():
     store = MemoryStore()
     client = make_client(store)

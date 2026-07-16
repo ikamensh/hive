@@ -140,6 +140,9 @@ class Project(BaseModel):
     # usage (subscription CLIs report ~zero cost), so sessions/day is the cap
     # that actually meters it. Empty = anything allowed.
     agent_grants: list[AgentGrant] = []
+    # Machine environments every task of this project needs (e.g. ["android"]):
+    # dispatch only sends the project's work to runners advertising them all.
+    required_capabilities: list[str] = []
     goal_complete: bool = False
     goal_complete_note: str = ""
     intake_conversation_id: str = ""
@@ -594,12 +597,10 @@ class Resource(BaseModel):
     last_probe_at: float = 0.0
     last_probe_task_id: str = ""
     last_probe_text: str = ""
-    browser_status: ResourceUsability = ResourceUsability.unknown
-    browser_probe_at: float = 0.0
-    browser_probe_text: str = ""
-    docker_status: ResourceUsability = ResourceUsability.unknown
-    docker_probe_at: float = 0.0
-    docker_probe_text: str = ""
+    # Machine environments the runner advertised alongside this backend —
+    # open vocabulary ("browser", "docker", "android", ...). The runner
+    # re-detects on every heartbeat, so this reflects the machine now.
+    capabilities: list[str] = []
     cooldown_until: float = 0.0  # epoch; >now means exhausted
     last_exhaustion_at: float = 0.0
     last_exhaustion_text: str = ""  # runner-reported quota/rate-limit message
@@ -623,12 +624,7 @@ class Resource(BaseModel):
         )
 
     def supports(self, capabilities: list[str]) -> bool:
-        for capability in capabilities:
-            if capability == "browser" and self.browser_status != ResourceUsability.usable:
-                return False
-            if capability == "docker" and self.docker_status != ResourceUsability.usable:
-                return False
-        return True
+        return set(capabilities) <= set(self.capabilities)
 
     def mark_exhausted(self, *, until: float, at: float, text: str, task_id: str) -> None:
         self.cooldown_until = until

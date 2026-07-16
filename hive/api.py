@@ -190,6 +190,7 @@ class ProjectPatch(BaseModel):
     daily_budget_usd: float | None = None
     agent_grants: list[AgentGrant] | None = None  # [] clears (back to unlimited)
     member_repos: list[str] | None = None
+    required_capabilities: list[str] | None = None  # [] clears (any machine)
     new_iteration_note: str | None = None  # set when starting the next iteration
 
 

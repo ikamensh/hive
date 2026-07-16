@@ -56,13 +56,16 @@ LEASE_TTL_S = 60.0  # renewed every tick (15s); a dead leader is superseded with
 PARALLEL_REPO_TASKS = (TaskKind.test_sweep, TaskKind.test_reproduce, TaskKind.test_judge)
 
 
-def _capacity_key(backend: str, capabilities: list[str]) -> str:
-    caps = ",".join(sorted(capabilities))
-    return f"{backend}|{caps}" if caps else backend
+def effective_capabilities(task: Task, project: Project) -> list[str]:
+    """What the machine running this task must offer: the task's own needs
+    plus the project-wide environment (e.g. ["android"] for a mobile app)."""
+    return sorted(set(task.required_capabilities) | set(project.required_capabilities))
 
 
-def _task_capacity_key(task: Task) -> str:
-    return _capacity_key(task.backend, task.required_capabilities)
+def has_capacity(
+    capacity: dict[str, list[frozenset[str]]], backend: str, capabilities: list[str]
+) -> bool:
+    return any(set(capabilities) <= offered for offered in capacity.get(backend, []))
 
 
 def _serializes_repo(task: Task) -> bool:
@@ -76,7 +79,7 @@ def compute_state(
     tasks: list[Task],
     available_backends: set[str],
     over_budget: bool = False,
-    available_capacity: set[str] | None = None,
+    available_capacity: dict[str, list[frozenset[str]]] | None = None,
     grant_blocked: set[str] | None = None,
     plan_status: PlanStatus | None = None,
     plan_items: list[PlanItem] | None = None,
@@ -88,12 +91,22 @@ def compute_state(
     if pending:
         if over_budget:
             return ProjectState.blocked_budget
-        capacity = available_capacity if available_capacity is not None else available_backends
+        # Capability-blind fallback: callers without capacity detail (tests)
+        # get plain backend matching for capability-free tasks.
+        capacity = (
+            available_capacity
+            if available_capacity is not None
+            else {b: [frozenset()] for b in available_backends}
+        )
         blocked = grant_blocked or set()
         # Backend-aware: a pending task only counts as progressable if some
         # online runner offers its backend with available quota. Otherwise the
         # project is genuinely stuck on resources, not silently "working".
-        with_capacity = [t for t in pending if _task_capacity_key(t) in capacity]
+        with_capacity = [
+            t
+            for t in pending
+            if has_capacity(capacity, t.backend, effective_capabilities(t, project))
+        ]
         if any(t.id not in blocked for t in with_capacity):
             return ProjectState.working
         if with_capacity:
@@ -315,21 +328,16 @@ class Supervisor:
             if res.available() and res.runner_id in online
         }
 
-    def available_capacity(self) -> set[str]:
-        """Backend+capability combinations an online runner can execute."""
+    def available_capacity(self) -> dict[str, list[frozenset[str]]]:
+        """Per backend, the capability sets online usable runners offer."""
         online = {
             r.id for r in self.store.list(Runner, workspace_id=self.workspace_id) if r.online()
         }
-        capacity: set[str] = set()
+        capacity: dict[str, list[frozenset[str]]] = {}
         for res in self.store.list(Resource, workspace_id=self.workspace_id):
             if not res.available() or res.runner_id not in online:
                 continue
-            capacity.add(_capacity_key(res.backend, []))
-            for capability in ("browser", "docker"):
-                if res.supports([capability]):
-                    capacity.add(_capacity_key(res.backend, [capability]))
-            if res.supports(["browser", "docker"]):
-                capacity.add(_capacity_key(res.backend, ["browser", "docker"]))
+            capacity.setdefault(res.backend, []).append(frozenset(res.capabilities))
         return capacity
 
     def spend_today(self, project_id: str) -> float:
@@ -429,24 +437,24 @@ class Supervisor:
             ),
         )
         if state == ProjectState.blocked_resources:
-            self._file_testing_capability_blocker(project, tasks, available_capacity)
+            self._file_capability_blocker(project, tasks, available_capacity)
         if state != project.state:
             project.state = state
             self.store.put(project)
         return state
 
-    def _file_testing_capability_blocker(
+    def _file_capability_blocker(
         self,
         project: Project,
         tasks: list[Task],
-        available_capacity: set[str],
+        available_capacity: dict[str, list[frozenset[str]]],
     ) -> None:
         blocked = [
-            task
+            (task, caps)
             for task in tasks
             if task.status == TaskStatus.pending
-            and task.required_capabilities
-            and _task_capacity_key(task) not in available_capacity
+            and (caps := effective_capabilities(task, project))
+            and not has_capacity(available_capacity, task.backend, caps)
         ]
         if not blocked:
             return
@@ -455,17 +463,24 @@ class Supervisor:
                 task.kind,
                 task.id,
                 task.backend,
-                ", ".join(f"`{cap}`" for cap in sorted(task.required_capabilities)),
+                ", ".join(f"`{cap}`" for cap in caps),
             )
-            for task in blocked[:10]
+            for task, caps in blocked[:10]
         )
-        available = ", ".join(f"`{item}`" for item in sorted(available_capacity)) or "(none)"
+        available = (
+            ", ".join(
+                f"`{backend}[{','.join(sorted(offered)) or '-'}]`"
+                for backend, sets in sorted(available_capacity.items())
+                for offered in sets
+            )
+            or "(none)"
+        )
         escalate(
             self.store,
-            f"Enable testing capabilities for {project.name}",
+            f"Enable required capabilities for {project.name}",
             instructions=(
-                "Hive has testing tasks ready, but no online usable runner currently offers "
-                "the required browser/Docker capability bundle.\n\n"
+                "Hive has tasks ready, but no online usable runner currently offers "
+                "the required capability bundle (browser/docker/android/...).\n\n"
                 f"Blocked task(s):\n{needs}\n\n"
                 f"Available capacity right now: {available}\n\n"
                 "Install and probe the missing runner capability, or run a capable runner. "
@@ -584,6 +599,7 @@ class Supervisor:
                 and not allowances.admits(grants, grant_left, task.backend, task.model)
             ):
                 continue  # session allowance spent for this pair; waits for UTC midnight
+            required = effective_capabilities(task, project)
             for runner in runners:
                 if runner.id in busy_runners:
                     continue
@@ -591,7 +607,7 @@ class Supervisor:
                 if (
                     task.backend in runner.backends
                     and resource is not None
-                    and resource.supports(task.required_capabilities)
+                    and resource.supports(required)
                 ):
                     if self._claim(task.id, runner):
                         busy_runners.add(runner.id)

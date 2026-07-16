@@ -269,6 +269,51 @@ def test_dispatch_requires_backend_and_resource():
     assert sup.dispatch(project) == 1
 
 
+def test_project_required_capabilities_gate_dispatch():
+    """A project bound to a machine environment (e.g. an Android app needing
+    the SDK) must never land on a machine without it — for any task kind, not
+    just testing. Two runners with the same usable backend, only one
+    advertising `android`: the plain work task waits until the capable runner
+    exists, then goes there and only there."""
+    store = MemoryStore()
+    project = store.put(
+        Project(name="p", spec_repo="x", required_capabilities=["android"])
+    )
+    plain = store.put(Runner(name="plain", backends=["claude"]))
+    store.put(Resource(runner_id=plain.id, backend="claude",
+                       usability_status=ResourceUsability.usable))
+    ws = store.put(IssueItem(project_id=project.id, title="w"))
+    store.put(Task(project_id=project.id, workstream_id=ws.id, repo="r",
+                   instructions="i", backend="claude"))
+    sup = make_supervisor(store)
+    assert sup.dispatch(project) == 0  # backend fits, environment missing
+    assert sup.refresh_state(project) == ProjectState.blocked_resources
+    todos = store.list(HumanTask, project_id=project.id)
+    assert todos and "`android`" in todos[0].instructions
+
+    droid = store.put(Runner(name="droid", backends=["claude"]))
+    store.put(Resource(runner_id=droid.id, backend="claude",
+                       usability_status=ResourceUsability.usable,
+                       capabilities=["android", "docker"]))
+    assert sup.dispatch(project) == 1
+    task = store.list(Task, project_id=project.id)[0]
+    assert task.runner_id == droid.id
+
+
+def test_resource_supports_is_subset_semantics():
+    """`supports` must hold for every subset of what the machine offers and
+    fail on anything outside it — the invariant dispatch and capacity math
+    both lean on (open capability vocabulary, no hardcoded names)."""
+    resource = Resource(runner_id="r", backend="claude",
+                        capabilities=["android", "docker"])
+    assert resource.supports([])
+    assert resource.supports(["android"])
+    assert resource.supports(["docker", "android"])
+    assert not resource.supports(["browser"])
+    assert not resource.supports(["android", "browser"])
+    assert Resource(runner_id="r", backend="claude").supports([])
+
+
 def test_cooldown_resource_not_used():
     store = MemoryStore()
     project = store.put(Project(name="p", spec_repo="x"))
@@ -417,7 +462,7 @@ def test_testing_capability_blocker_files_project_todo():
     sup = make_supervisor(store)
     assert sup.refresh_state(project) == ProjectState.blocked_resources
     todos = store.list(HumanTask, project_id=project.id)
-    assert [t.title for t in todos] == ["Enable testing capabilities for p"]
+    assert [t.title for t in todos] == ["Enable required capabilities for p"]
     assert "`browser`" in todos[0].instructions
     assert "`docker`" in todos[0].instructions
 

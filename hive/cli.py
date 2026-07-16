@@ -251,6 +251,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--member-repos", help="comma-separated git URLs (replaces the list)")
     p.add_argument("--spec-repo", help="spec home git URL")
+    p.add_argument(
+        "--required-capabilities",
+        help="comma-separated machine environments every task needs, e.g. 'android' "
+        "(replaces the list; '' clears)",
+    )
 
     p = sub.add_parser(
         "ask",
@@ -1456,6 +1461,8 @@ def run(args: argparse.Namespace, client) -> dict | list:
             body["member_repos"] = _csv(args.member_repos)
         if args.spec_repo is not None:
             body["spec_repo"] = args.spec_repo
+        if args.required_capabilities is not None:
+            body["required_capabilities"] = _csv(args.required_capabilities)
         r = client.patch(f"/api/projects/{args.project_id}", json=body)
     elif c == "ask":
         text = sys.stdin.read() if args.text == "-" else args.text

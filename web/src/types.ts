@@ -44,6 +44,7 @@ export interface Project {
   archived: boolean;
   daily_budget_usd: number;
   agent_grants?: AgentGrant[];
+  required_capabilities?: string[];
   goal_complete: boolean;
   goal_complete_note: string;
   intake_conversation_id: string;
@@ -577,12 +578,7 @@ export interface ResourceInfo {
   last_probe_at: number;
   last_probe_task_id: string;
   last_probe_text: string;
-  browser_status?: "unknown" | "probing" | "usable" | "failed";
-  browser_probe_at?: number;
-  browser_probe_text?: string;
-  docker_status?: "unknown" | "probing" | "usable" | "failed";
-  docker_probe_at?: number;
-  docker_probe_text?: string;
+  capabilities?: string[];
   cooldown_until: number;
   last_exhaustion_at: number;
   last_exhaustion_text: string;

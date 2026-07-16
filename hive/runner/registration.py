@@ -220,17 +220,7 @@ def register(store, body: RunnerRegister, workspace_id: str) -> dict:
         resource.cli_version = discovery.version
 
     def apply_capabilities(resource: Resource) -> None:
-        caps = set(body.capabilities)
-        resource.browser_status = (
-            ResourceUsability.usable if "browser" in caps else ResourceUsability.unknown
-        )
-        resource.browser_probe_at = time.time() if "browser" in caps else resource.browser_probe_at
-        resource.browser_probe_text = "Runner advertised browser capability." if "browser" in caps else resource.browser_probe_text
-        resource.docker_status = (
-            ResourceUsability.usable if "docker" in caps else ResourceUsability.unknown
-        )
-        resource.docker_probe_at = time.time() if "docker" in caps else resource.docker_probe_at
-        resource.docker_probe_text = "Runner advertised docker capability." if "docker" in caps else resource.docker_probe_text
+        resource.capabilities = sorted(set(body.capabilities))
 
     for backend in body.backends:
         resource = (
