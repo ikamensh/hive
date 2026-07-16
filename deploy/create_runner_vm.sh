@@ -11,14 +11,16 @@
 # Re-runnable: re-uploads the provisioner and re-runs it on the existing VM.
 set -euo pipefail
 
-NAME=${1:?usage: create_runner_vm.sh <name> [--packs "android ..."] [--backends csv]}
+NAME=${1:?usage: create_runner_vm.sh <name> [--packs "android ..."] [--backends csv] [--power manual|on_demand]}
 shift
 PACKS=""
 BACKENDS=""
+POWER=on_demand  # the chief switches purpose-built VMs on/off with demand
 while [ $# -gt 0 ]; do
   case "$1" in
     --packs) PACKS="$2"; shift 2 ;;
     --backends) BACKENDS="$2"; shift 2 ;;
+    --power) POWER="$2"; shift 2 ;;
     *) echo "unknown arg $1" >&2; exit 2 ;;
   esac
 done
@@ -56,12 +58,17 @@ SCW_PROJECT_ID=$(scw config get default-project-id)
 SCW_REGION=$REGION
 EOF
 
-# The runner's own coordinates (stable name => stable machine id on the chief).
+# The runner's own coordinates (stable name => stable machine id on the chief)
+# plus its substrate identity, so the chief can power it on and off.
 $SSH "umask 077 && cat > /etc/hive/runner-vm.env" <<EOF
 HIVE_CHIEF_URL=$CHIEF_URL
 HIVE_RUNNER_NAME=$NAME
 HIVE_PACKS="$PACKS"
 HIVE_RUNNER_BACKENDS=$BACKENDS
+HIVE_SUBSTRATE_PROVIDER=scaleway
+HIVE_SUBSTRATE_INSTANCE_ID=$ID
+HIVE_SUBSTRATE_ZONE=$ZONE
+HIVE_POWER_POLICY=$POWER
 EOF
 
 scp -o StrictHostKeyChecking=accept-new deploy/runner_vm_startup.sh \

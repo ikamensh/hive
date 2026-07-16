@@ -254,10 +254,14 @@ class Supervisor:
         testing_check: Callable[[str], None] | None = None,
         issue_scan: Callable[[str], None] | None = None,
         todo_triage: Callable[[], None] | None = None,
+        substrate=None,
     ) -> None:
         self.store = store
         self.orchestrate = orchestrate
         self.workspace_id = workspace_id
+        # Power control for on_demand machines (hive/_integrations/substrate.py);
+        # None = this chief cannot switch machines on and off.
+        self.substrate = substrate
         # CI auto-fix poller (network: filed by production_app, None in tests). Takes
         # a project id, checks each repo's CI, files+queues a fix when red.
         self.ci_check = ci_check
@@ -437,18 +441,22 @@ class Supervisor:
             ),
         )
         if state == ProjectState.blocked_resources:
-            self._file_capability_blocker(project, tasks, available_capacity)
+            self._handle_capability_block(project, tasks, available_capacity)
         if state != project.state:
             project.state = state
             self.store.put(project)
         return state
 
-    def _file_capability_blocker(
+    def _handle_capability_block(
         self,
         project: Project,
         tasks: list[Task],
         available_capacity: dict[str, list[frozenset[str]]],
     ) -> None:
+        """Capability-blocked pending work: first try switching on an asleep
+        `on_demand` machine that offers the missing bundle; escalate to the
+        human only when no such machine exists (or a wake has been pending
+        longer than the boot grace)."""
         blocked = [
             (task, caps)
             for task in tasks
@@ -458,6 +466,8 @@ class Supervisor:
         ]
         if not blocked:
             return
+        if self._wake_machines_for(blocked):
+            return  # a machine is booting; escalate on a later pass if it never shows
         needs = "\n".join(
             "- `{}` `{}` needs backend `{}` with {}".format(
                 task.kind,
@@ -497,6 +507,126 @@ class Supervisor:
             },
         )
 
+    WAKE_GRACE_S = 600.0  # poweron -> boot -> re-provision -> runner registers
+
+    def _machine_serves(self, machine: Machine, backend: str, caps: list[str]) -> bool:
+        """The machine's last-advertised runners cover (backend, caps) — the
+        stored Runner rows survive the machine being offline, so this is how
+        the chief knows what a sleeping box would offer once awake."""
+        return any(
+            backend in runner.backends and set(caps) <= set(runner.capabilities)
+            for runner in self.store.list(
+                Runner, workspace_id=self.workspace_id, machine_id=machine.id
+            )
+        )
+
+    def _wake_machines_for(self, blocked: list[tuple[Task, list[str]]]) -> bool:
+        """Power on offline `on_demand` machines that offer a blocked bundle.
+        True when a wake is now (or already was) in flight — the caller then
+        holds the escalation while the machine boots."""
+        if self.substrate is None:
+            return False
+        now = time.time()
+        online_machines = {
+            r.machine_id
+            for r in self.store.list(Runner, workspace_id=self.workspace_id)
+            if r.online()
+        }
+        in_flight = False
+        for machine in self.store.list(Machine, workspace_id=self.workspace_id):
+            ref = machine.substrate_ref()
+            if machine.power_policy != "on_demand" or ref is None or machine.id in online_machines:
+                continue
+            if not any(self._machine_serves(machine, t.backend, caps) for t, caps in blocked):
+                continue
+            if now - machine.wake_requested_at < self.WAKE_GRACE_S:
+                in_flight = True
+                continue
+            try:
+                if machine.wake_requested_at and self.substrate.state(*ref) == "running":
+                    # Powered on but the runner never registered within the
+                    # grace: the box is broken, not booting — stop holding the
+                    # escalation and let the dark-machine check own it.
+                    log.warning(
+                        "machine %s is powered on but its runner never registered",
+                        machine.name,
+                    )
+                    continue
+                self.substrate.power_on(*ref)
+            except Exception:
+                log.exception("wake of machine %s failed", machine.name)
+                continue
+            machine.wake_requested_at = now
+            machine.last_needed_at = now
+            self.store.put(machine)
+            in_flight = True
+            log.info("woke machine %s for capability-blocked work", machine.name)
+        return in_flight
+
+    def power_down_idle_machines(self) -> None:
+        """Switch off `on_demand` machines with no matching work. A machine is
+        *needed* while any of its runners has a running task, or any pending
+        task in a within-budget project matches what it offers (fleet pause
+        makes nothing needed). After `idle_stop_minutes` un-needed, power off.
+        Registration resets the clock, so a fresh boot always gets its grace."""
+        if self.substrate is None:
+            return
+        now = time.time()
+        machines = [
+            m
+            for m in self.store.list(Machine, workspace_id=self.workspace_id)
+            if m.power_policy == "on_demand" and m.substrate_ref() and not m.asleep
+        ]
+        if not machines:
+            return
+        paused = pause.fleet_paused(self.store, self.workspace_id)
+        projects = {p.id: p for p in self.store.list(Project, workspace_id=self.workspace_id)}
+        demand: list[tuple[str, list[str]]] = []  # (backend, caps) of live work
+        for task in self.store.list(Task, workspace_id=self.workspace_id):
+            if task.status == TaskStatus.running and task.runner_id:
+                demand.append((task.backend, task.required_capabilities))
+            elif task.status == TaskStatus.pending and not paused:
+                project = projects.get(task.project_id)
+                if project is None or project.paused or self.over_budget(project):
+                    continue
+                demand.append((task.backend, effective_capabilities(task, project)))
+        running_runner_ids = {
+            t.runner_id
+            for t in self.store.list(
+                Task, workspace_id=self.workspace_id, status=TaskStatus.running
+            )
+            if t.runner_id
+        }
+        for machine in machines:
+            runners = self.store.list(
+                Runner, workspace_id=self.workspace_id, machine_id=machine.id
+            )
+            busy = any(r.id in running_runner_ids for r in runners)
+            needed = busy or any(
+                self._machine_serves(machine, backend, caps) for backend, caps in demand
+            )
+            if needed:
+                machine.last_needed_at = now
+                self.store.put(machine)
+                continue
+            if not any(r.online() for r in runners):
+                continue  # offline but not by our hand — the dark-machine check owns it
+            if now - machine.last_needed_at < machine.idle_stop_minutes * 60:
+                continue
+            try:
+                self.substrate.power_off(*machine.substrate_ref())
+            except Exception:
+                log.exception("power-off of machine %s failed", machine.name)
+                continue
+            machine.asleep = True
+            machine.asleep_since = now
+            self.store.put(machine)
+            log.info(
+                "powered off idle machine %s (%.0f min without matching work)",
+                machine.name,
+                (now - machine.last_needed_at) / 60,
+            )
+
     def check_dark_machines(self) -> None:
         """File an operator todo for a machine that recently went dark. Runs
         every step — `escalate` is idempotent by dedup_key, so an outage yields
@@ -505,6 +635,8 @@ class Supervisor:
         the todo sweep."""
         now = time.time()
         for machine in self.store.list(Machine, workspace_id=self.workspace_id):
+            if machine.asleep or now - machine.wake_requested_at < self.WAKE_GRACE_S:
+                continue  # off (or booting) by the chief's own hand — not an outage
             verdict = DEFAULT_LIVENESS.assess(machine.last_seen, machine.device_kind, now=now)
             if verdict is Liveness.dark:
                 since = datetime.datetime.fromtimestamp(
@@ -783,6 +915,7 @@ class Supervisor:
     async def _step(self) -> None:
         self.fail_orphaned_tasks()
         self.check_dark_machines()
+        self.power_down_idle_machines()
         resolve_open_todos(self.store, self.workspace_id)
         if pause.fleet_paused(self.store, self.workspace_id):
             # The master off-switch: bookkeeping above still ran, but nothing

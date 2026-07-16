@@ -317,7 +317,9 @@ class WorkspacePatch(BaseModel):
 
 
 class MachinePatch(BaseModel):
-    owner_user_id: str  # "" releases the machine back to unclaimed
+    owner_user_id: str | None = None  # "" releases the machine back to unclaimed
+    power_policy: str | None = None  # manual | on_demand
+    idle_stop_minutes: int | None = None
 
 
 class UserRolePatch(BaseModel):
@@ -1852,10 +1854,23 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def set_machine_owner(
         machine_id: str, body: MachinePatch, ctx: AuthContext = Depends(current)
     ):
-        """Claim, release, or (as admin) assign a machine to a user. Ownership
-        routes that machine's auth todos (CLI logins, restart-me) to the one
-        person who can act on them."""
+        """Claim, release, or (as admin) assign a machine to a user; set its
+        power policy. Ownership routes that machine's auth todos (CLI logins,
+        restart-me) to the one person who can act on them."""
         machine = require_machine(machine_id, ctx)
+        if body.power_policy is not None or body.idle_stop_minutes is not None:
+            require_machine_control(machine_id, ctx)
+            if body.power_policy is not None:
+                if body.power_policy not in ("manual", "on_demand"):
+                    raise HTTPException(400, "power_policy must be manual or on_demand")
+                machine.power_policy = body.power_policy
+            if body.idle_stop_minutes is not None:
+                if body.idle_stop_minutes < 1:
+                    raise HTTPException(400, "idle_stop_minutes must be >= 1")
+                machine.idle_stop_minutes = body.idle_stop_minutes
+            store.put(machine)
+        if body.owner_user_id is None:
+            return machine.model_dump()
         new_owner = body.owner_user_id.strip()
         if new_owner and not store.list(
             WorkspaceMembership, workspace_id=ctx.workspace_id, user_id=new_owner
@@ -2448,6 +2463,7 @@ def production_app() -> FastAPI:
     from hive._control.orchestrator import Orchestrator
 
     orchestrator = Orchestrator(store, blobs, config)
+    from hive._integrations.substrate import substrate_from_env
 
     supervisor = Supervisor(
         store,
@@ -2458,6 +2474,7 @@ def production_app() -> FastAPI:
         testing_check=make_testing_check(store, config),
         issue_scan=make_issue_scan(store, config, blobs=blobs),
         todo_triage=make_todo_triage(store, config),
+        substrate=substrate_from_env(),
     )
     from hive.runner._local import LocalRunnerManager
 

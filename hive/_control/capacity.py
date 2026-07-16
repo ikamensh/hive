@@ -203,6 +203,8 @@ def capacity_summary(groups: list[MachineGroup]) -> dict:
                 "device_kind": g.machine.device_kind,
                 "online": g.online,
                 "last_seen": g.last_seen,
+                "power_policy": g.machine.power_policy,
+                "asleep": g.machine.asleep,
                 "agents": agents,
             }
         )

@@ -80,8 +80,27 @@ class Machine(BaseModel):
     # The user whose hands are on this machine — login todos for it go to them.
     # Empty = unclaimed; any admin picks it up.
     owner_user_id: str = ""
+    # Substrate identity: where this machine physically lives, so the chief
+    # can power it on and off. Empty provider = not hive-controllable.
+    substrate_provider: str = ""  # "scaleway"
+    substrate_instance_id: str = ""
+    substrate_zone: str = ""  # e.g. "fr-par-1"
+    # on_demand: the chief wakes this machine when capability-gated work is
+    # pending and powers it off after idle_stop_minutes without matching work.
+    power_policy: str = "manual"  # manual | on_demand
+    idle_stop_minutes: int = 20
+    asleep: bool = False  # the chief powered it off on purpose (not an outage)
+    asleep_since: float = 0.0
+    wake_requested_at: float = 0.0  # rate-limits poweron attempts
+    last_needed_at: float = 0.0  # last time the idle sweep saw work for it
     first_seen: float = Field(default_factory=now)
     last_seen: float = Field(default_factory=now)
+
+    def substrate_ref(self) -> tuple[str, str] | None:
+        """(zone, instance_id) when the chief can power-manage this machine."""
+        if self.substrate_provider == "scaleway" and self.substrate_instance_id:
+            return self.substrate_zone, self.substrate_instance_id
+        return None
 
 
 class Autonomy(StrEnum):

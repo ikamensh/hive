@@ -559,6 +559,8 @@ export interface MachineInfo {
   arch: string;
   device_kind: string;
   owner_user_id?: string; // whose hands are on it; "" = unclaimed
+  power_policy?: string; // manual | on_demand (chief switches it on/off)
+  asleep?: boolean; // powered off by the chief, not an outage
   first_seen: number;
   last_seen: number;
 }

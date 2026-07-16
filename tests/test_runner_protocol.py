@@ -212,6 +212,35 @@ def test_register_mirrors_capabilities_onto_resources():
     assert resource.capabilities == ["docker"]
 
 
+def test_register_records_substrate_and_wakes_row():
+    """Registration carries the machine's substrate identity (so the chief can
+    power it on/off), seeds the power policy only on first sight — later
+    changes belong to the operator — and marks the row awake."""
+    store = MemoryStore()
+    client = make_client(store)
+    body = {
+        "name": "droid",
+        "backends": ["gemini-cli"],
+        "substrate_provider": "scaleway",
+        "substrate_instance_id": "i-1",
+        "substrate_zone": "fr-par-1",
+        "power_policy": "on_demand",
+    }
+    client.post("/api/runners/register", json=body, headers=H)
+    (machine,) = store.list(Machine)
+    assert machine.substrate_ref() == ("fr-par-1", "i-1")
+    assert machine.power_policy == "on_demand"
+    assert not machine.asleep
+
+    machine.asleep = True
+    store.put(machine)
+    body["power_policy"] = "manual"  # heartbeat hints must not flip the policy
+    client.post("/api/runners/register", json=body, headers=H)
+    (machine,) = store.list(Machine)
+    assert machine.power_policy == "on_demand"
+    assert not machine.asleep  # a registering machine is awake by definition
+
+
 def test_register_records_machine_metadata():
     store = MemoryStore()
     client = make_client(store)

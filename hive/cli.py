@@ -434,6 +434,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("agents", help="list locally detected supported agent backends")
     sub.add_parser("resources", help="runners and backend resources")
+    p = sub.add_parser(
+        "machine-set",
+        help="set a machine's power policy (on_demand machines are switched "
+        "on for capability-blocked work and off when idle)",
+    )
+    p.add_argument("machine", help="machine name or id")
+    p.add_argument("--power-policy", choices=["manual", "on_demand"])
+    p.add_argument("--idle-stop", type=int, help="minutes without matching work before power-off")
     p = sub.add_parser("probe", help="probe one registered backend resource")
     p.add_argument("resource_id")
     p = sub.add_parser("resource-disable", help="park a backend resource: stays visible, out of dispatch")
@@ -1618,6 +1626,17 @@ def run(args: argparse.Namespace, client) -> dict | list:
         }
     elif c == "resources":
         r = client.get("/api/resources")
+    elif c == "machine-set":
+        machines = client.get("/api/resources").raise_for_status().json()["machines"]
+        matched = [m for m in machines if args.machine in (m["id"], m["name"])]
+        if not matched:
+            raise SystemExit(f"no machine named {args.machine!r}; `hive resources` lists them")
+        body = {}
+        if args.power_policy is not None:
+            body["power_policy"] = args.power_policy
+        if args.idle_stop is not None:
+            body["idle_stop_minutes"] = args.idle_stop
+        r = client.patch(f"/api/machines/{matched[0]['id']}", json=body)
     elif c == "probe":
         r = client.post(f"/api/resources/{args.resource_id}/probe")
     elif c == "login":

@@ -55,6 +55,12 @@ MACHINE_OS = MACHINE_METADATA["machine_os"]
 MACHINE_ARCH = MACHINE_METADATA["machine_arch"]
 MACHINE_KIND = MACHINE_METADATA["machine_kind"]
 RUNNER_NAME = os.environ.get("HIVE_RUNNER_NAME", socket.gethostname())
+# Substrate identity (set by deploy/create_runner_vm.sh): lets the chief power
+# this machine on and off. HIVE_POWER_POLICY seeds the machine row once.
+SUBSTRATE_PROVIDER = os.environ.get("HIVE_SUBSTRATE_PROVIDER", "")
+SUBSTRATE_INSTANCE_ID = os.environ.get("HIVE_SUBSTRATE_INSTANCE_ID", "")
+SUBSTRATE_ZONE = os.environ.get("HIVE_SUBSTRATE_ZONE", "")
+POWER_POLICY = os.environ.get("HIVE_POWER_POLICY", "")
 RUNNER_OWNER = os.environ.get("HIVE_RUNNER_OWNER", "")  # set by `hive enroll`; claims the machine
 WORKDIR = Path(os.environ.get("HIVE_RUNNER_WORKDIR", "~/hive-work")).expanduser()
 TASK_TIMEOUT_S = float(os.environ.get("HIVE_TASK_TIMEOUT_S", "3600"))
@@ -877,6 +883,10 @@ def main(argv: list[str] | None = None) -> None:
             "machine_os": MACHINE_OS,
             "machine_arch": MACHINE_ARCH,
             "machine_kind": MACHINE_KIND,
+            "substrate_provider": SUBSTRATE_PROVIDER,
+            "substrate_instance_id": SUBSTRATE_INSTANCE_ID,
+            "substrate_zone": SUBSTRATE_ZONE,
+            "power_policy": POWER_POLICY,
             "boot": boot,
             "owner_user_id": RUNNER_OWNER,
             "discoveries": discoveries,

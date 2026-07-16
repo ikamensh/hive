@@ -85,6 +85,10 @@ def ensure_machine(
     machine_os: str = "",
     machine_arch: str = "",
     device_kind: str = "",
+    substrate_provider: str = "",
+    substrate_instance_id: str = "",
+    substrate_zone: str = "",
+    power_policy: str = "",
 ) -> Machine:
     machine_id = machine_id or stable_machine_id(name, workspace_id)
     now = time.time()
@@ -100,6 +104,9 @@ def ensure_machine(
             os=machine_os,
             arch=machine_arch,
             device_kind=device_kind or "unknown",
+            # The policy hint only seeds a new row — later changes belong to
+            # the operator (PATCH /api/machines), not the heartbeat.
+            power_policy=power_policy or "manual",
             first_seen=now,
             last_seen=now,
         )
@@ -112,6 +119,13 @@ def ensure_machine(
         machine.arch = machine_arch or machine.arch
         machine.device_kind = device_kind or machine.device_kind
         machine.last_seen = now
+    machine.substrate_provider = substrate_provider or machine.substrate_provider
+    machine.substrate_instance_id = substrate_instance_id or machine.substrate_instance_id
+    machine.substrate_zone = substrate_zone or machine.substrate_zone
+    # A registering machine is awake by definition.
+    machine.asleep = False
+    machine.asleep_since = 0.0
+    machine.last_needed_at = max(machine.last_needed_at, now)
     return store.put(machine)
 
 

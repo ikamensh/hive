@@ -75,6 +75,12 @@ class RunnerRegister(BaseModel):
     # token installed this runner. Claims the machine for them on first
     # register; never steals a machine someone already owns.
     owner_user_id: str = ""
+    # Substrate identity + power-policy seed (deploy/create_runner_vm.sh writes
+    # them into the runner env) — lets the chief power this machine on and off.
+    substrate_provider: str = ""
+    substrate_instance_id: str = ""
+    substrate_zone: str = ""
+    power_policy: str = ""
     discoveries: list[BackendDiscoveryInput] = []
     capabilities: list[str] = []
     auto_probe: bool = False
@@ -183,6 +189,10 @@ def register(store, body: RunnerRegister, workspace_id: str) -> dict:
         machine_os=body.machine_os,
         machine_arch=body.machine_arch,
         device_kind=body.machine_kind,
+        substrate_provider=body.substrate_provider,
+        substrate_instance_id=body.substrate_instance_id,
+        substrate_zone=body.substrate_zone,
+        power_policy=body.power_policy,
     )
     if body.owner_user_id and not machine.owner_user_id:
         machine.owner_user_id = body.owner_user_id

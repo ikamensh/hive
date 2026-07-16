@@ -83,6 +83,8 @@ HIVE_GCP_PROJECT=hive-ikamen
 HIVE_GCS_BUCKET=hive-ikamen-blobs
 GOOGLE_APPLICATION_CREDENTIALS=/etc/hive/gcp-sa.json
 HIVE_ORCH_PROVIDER=auto
+# Substrate power control: the supervisor switches on_demand machines on/off.
+SCW_SECRET_KEY=${SCW_SECRET_KEY}
 HIVE_ADVERTISED_URLS=https://hive.tachyon-ai.eu,https://${HOST_SSLIP}
 # First login is the dev-mode identity — keep ikamensh first.
 HIVE_ALLOWED_GITHUB_USERS=ikamensh,eidemiurge
