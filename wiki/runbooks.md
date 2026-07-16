@@ -78,3 +78,39 @@ A task that legitimately runs longer than 5 minutes does **not** trip this — t
 heartbeat thread keeps `last_seen` fresh independently of the work loop. If a
 long, healthy task is being failed as "offline," the heartbeat thread itself died
 (crashed or blocked); look for its absence in the runner log, not for the task.
+
+## Adding a capability VM to the fleet (environment packs)
+
+**When.** A project needs a machine environment no runner offers — the chief
+files an "Enable required capabilities" todo naming the missing bundle (e.g.
+`android`), or you're onboarding a new kind of workload (see `wiki/mobile.md`).
+
+### Procedure
+
+```bash
+bash deploy/create_runner_vm.sh <name> --packs android --backends gemini-cli
+```
+
+Creates (or refreshes — it's idempotent) a runner-only Scaleway VM pointed at
+the chief, installs the named environment packs
+(`deploy/install_<pack>_env.sh`), and starts `hive-runner` under systemd. The
+runner self-registers; `detect_capabilities` re-detects every heartbeat, so the
+new capability shows on the machines page within a minute. Verify:
+`hive resources` → the machine advertises the pack, its backend probes usable.
+
+Point the project at it: `hive new ... --required-capabilities android` (or
+`hive set <project> --required-capabilities android`) — every task of that
+project then dispatches only to machines advertising the capability.
+
+### Gotchas (all observed live, 2026-07-16)
+
+- The VM clones **GitHub main** — push hive changes before provisioning, or
+  the runner runs stale code.
+- A backend can linger "usable" from an old probe after its credentials are
+  gone (claude on hive-vm). Disable it (`hive resource-disable <id>`) or the
+  intake scout / planner will pick it and the task will sit undispatchable.
+- On a Gemini-only fleet, pin the model: grant
+  `gemini-cli=gemini-3.1-pro-preview:unlimited` — the CLI's default flash
+  flakes with "Invalid stream" on long agentic turns.
+- Scaleway instances have no `/dev/kvm`: the android pack ships no emulator;
+  projects must keep tests on the JVM (Robolectric) — state it in the spec.
