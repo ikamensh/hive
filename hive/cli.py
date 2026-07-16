@@ -194,6 +194,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", default="", help="existing repo git URL (default: create a private repo)")
     p.add_argument("--budget", type=float, help="daily spend cap in USD (default 10)")
     p.add_argument("--public", action="store_true", help="make the created repo public")
+    p.add_argument(
+        "--required-capabilities",
+        default="",
+        help="comma-separated machine environments every task needs, e.g. 'android' "
+        "— applies from the very first intake turn",
+    )
 
     p = sub.add_parser("repo-create", help="create a private greenfield repo for a project")
     p.add_argument("project_id")
@@ -1359,7 +1365,12 @@ def run(args: argparse.Namespace, client) -> dict | list:
         if args.spec:
             spec_text = sys.stdin.read() if args.spec == "-" else Path(args.spec).read_text()
         project = client.post(
-            "/api/projects", json={"name": args.name, "spec_text": spec_text}
+            "/api/projects",
+            json={
+                "name": args.name,
+                "spec_text": spec_text,
+                "required_capabilities": _csv(args.required_capabilities),
+            },
         ).raise_for_status().json()
         pid = project["id"]
         if args.repo:

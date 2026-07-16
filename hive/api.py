@@ -177,6 +177,9 @@ def canonical_repo(url: str) -> str:
 class ProjectCreate(BaseModel):
     name: str
     spec_text: str = ""  # the user's spec, handed over at creation
+    # Machine environments every task needs (e.g. ["android"]). Set at creation
+    # so even the first intake turn only dispatches to capable machines.
+    required_capabilities: list[str] = []
 
 
 class ProjectPatch(BaseModel):
@@ -733,6 +736,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 workspace_id=ctx.workspace_id,
                 name=body.name.strip(),
                 initial_spec=body.spec_text.strip(),
+                required_capabilities=body.required_capabilities,
             )
         )
         return project.model_dump()
