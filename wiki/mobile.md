@@ -99,6 +99,12 @@ the per-capability fields (no compat, per project rules).
 
 - **Phase 1 — $0**: the Mac laptop runner gets the pack. Existing affinity
   dispatch sends mobile work there and nowhere else.
+- **On-demand power (built 2026-07-16)**: capability VMs default to
+  `power_policy: on_demand` — the chief powers the instance off after
+  `idle_stop_minutes` without matching work (stopped = volume + IP only,
+  ~€5/mo instead of ~€40/mo) and back on when capability-blocked work
+  appears (boot→registered ≈ 2–4 min). See the runbook's "Adding a
+  capability VM" for the mechanics.
 - **Phase 2 — scale-out**: emulators need KVM, so bare metal (Hetzner AX
   class, ~€40–55/mo, roughly 8–12 concurrent emulators). Scaleway *instances*
   (incl. hive-vm) do not expose nested virt — the chief stays out of the
