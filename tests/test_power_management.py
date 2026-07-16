@@ -178,6 +178,18 @@ def test_matching_or_running_work_keeps_machine_awake():
     sup.power_down_idle_machines()
     assert fake.off == []
 
+    # ...but a task running on some OTHER machine needs nothing from this
+    # box — it must not keep the expensive machine alive (observed live:
+    # hive-vm's own work kept pinning the android VM's idle clock).
+    for task in store.list(Task, project_id=project.id):
+        task.runner_id = "some-other-runner"
+        store.put(task)
+    machine = store.get(Machine, machine.id)
+    machine.last_needed_at = time.time() - machine.idle_stop_minutes * 60 - 1
+    store.put(machine)
+    sup.power_down_idle_machines()
+    assert fake.off == [("fr-par-1", "i-droid")]
+
 
 def test_work_anything_can_run_does_not_keep_machine_awake():
     """A pending task with no capability needs is servable by ordinary online

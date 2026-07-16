@@ -591,11 +591,14 @@ class Supervisor:
                     baseline_capacity.setdefault(backend, []).append(
                         frozenset(runner.capabilities)
                     )
-        demand: list[tuple[str, list[str]]] = []  # (backend, caps) only we can serve
-        for task in self.store.list(Task, workspace_id=self.workspace_id):
-            if task.status == TaskStatus.running and task.runner_id:
-                demand.append((task.backend, task.required_capabilities))
-            elif task.status == TaskStatus.pending and not paused:
+        # Demand = pending work no unmanaged awake machine covers. Running
+        # tasks never count here: one already placed elsewhere needs nothing
+        # from this box, and one running *on* it pins it via the busy check.
+        demand: list[tuple[str, list[str]]] = []
+        if not paused:
+            for task in self.store.list(
+                Task, workspace_id=self.workspace_id, status=TaskStatus.pending
+            ):
                 project = projects.get(task.project_id)
                 if project is None or project.paused or self.over_budget(project):
                     continue
