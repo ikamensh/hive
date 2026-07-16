@@ -122,10 +122,13 @@ def ensure_machine(
     machine.substrate_provider = substrate_provider or machine.substrate_provider
     machine.substrate_instance_id = substrate_instance_id or machine.substrate_instance_id
     machine.substrate_zone = substrate_zone or machine.substrate_zone
-    # A registering machine is awake by definition.
+    # A registering machine is awake by definition. The idle clock resets only
+    # on the asleep->awake transition (or a brand-new row) — a plain heartbeat
+    # must not keep an idle machine alive forever.
+    if machine.asleep or not machine.last_needed_at:
+        machine.last_needed_at = now
     machine.asleep = False
     machine.asleep_since = 0.0
-    machine.last_needed_at = max(machine.last_needed_at, now)
     return store.put(machine)
 
 

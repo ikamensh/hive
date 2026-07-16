@@ -239,6 +239,14 @@ def test_register_records_substrate_and_wakes_row():
     (machine,) = store.list(Machine)
     assert machine.power_policy == "on_demand"
     assert not machine.asleep  # a registering machine is awake by definition
+    woke_at = machine.last_needed_at
+    assert woke_at > 0  # the asleep->awake transition grants a fresh idle clock
+
+    # A plain heartbeat must NOT reset the idle clock, or an idle machine
+    # would be kept alive forever by its own 30s registration loop.
+    client.post("/api/runners/register", json=body, headers=H)
+    (machine,) = store.list(Machine)
+    assert machine.last_needed_at == woke_at
 
 
 def test_register_records_machine_metadata():

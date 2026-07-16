@@ -98,6 +98,19 @@ runner self-registers; `detect_capabilities` re-detects every heartbeat, so the
 new capability shows on the machines page within a minute. Verify:
 `hive resources` → the machine advertises the pack, its backend probes usable.
 
+### Economics: on-demand power (default)
+
+Such VMs default to `power_policy: on_demand` (override `--power manual`, or
+later `hive machine-set <name> --power-policy ... --idle-stop <min>`): the
+chief powers the instance **off** after `idle_stop_minutes` without matching
+work (a stopped instance bills volume + IP only, ~€5/mo instead of ~€40/mo)
+and **on** when capability-blocked work appears — boot to registered runner is
+2–4 min, and the "Enable required capabilities" escalation is held while it
+boots. An asleep machine shows `asleep` on the machines page and files no
+dark-machine todo; a machine that powers on but never registers escalates
+normally. Requires `SCW_SECRET_KEY` in the chief's `/etc/hive/env`
+(vm_startup.sh writes it).
+
 Point the project at it: `hive new ... --required-capabilities android` (or
 `hive set <project> --required-capabilities android`) — every task of that
 project then dispatches only to machines advertising the capability.
