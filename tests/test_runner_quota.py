@@ -31,6 +31,12 @@ CLAUDE_SUBSCRIPTION_DISABLED = (
 # a self-healing quota window.
 CODEX_BILLING_BLOCK = "codex: Subscription/billing issue — check your account status."
 
+# Captured live 3x during the droid-tally demo (2026-07-16): gemini-cli's flash
+# stream dying mid-turn. A one-off flake, not a credential or quota problem.
+GEMINI_INVALID_STREAM = (
+    "Invalid stream: The model returned an empty response or malformed tool call."
+)
+
 
 def _resource_exhausted(text: str, *, is_error: bool = True) -> bool:
     """Mirror the flag the runner sets on task results."""
@@ -102,3 +108,31 @@ def test_plain_failure_is_neither():
 
 def test_success_is_never_classified():
     assert classify_failure(CLAUDE_SUBSCRIPTION_DISABLED, is_error=False) == ""
+
+
+# "transient" marks one-off backend flakes the chief may requeue automatically.
+# Property: it must only ever claim errors that neither auth nor exhaustion
+# claims — a retry loop on a dead credential or a spent window would spin.
+
+
+def test_backend_flakes_classify_as_transient():
+    for text in (
+        GEMINI_INVALID_STREAM,
+        "stream disconnected before completion: retry later",
+        "500 Internal error encountered.",
+        "API returned 529: overloaded_error",
+        "upstream connect error: connection reset by peer",
+        "503 Service Unavailable",
+    ):
+        assert classify_failure(text, is_error=True) == "transient", text
+
+
+def test_transient_never_outranks_auth_or_exhaustion():
+    # The same stream error plus a login demand is an auth block; plus a quota
+    # note it is exhaustion — both need their own handling, never a blind retry.
+    assert classify_failure(GEMINI_INVALID_STREAM + " Please log in again.", is_error=True) == "auth"
+    assert classify_failure(GEMINI_INVALID_STREAM + " (429 Too Many Requests)", is_error=True) == "exhausted"
+
+
+def test_transient_requires_an_error():
+    assert classify_failure(GEMINI_INVALID_STREAM, is_error=False) == ""

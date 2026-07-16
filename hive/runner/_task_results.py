@@ -21,7 +21,7 @@ from hive.runner._agent_results import (
     test_ux_outcome as structured_test_ux_outcome,
     verdict_from_structured,
 )
-from hive.agents import REGISTRY
+from hive.agents import REGISTRY, classify_failure
 from hive.config.settings import Config
 from hive._control.escalation import (
     escalate,
@@ -135,6 +135,10 @@ TEST_TASK_KINDS = (
     TaskKind.testability_probe,
 )
 LANDING_INTEGRATION_PROMPT = "landing_integration"
+# A task that dies on a transient backend flake (classify_failure "transient")
+# is requeued this many times before the failure counts as real. Kept small:
+# a flake heals on the first retry; anything that survives two is not a flake.
+TRANSIENT_RETRY_LIMIT = 2
 
 
 class TaskResult(BaseModel):
@@ -281,6 +285,9 @@ class TaskResultProcessor:
         if not existing or existing.workspace_id != workspace_id:
             raise LookupError(task_id)
 
+        if self._should_requeue_transient(existing, body):
+            return self._requeue_transient(existing, body, workspace_id)
+
         finished_at = time.time()
         recorded: list[bool] = []
 
@@ -294,9 +301,11 @@ class TaskResultProcessor:
             self._record_verdict(task, body)
             task.result_text = body.text
             task.is_error = body.is_error
-            task.cost_usd = body.cost_usd
-            task.input_tokens = body.input_tokens
-            task.output_tokens = body.output_tokens
+            # += not =: a transient-requeued task carries the spend of its
+            # failed attempts, so budgets see the whole cost of the work.
+            task.cost_usd += body.cost_usd
+            task.input_tokens += body.input_tokens
+            task.output_tokens += body.output_tokens
             task.structured_result = body.structured_result
             task.structured_result_error = body.structured_result_error
             task.finished_at = finished_at
@@ -355,6 +364,91 @@ class TaskResultProcessor:
 
         self._wake_default(task, body)
         return {"ok": True}
+
+    def _should_requeue_transient(self, task: Task, body: TaskResult) -> bool:
+        """A transient backend flake (dead stream, empty/malformed model
+        response, provider 5xx) is not a verdict on the work: requeue the same
+        task instead of failing it, up to TRANSIENT_RETRY_LIMIT attempts. This
+        keeps an intake conversation alive across a flaky turn and saves a plan
+        item from parking on an error no human needs to see. Auth blocks and
+        quota exhaustion have their own paths; an operator cancel always wins.
+        """
+        return (
+            body.is_error
+            and not body.cancelled
+            and not body.auth_blocked
+            and not body.resource_exhausted
+            and not task.cancel_requested
+            and task.status == TaskStatus.running
+            and task.transient_retries < TRANSIENT_RETRY_LIMIT
+            and classify_failure(body.text, is_error=True) == "transient"
+        )
+
+    def _requeue_transient(self, existing: Task, body: TaskResult, workspace_id: str) -> dict:
+        requeued: list[bool] = []
+
+        def requeue(task: Task) -> None:
+            if task.status != TaskStatus.running:
+                return
+            if task.kind == TaskKind.probe:
+                # Probes never ride the dispatcher — they are minted running and
+                # pinned to their runner, so redeliver on the next poll instead.
+                task.delivered = False
+            else:
+                task.status = TaskStatus.pending
+                task.runner_id = ""
+                task.delivered = False
+            task.transient_retries += 1
+            # Carry the failed attempt's spend on the task and keep its error
+            # text visible until the retry overwrites it.
+            task.cost_usd += body.cost_usd
+            task.input_tokens += body.input_tokens
+            task.output_tokens += body.output_tokens
+            task.result_text = body.text
+            requeued.append(True)
+
+        task = self.store.update(Task, existing.id, requeue)
+        if task is None:
+            raise LookupError(existing.id)
+        if not requeued:
+            return {"ok": True, "ignored": True, "status": task.status}
+        # `existing` still names the runner that burned the attempt; a
+        # non-probe requeue cleared it on the stored row.
+        self._account_attempt_spend(workspace_id, existing, body)
+        log.warning(
+            "%s task %s failed transiently on %s (attempt %d/%d) — requeued: %s",
+            task.kind,
+            task.id,
+            existing.runner_id,
+            task.transient_retries,
+            TRANSIENT_RETRY_LIMIT,
+            " ".join(body.text.split())[:300],
+        )
+        if task.status == TaskStatus.pending:
+            self.supervisor.poke()  # dispatch the retry now, not next tick
+        return {"ok": True, "requeued": True, "transient_retries": task.transient_retries}
+
+    def _account_attempt_spend(self, workspace_id: str, task: Task, body: TaskResult) -> None:
+        """Account a to-be-retried attempt's cost/usage on its resource. Unlike
+        `_account_resources` this records no usability or exhaustion verdicts —
+        the retry, not the flake, decides those."""
+        snapshot_moved = False
+
+        def account(resource: Resource) -> None:
+            nonlocal snapshot_moved
+            resource.total_tasks += 1
+            resource.total_cost_usd += body.cost_usd
+            snapshot_moved = apply_snapshot(resource, body.usage_snapshot)
+
+        for resource in self.store.list(
+            Resource,
+            workspace_id=workspace_id,
+            runner_id=task.runner_id,
+            backend=task.backend,
+        ):
+            updated = self.store.update(Resource, resource.id, account)
+            if updated is not None and snapshot_moved:
+                record_snapshot(self.store, updated, body.usage_snapshot, task_id=task.id)
 
     def _record_verdict(self, task: Task, body: TaskResult) -> None:
         if body.cancelled or body.is_error:

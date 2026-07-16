@@ -488,6 +488,7 @@ class Task(BaseModel):
     runner_id: str = ""
     delivered: bool = False  # runner has picked the assignment up via poll
     cancel_requested: bool = False  # operator asked to stop; runner honors cooperatively
+    transient_retries: int = 0  # automatic requeues after transient backend flakes (capped)
     verdict: Verdict = Verdict.none  # parsed from a verify task's result
     trace_blob: str = ""  # blob key of the kodo JSONL run trace, once uploaded
     artifact_blobs: list[str] = []  # artifact filenames uploaded by the runner for this task

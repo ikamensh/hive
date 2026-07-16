@@ -48,15 +48,31 @@ AUTH_BLOCK_PATTERNS = re.compile(
     r"billing|payment|past due|suspended|account status|check your account",
     re.IGNORECASE,
 )
+# A momentary backend flake: the stream died, the model returned an empty or
+# malformed response, or the provider/network hiccuped server-side (observed
+# live: gemini-cli's "Invalid stream: The model returned an empty response or
+# malformed tool call"). Credential and quota are fine — the same request
+# usually succeeds on retry, so Hive requeues the task instead of failing it.
+TRANSIENT_PATTERNS = re.compile(
+    r"invalid stream|empty (?:response|model response)|"
+    r"malformed (?:tool|function) call|stream (?:disconnected|closed|ended|error)|"
+    r"internal (?:server )?error|overloaded|service unavailable|bad gateway|"
+    r"gateway time.?out|connection (?:reset|refused|closed|aborted)|econnreset|"
+    r"socket hang.?up",
+    re.IGNORECASE,
+)
 
 
 def classify_failure(text: str, *, is_error: bool) -> str:
     """Classify a finished agent result for capacity accounting.
 
     Returns ``"auth"`` for a login/policy block (needs a human), ``"exhausted"``
-    for a transient rate-limit/quota window, or ``""`` otherwise. Auth wins over
-    exhaustion: a message that trips both (e.g. "rate limited; please re-login")
-    is the safer-to-escalate case, so we treat it as an auth block.
+    for a rate-limit/quota window that heals by waiting, ``"transient"`` for a
+    one-off backend flake worth an immediate retry, or ``""`` otherwise. Auth
+    wins over exhaustion: a message that trips both (e.g. "rate limited; please
+    re-login") is the safer-to-escalate case, so we treat it as an auth block.
+    Both win over transient — a dead credential often also breaks the stream,
+    and retrying it would loop.
     """
     if not is_error:
         return ""
@@ -64,6 +80,8 @@ def classify_failure(text: str, *, is_error: bool) -> str:
         return "auth"
     if EXHAUSTION_PATTERNS.search(text):
         return "exhausted"
+    if TRANSIENT_PATTERNS.search(text):
+        return "transient"
     return ""
 
 
