@@ -1404,10 +1404,12 @@ def run(args: argparse.Namespace, client) -> dict | list:
             None,
         )
         wants_action = bool(args.message or args.proceed or args.approve)
-        # No conversation, or a failed one being retried, (re)starts the scout.
+        # No conversation, a failed one being retried, or an explicit --backend
+        # (re)starts the scout — the chief owns the semantics (returns the
+        # active conversation unchanged, re-pins an idle one, heals a stale one).
         if conversation is None or (
             conversation["status"] == "failed" and (wants_action or args.backend)
-        ):
+        ) or (args.backend and conversation["status"] != "done"):
             conversation = client.post(
                 f"/api/projects/{args.project_id}/intake/start",
                 json={"backend": args.backend},
