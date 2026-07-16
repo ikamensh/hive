@@ -31,9 +31,10 @@ from hive.models import (
 )
 
 # Intake is high leverage, so only trusted backends qualify (preference order).
-# gemini-cli (backend-default model) closes the list so a Gemini-only fleet
-# can still run intake at all.
-TRUSTED_SCOUTS = (("codex", "gpt-5.5"), ("claude", "opus"), ("gemini-cli", ""))
+# gemini-cli closes the list so a Gemini-only fleet can still run intake at
+# all; pinned to pro — the CLI's default flash flakes with "Invalid stream:
+# empty response or malformed tool call" on long agentic turns (observed live).
+TRUSTED_SCOUTS = (("codex", "gpt-5.5"), ("claude", "opus"), ("gemini-cli", "gemini-3.1-pro-preview"))
 
 
 def trusted_capacity(
