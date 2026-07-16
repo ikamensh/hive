@@ -565,10 +565,12 @@ class Supervisor:
 
     def power_down_idle_machines(self) -> None:
         """Switch off `on_demand` machines with no matching work. A machine is
-        *needed* while any of its runners has a running task, or any pending
-        task in a within-budget project matches what it offers (fleet pause
-        makes nothing needed). After `idle_stop_minutes` un-needed, power off.
-        Registration resets the clock, so a fresh boot always gets its grace."""
+        *needed* while any of its runners has a running task, or a pending
+        task in a within-budget project needs it — meaning no machine that is
+        awake without a power policy could serve that task; work anything can
+        run must not keep the expensive box alive (fleet pause makes nothing
+        needed). After `idle_stop_minutes` un-needed, power off. The
+        asleep->awake transition resets the clock, so a boot gets its grace."""
         if self.substrate is None:
             return
         now = time.time()
@@ -581,7 +583,15 @@ class Supervisor:
             return
         paused = pause.fleet_paused(self.store, self.workspace_id)
         projects = {p.id: p for p in self.store.list(Project, workspace_id=self.workspace_id)}
-        demand: list[tuple[str, list[str]]] = []  # (backend, caps) of live work
+        managed_ids = {m.id for m in machines}
+        baseline_capacity: dict[str, list[frozenset[str]]] = {}
+        for runner in self.store.list(Runner, workspace_id=self.workspace_id):
+            if runner.online() and runner.machine_id not in managed_ids:
+                for backend in runner.backends:
+                    baseline_capacity.setdefault(backend, []).append(
+                        frozenset(runner.capabilities)
+                    )
+        demand: list[tuple[str, list[str]]] = []  # (backend, caps) only we can serve
         for task in self.store.list(Task, workspace_id=self.workspace_id):
             if task.status == TaskStatus.running and task.runner_id:
                 demand.append((task.backend, task.required_capabilities))
@@ -589,7 +599,9 @@ class Supervisor:
                 project = projects.get(task.project_id)
                 if project is None or project.paused or self.over_budget(project):
                     continue
-                demand.append((task.backend, effective_capabilities(task, project)))
+                caps = effective_capabilities(task, project)
+                if not has_capacity(baseline_capacity, task.backend, caps):
+                    demand.append((task.backend, caps))
         running_runner_ids = {
             t.runner_id
             for t in self.store.list(

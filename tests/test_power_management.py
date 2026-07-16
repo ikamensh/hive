@@ -179,6 +179,29 @@ def test_matching_or_running_work_keeps_machine_awake():
     assert fake.off == []
 
 
+def test_work_anything_can_run_does_not_keep_machine_awake():
+    """A pending task with no capability needs is servable by ordinary online
+    machines — it must not pin the expensive on_demand box. Only work that
+    nothing else can serve counts as demand for it."""
+    store = MemoryStore()
+    fake = FakeSubstrate()
+    sup = make_supervisor(store, substrate=fake)
+    machine, _ = put_droid_machine(store, online=True)
+    machine.last_needed_at = time.time() - machine.idle_stop_minutes * 60 - 1
+    store.put(machine)
+    # An ordinary always-on machine also offers gemini-cli.
+    plain = store.put(Machine(name="plain", device_kind="server"))
+    store.put(Runner(name="plain-r", machine_id=plain.id, backends=["gemini-cli"]))
+    # Capability-less pending work: anyone can run it.
+    project = store.put(Project(name="p", spec_repo="x"))
+    ws = store.put(IssueItem(project_id=project.id, title="w"))
+    store.put(Task(project_id=project.id, workstream_id=ws.id, repo="r",
+                   instructions="i", backend="gemini-cli"))
+
+    sup.power_down_idle_machines()
+    assert fake.off == [("fr-par-1", "i-droid")]
+
+
 def test_asleep_machine_files_no_dark_todo():
     store = MemoryStore()
     sup = make_supervisor(store, substrate=FakeSubstrate())
