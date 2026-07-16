@@ -31,7 +31,9 @@ from hive.models import (
 )
 
 # Intake is high leverage, so only trusted backends qualify (preference order).
-TRUSTED_SCOUTS = (("codex", "gpt-5.5"), ("claude", "opus"))
+# gemini-cli (backend-default model) closes the list so a Gemini-only fleet
+# can still run intake at all.
+TRUSTED_SCOUTS = (("codex", "gpt-5.5"), ("claude", "opus"), ("gemini-cli", ""))
 
 
 def trusted_capacity(

@@ -1044,6 +1044,47 @@ def test_manual_spec_files_finalize_intake_and_handoff_to_orchestrator(harness, 
     assert any("Intake accepted from durable spec files" in event for batch in orch.invocations for event in batch)
 
 
+def test_cancelled_intake_turn_releases_conversation_for_repin(harness, tmp_path):
+    """Operator-cancelling a queued intake turn must not leave the conversation
+    stuck `running` (a never-delivered task reports nothing back), and an idle
+    scout must accept a deliberate backend re-pin — the recovery path when the
+    picked backend turns out to have no capable machine (observed live: intake
+    chose a stale-usable backend the project's required capability excluded)."""
+    client, store, orch = harness
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    project = client.post("/api/projects", json={"name": "repin"}).json()
+    pid = project["id"]
+    _configure_project(client, pid, str(spec_dir))
+    _register_usable_runner(client, name="runner-codex", backend="codex")
+    _register_usable_runner(client, name="runner-gemini", backend="gemini-cli")
+
+    conversation = client.post(f"/api/projects/{pid}/intake/start").json()
+    assert conversation["backend"] == "codex"
+    (turn,) = [t for t in store.list(Task, project_id=pid) if t.kind == TaskKind.intake]
+    client.post(f"/api/tasks/{turn.id}/cancel")
+    assert store.get(AgentConversation, conversation["id"]).status == ConversationStatus.open
+
+    response = client.post(f"/api/projects/{pid}/intake/start", json={"backend": "gemini-cli"})
+    repinned = response.json()
+    assert response.status_code == 200, repinned
+    assert repinned["id"] == conversation["id"]  # transcript survives the re-pin
+    assert repinned["backend"] == "gemini-cli"
+
+    # A conversation that claims `running` with no live turn (its task died
+    # without reporting) is stale: start mints a fresh scout instead of 409ing.
+    store.update(
+        AgentConversation,
+        conversation["id"],
+        lambda c: setattr(c, "status", ConversationStatus.running),
+    )
+    fresh = client.post(
+        f"/api/projects/{pid}/intake/start", json={"backend": "gemini-cli"}
+    ).json()
+    assert fresh["id"] != conversation["id"]
+    assert fresh["backend"] == "gemini-cli"
+
+
 def test_web_intake_contract_holds_until_durable_spec_finalize(harness, tmp_path):
     """Regression proof for the web intake MVP contract: configuring a project
     is quiet, scout turns stay in intake, approve queues the durable-spec
@@ -1425,7 +1466,7 @@ def test_intake_start_rejects_unknown_backend(harness):
     pid = project["id"]
     _configure_project(client, pid, "https://example.com/spec.git")
     _register_usable_runner(client, backend="codex")
-    bad = client.post(f"/api/projects/{pid}/intake/start", json={"backend": "gemini-cli"})
+    bad = client.post(f"/api/projects/{pid}/intake/start", json={"backend": "cursor"})
     assert bad.status_code == 400
     assert "trusted scout" in bad.json()["detail"]
 

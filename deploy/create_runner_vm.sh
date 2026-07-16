@@ -40,7 +40,14 @@ if [ -z "$ID" ]; then
 fi
 scw instance server start $ID zone=$ZONE --wait >/dev/null 2>&1 || true  # no-op if running
 IP=$(scw instance server get $ID zone=$ZONE -o json | json 'json.load(sys.stdin)["public_ips"][0]["address"]')
-SSH="ssh -o StrictHostKeyChecking=accept-new root@$IP"
+SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 root@$IP"
+
+# A freshly created instance reports "running" before sshd answers.
+for i in $(seq 1 24); do
+  $SSH true 2>/dev/null && break
+  [ "$i" = 24 ] && { echo "!! $NAME ($IP) not reachable over SSH" >&2; exit 1; }
+  sleep 5
+done
 
 # Scaleway credentials for boot-time secret fetches.
 $SSH "mkdir -p /etc/hive && umask 077 && cat > /etc/hive/scw.env" <<EOF

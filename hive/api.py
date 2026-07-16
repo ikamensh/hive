@@ -746,6 +746,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         project = require_project(project_id, ctx)
         if not project.spec_repo.strip():
             raise HTTPException(400, "spec_repo must be set before intake")
+        prefer_backend = body.backend.strip()
         if project.intake_conversation_id:
             existing = store.get(AgentConversation, project.intake_conversation_id)
             # An active conversation already owns intake — return it. A failed or
@@ -756,8 +757,45 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 ConversationStatus.running,
                 ConversationStatus.finalizing,
             ):
-                return existing.model_dump()
-        conversation = intake.create_conversation(store, project, body.backend.strip())
+                live_turns = [
+                    t
+                    for t in store.list(
+                        Task,
+                        workspace_id=ctx.workspace_id,
+                        kind=TaskKind.intake,
+                        conversation_id=existing.id,
+                    )
+                    if t.status in (TaskStatus.pending, TaskStatus.running)
+                ]
+                if existing.status != ConversationStatus.open and not live_turns:
+                    # Claims to be working but no turn is live: the turn died
+                    # without reporting. Treat as failed — mint a fresh scout.
+                    store.update(
+                        AgentConversation,
+                        existing.id,
+                        lambda c: setattr(c, "status", ConversationStatus.failed),
+                    )
+                elif (
+                    existing.status == ConversationStatus.open
+                    and not live_turns
+                    and prefer_backend
+                    and prefer_backend != existing.backend
+                ):
+                    # Deliberate re-pin of an idle scout (e.g. the picked
+                    # backend turned out unusable on every capable machine).
+                    backend, model, _ = intake.trusted_capacity(
+                        store, ctx.workspace_id, prefer_backend, grants=project.agent_grants
+                    )
+
+                    def repin(conversation: AgentConversation) -> None:
+                        conversation.backend = backend
+                        conversation.model = model
+                        conversation.session_handle = ""
+
+                    return store.update(AgentConversation, existing.id, repin).model_dump()
+                else:
+                    return existing.model_dump()
+        conversation = intake.create_conversation(store, project, prefer_backend)
         intake.queue_turn(store, project, conversation, "initial")
         return store.get(AgentConversation, conversation.id).model_dump()
 
@@ -991,6 +1029,21 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             "changes": notes,
         }
 
+    def release_cancelled_turn(task: Task) -> None:
+        """A hard-cancelled intake turn never reports back, so nothing else
+        would unstick its conversation — mirror the runner-side cancel
+        semantics here (turn cancelled -> conversation open again)."""
+        if task.kind != TaskKind.intake or not task.conversation_id:
+            return
+
+        def mark(conversation: AgentConversation) -> None:
+            conversation.status = ConversationStatus.open
+            conversation.transcript.append(
+                {"role": "system", "text": "Intake turn cancelled by the operator."}
+            )
+
+        store.update(AgentConversation, task.conversation_id, mark)
+
     def cancel_one_task(task: Task, *, pending_msg: str, predelivery_msg: str) -> bool:
         """Apply the operator-cancel transition to one task. A pending or
         not-yet-delivered task is stopped outright; a delivered task is only
@@ -1006,6 +1059,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             store.put(task)
             cancel_issue_work(store, task)
             plans.cancel_plan_work(store, task)
+            release_cancelled_turn(task)
             return True
         if task.status == TaskStatus.running:
             if task.delivered:
@@ -1018,6 +1072,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             store.put(task)
             cancel_issue_work(store, task)
             plans.cancel_plan_work(store, task)
+            release_cancelled_turn(task)
             return True
         return False
 
