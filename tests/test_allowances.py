@@ -296,9 +296,9 @@ def test_intake_respects_grants():
     for backend in ("codex", "claude"):
         store.put(Resource(runner_id=runner.id, backend=backend,
                            usability_status=ResourceUsability.usable))
-    cheap_only = [AgentGrant(backends=["gemini-cli"])]
+    untrusted_only = [AgentGrant(backends=["cursor"])]
     with pytest.raises(HTTPException) as err:
-        trusted_capacity(store, "default", grants=cheap_only)
+        trusted_capacity(store, "default", grants=untrusted_only)
     assert err.value.status_code == 409 and "allowance" in err.value.detail
     claude_ok = [AgentGrant(backends=["claude"])]
     backend, model, _ = trusted_capacity(store, "default", grants=claude_ok)
