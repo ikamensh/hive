@@ -109,8 +109,12 @@ project then dispatches only to machines advertising the capability.
 - A backend can linger "usable" from an old probe after its credentials are
   gone (claude on hive-vm). Disable it (`hive resource-disable <id>`) or the
   intake scout / planner will pick it and the task will sit undispatchable.
-- On a Gemini-only fleet, pin the model: grant
-  `gemini-cli=gemini-3.1-pro-preview:unlimited` — the CLI's default flash
-  flakes with "Invalid stream" on long agentic turns.
+- On a Gemini-only fleet, pin the model via the project grant. Know the
+  quota shape: the API key's **pro** models carry ~250 requests/day/model
+  (one long agentic session burns 50-150), so
+  `gemini-cli=gemini-3.1-pro-preview` exhausts mid-plan ("Subscription/
+  billing issue" parked items = 429 RESOURCE_EXHAUSTED). For volume work
+  grant `gemini-cli=gemini-3.5-flash:unlimited`; the CLI's *default* model
+  also flaked with "Invalid stream" on long turns, so always pin explicitly.
 - Scaleway instances have no `/dev/kvm`: the android pack ships no emulator;
   projects must keep tests on the JVM (Robolectric) — state it in the spec.
