@@ -692,6 +692,8 @@ def _required_capabilities(story: Story, workstream: ProjectWorkstream) -> list[
     fidelity = str(workstream.config.get("fidelity", "")).lower()
     if "docker" in tags or fidelity == "docker":
         required.add("docker")
+    if "android" in tags or "mobile" in tags or fidelity == "android":
+        required.add("android")
     return sorted(required)
 
 

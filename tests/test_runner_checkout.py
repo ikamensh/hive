@@ -93,8 +93,28 @@ def test_detect_capabilities_recognizes_node_playwright(monkeypatch):
 def test_detect_capabilities_skips_browser_without_driver(monkeypatch):
     monkeypatch.setattr(runner.shutil, "which", lambda name: None)
     monkeypatch.setattr(runner.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.delenv("ANDROID_HOME", raising=False)
+    monkeypatch.delenv("ANDROID_SDK_ROOT", raising=False)
 
     assert runner.detect_capabilities() == []
+
+
+def test_detect_capabilities_android_needs_working_adb(monkeypatch, tmp_path):
+    """`android` is advertised only when the pack is genuinely usable: an SDK
+    root under ANDROID_HOME whose platform-tools/adb executes. An SDK dir
+    without adb (half-installed pack) must not be advertised."""
+    monkeypatch.setattr(runner.shutil, "which", lambda name: None)
+    monkeypatch.setattr(runner.importlib.util, "find_spec", lambda name: None)
+    sdk = tmp_path / "android-sdk"
+    (sdk / "platform-tools").mkdir(parents=True)
+    monkeypatch.setenv("ANDROID_HOME", str(sdk))
+
+    assert runner.detect_capabilities() == []  # no adb yet
+
+    adb = sdk / "platform-tools" / "adb"
+    adb.write_text("#!/bin/sh\necho Android Debug Bridge version 35.0.0\n")
+    adb.chmod(0o755)
+    assert runner.detect_capabilities() == ["android"]
 
 
 def test_upload_artifacts_skips_dependency_trees(monkeypatch, tmp_path):

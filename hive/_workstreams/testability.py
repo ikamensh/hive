@@ -30,7 +30,7 @@ from hive.models import (
 )
 
 CONTRACT_FILE = "testability.md"
-FIDELITY_HEADING = re.compile(r"^###\s*(local|docker)\b", re.I | re.M)
+FIDELITY_HEADING = re.compile(r"^###\s*(local|docker|android)\b", re.I | re.M)
 DECISION_KEY = re.compile(r"[^a-z0-9._-]+")
 # Contracts are meant to be read in one glance; a bigger one needs distillation,
 # and embedding it whole into every sweep would tax each task's context.
@@ -48,7 +48,8 @@ def contract_digest(text: str) -> str:
 
 
 def parse_fidelities(text: str) -> list[str]:
-    """Declared run fidelities: the `### local` / `### docker` subsections."""
+    """Declared run fidelities: the `### local` / `### docker` / `### android`
+    subsections."""
     return list(dict.fromkeys(m.group(1).lower() for m in FIDELITY_HEADING.finditer(text)))
 
 
@@ -306,9 +307,13 @@ def probe_task_instructions(contract: TestabilityContract) -> tuple[str, dict[st
 
 
 def _probe_capabilities(contract: TestabilityContract) -> list[str]:
-    # Docker is only a hard requirement when the contract offers no other way
-    # to stand the app up; otherwise the probe achieves the best it can.
-    return ["docker"] if contract.fidelities == ["docker"] else []
+    # A capability-bound fidelity (docker, android) is only a hard requirement
+    # when the contract offers no other way to stand the app up; otherwise the
+    # probe achieves the best it can.
+    for capability in ("docker", "android"):
+        if contract.fidelities == [capability]:
+            return [capability]
+    return []
 
 
 def queue_draft_task(

@@ -158,7 +158,26 @@ def detect_capabilities() -> list[str]:
             pass
     if _has_browser_driver():
         capabilities.append("browser")
+    if _android_sdk_ready():
+        capabilities.append("android")
     return capabilities
+
+
+def _android_sdk_ready() -> bool:
+    """The android environment pack is present: an SDK root with a working
+    adb. Build tooling (gradle, JDK) travels with the pack installer
+    (deploy/install_android_env.sh), so adb-under-SDK is the honest signal."""
+    sdk = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
+    if not sdk or not os.path.isdir(sdk):
+        return False
+    adb = os.path.join(sdk, "platform-tools", "adb")
+    if not os.access(adb, os.X_OK):
+        return False
+    try:
+        probe = subprocess.run([adb, "version"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return probe.returncode == 0
 
 
 def _has_browser_driver() -> bool:

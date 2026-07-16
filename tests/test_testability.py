@@ -64,11 +64,12 @@ def write_contract(repo, text=CONTRACT_MD):
 
 
 def test_parse_fidelities_properties():
-    """Fidelity detection reads the `### local`/`### docker` subsections only:
-    case-insensitive, deduplicated, unknown names ignored — so a contract
-    can't accidentally declare a fidelity via prose."""
+    """Fidelity detection reads the `### local`/`### docker`/`### android`
+    subsections only: case-insensitive, deduplicated, unknown names ignored —
+    so a contract can't accidentally declare a fidelity via prose."""
     assert parse_fidelities(CONTRACT_MD) == ["local"]
     assert parse_fidelities("## Run\n### LOCAL\nx\n### docker\ny\n### local\nz\n") == ["local", "docker"]
+    assert parse_fidelities("## Run\n### android\n./gradlew testDebugUnitTest\n") == ["android"]
     assert parse_fidelities("we also support docker somewhere in prose") == []
     assert parse_fidelities("### staging\nx\n") == []
     assert parse_fidelities("") == []

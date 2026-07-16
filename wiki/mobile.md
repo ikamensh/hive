@@ -1,8 +1,9 @@
 # Mobile targets: Android first, iOS as the second environment pack
 
 How hive works on software that cannot run on a generic cloud VM — mobile
-apps being the first case. Design decided 2026-07-15; nothing here is built
-yet except the primitives it reuses.
+apps being the first case. Design decided 2026-07-15; the android pack,
+project-level `required_capabilities`, and runner-VM provisioning
+(`deploy/create_runner_vm.sh --packs android`) landed 2026-07-16.
 
 ## The general primitive: environment packs
 
