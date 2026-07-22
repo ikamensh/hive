@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import time
 
-from hive._control.allowances import resolve_agent
+from hive._control.agent_choice import build_agent
 from hive._control.escalation import escalate
 from hive.models import (
     PLAN_ITEM_IN_FLIGHT,
@@ -409,7 +409,7 @@ def _make_plan_task(
         f"You are on git branch `{branch}` (already checked out).\n\n"
         f"--- ITEM DOCUMENT ---\n{build_work_doc(plan, item)}\n--- END ITEM DOCUMENT ---\n"
     )
-    backend, model = resolve_agent(project.agent_grants, backend, model)
+    backend, model = build_agent(store, project, backend, model)
     return store.put(
         Task(
             workspace_id=project.workspace_id,

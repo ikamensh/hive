@@ -19,6 +19,7 @@ from collections import defaultdict
 from typing import Callable
 
 from hive._control import allowances, pause
+from hive._control.agent_choice import available_backends
 from hive._control.allowances import utc_day_start
 from hive._control.escalation import escalate, resolve_open_todos
 from hive.fleet import DEFAULT_LIVENESS, Liveness
@@ -323,14 +324,7 @@ class Supervisor:
 
     def available_backends(self) -> set[str]:
         """Backends an online runner currently offers with available quota."""
-        online = {
-            r.id for r in self.store.list(Runner, workspace_id=self.workspace_id) if r.online()
-        }
-        return {
-            res.backend
-            for res in self.store.list(Resource, workspace_id=self.workspace_id)
-            if res.available() and res.runner_id in online
-        }
+        return available_backends(self.store, self.workspace_id)
 
     def available_capacity(self) -> dict[str, list[frozenset[str]]]:
         """Per backend, the capability sets online usable runners offer."""

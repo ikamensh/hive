@@ -23,7 +23,7 @@ from pathlib import Path
 
 import httpx
 
-from hive._control.allowances import resolve_agent
+from hive._control.agent_choice import build_agent
 from hive._integrations.github_repos import _GH_HEADERS, parse_repo_ref
 from hive.models import (
     Directive,
@@ -673,8 +673,9 @@ def _make_issue_task(
     prompt_name = prompt_name or ("resolve" if kind == TaskKind.resolve else "review")
     instructions, versions = _instructions(ws, prompt_name, context=context)
     # The one choke point for issue-pipeline agent choice: the configured
-    # default is remapped onto whatever the project's agent grants permit.
-    backend, model = resolve_agent(project.agent_grants, backend, model)
+    # default is remapped onto a live backend the fleet can serve, then onto
+    # whatever the project's agent grants permit.
+    backend, model = build_agent(store, project, backend, model)
     return store.put(
         Task(
             workspace_id=project.workspace_id,
