@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1345,10 +1346,39 @@ def _plan_id(client, project_id: str) -> str:
     return payload["plan"]["id"]
 
 
+_PROJECT_ID_RE = re.compile(r"[0-9a-f]{12}")  # new_id(): uuid4().hex[:12]
+
+
+def resolve_project_id(client, token: str) -> str:
+    """Accept a project id or the name `hive projects` shows; return the id.
+
+    Every project-scoped verb takes an id, but a name is the handle the user
+    actually sees, so `hive project gleaner` must resolve rather than 404. An
+    id resolves for free — only a name costs the lookup.
+    """
+    if _PROJECT_ID_RE.fullmatch(token):
+        return token
+    projects = client.get("/api/projects").raise_for_status().json()
+    if any(p["id"] == token for p in projects):
+        return token
+    matches = [p for p in projects if p["name"] == token]
+    if len(matches) == 1:
+        return matches[0]["id"]
+    if not matches:
+        known = ", ".join(sorted(p["name"] for p in projects)) or "(none)"
+        raise SystemExit(f"no project '{token}' — known: {known}")
+    raise SystemExit(
+        f"'{token}' names {len(matches)} projects; pass the id: "
+        + ", ".join(f"{p['name']}={p['id']}" for p in matches)
+    )
+
+
 def run(args: argparse.Namespace, client) -> dict | list:
     """Execute one command against an httpx-compatible client and return the
     response payload. Non-2xx responses raise (clear failure over silence)."""
     c = args.command
+    if getattr(args, "project_id", None):
+        args.project_id = resolve_project_id(client, args.project_id)
     if c in WS_KIND_BY_COMMAND:
         args.workstream_id = resolve_workstream(
             client, args.project_id, WS_KIND_BY_COMMAND[c], args.workstream_id

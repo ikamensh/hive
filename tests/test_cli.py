@@ -44,6 +44,21 @@ def harness(tmp_path):
     yield TestClient(create_app(store, supervisor, config)), store
 
 
+def test_project_verbs_accept_name_or_id(harness):
+    """`hive projects` shows names, so every project-scoped verb must resolve a
+    name — not 404 the way a raw id-only lookup did."""
+    client, _ = harness
+    project = client.post("/api/projects", json={"name": "widget"}).json()
+    pid = project["id"]
+
+    assert cli(client, "project", "widget")["project"]["id"] == pid
+    assert cli(client, "project", pid)["project"]["id"] == pid
+
+    with pytest.raises(SystemExit) as by_name:
+        cli(client, "project", "no-such-project")
+    assert "widget" in str(by_name.value)  # error lists what does exist
+
+
 def test_cli_drives_full_loop(harness, tmp_path, monkeypatch):
     client, store = harness
     merged = {}
@@ -850,15 +865,16 @@ def test_cli_pause_resume_map_to_workspace_patch():
 
 def test_cli_run_cancels_map_to_endpoints():
     rec = _Recorder()
-    cli(rec, "test-run", "p1", "ws1", "--scope", "full", "--max", "3")
-    cli(rec, "test-run", "p1", "ws1", "--story", "login", "--story", "signup")
+    pid = "0123456789ab"  # id-shaped: resolves without a projects lookup
+    cli(rec, "test-run", pid, "ws1", "--scope", "full", "--max", "3")
+    cli(rec, "test-run", pid, "ws1", "--story", "login", "--story", "signup")
     cli(rec, "test-cancel", "ep1")
     cli(rec, "issue-cancel", "run1")
     assert rec.calls == [
-        ("POST", "/api/projects/p1/workstreams/ws1/test-episodes",
+        ("POST", f"/api/projects/{pid}/workstreams/ws1/test-episodes",
          {"scope": "full", "story_keys": [], "max_stories": 3}),
         # naming stories implies the selected scope
-        ("POST", "/api/projects/p1/workstreams/ws1/test-episodes",
+        ("POST", f"/api/projects/{pid}/workstreams/ws1/test-episodes",
          {"scope": "selected", "story_keys": ["login", "signup"], "max_stories": 0}),
         ("POST", "/api/test-episodes/ep1/cancel", None),
         ("POST", "/api/issue-runs/run1/cancel", None),
@@ -871,27 +887,28 @@ def test_cli_issue_commands_map_to_endpoints():
     issue-sync refreshes the mirror without a run at all. machine-forget and
     decision-reopen hit the same routes as their UI buttons."""
     rec = _Recorder()
-    cli(rec, "issue-run", "p1", "ws1")
-    cli(rec, "issue-run", "p1", "ws1", "--issue", "3", "--issue", "7")
-    cli(rec, "issue-run", "p1", "ws1", "--scan-only")
-    cli(rec, "issue-sync", "p1", "ws1")
+    pid = "0123456789ab"  # id-shaped: resolves without a projects lookup
+    cli(rec, "issue-run", pid, "ws1")
+    cli(rec, "issue-run", pid, "ws1", "--issue", "3", "--issue", "7")
+    cli(rec, "issue-run", pid, "ws1", "--scan-only")
+    cli(rec, "issue-sync", pid, "ws1")
     cli(rec, "machine-forget", "m1")
-    cli(rec, "decision-reopen", "p1", "D-002", "--workstream", "ws9")
+    cli(rec, "decision-reopen", pid, "D-002", "--workstream", "ws9")
     assert rec.calls == [
-        ("POST", "/api/projects/p1/workstreams/ws1/issue-runs",
+        ("POST", f"/api/projects/{pid}/workstreams/ws1/issue-runs",
          {"scope": "all_open_now", "issue_numbers": []}),
-        ("POST", "/api/projects/p1/workstreams/ws1/issue-runs",
+        ("POST", f"/api/projects/{pid}/workstreams/ws1/issue-runs",
          {"scope": "selected", "issue_numbers": [3, 7]}),
-        ("POST", "/api/projects/p1/workstreams/ws1/issue-runs",
+        ("POST", f"/api/projects/{pid}/workstreams/ws1/issue-runs",
          {"scope": "scan_only", "issue_numbers": []}),
-        ("POST", "/api/projects/p1/workstreams/ws1/sync", None),
+        ("POST", f"/api/projects/{pid}/workstreams/ws1/sync", None),
         ("DELETE", "/api/machines/m1", None),
-        ("POST", "/api/projects/p1/decisions/D-002/reopen", {"workstream_id": "ws9"}),
+        ("POST", f"/api/projects/{pid}/decisions/D-002/reopen", {"workstream_id": "ws9"}),
     ]
 
     # naming issues and --scan-only contradict each other; argparse refuses
     with pytest.raises(SystemExit):
-        cli(_Recorder(), "issue-run", "p1", "ws1", "--issue", "3", "--scan-only")
+        cli(_Recorder(), "issue-run", pid, "ws1", "--issue", "3", "--scan-only")
 
 
 def test_cli_issue_run_and_sync(harness, monkeypatch):
