@@ -203,4 +203,37 @@ systemctl daemon-reload
 systemctl enable --now hive-runner
 systemctl restart hive-runner
 
+# --- spend killswitch (systemd timer) ---
+# Runs from a copy, not the checkout: the guard must survive a broken /opt/hive,
+# and it powers this VM off when it trips, so it cannot depend on hive running.
+install -m 755 /opt/hive/deploy/spend_guard.py /usr/local/lib/hive-spend-guard.py
+cat > /etc/systemd/system/hive-spend-guard.service <<EOF
+[Unit]
+Description=Scaleway spend killswitch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/hive/scw.env
+ExecStart=/usr/bin/python3 /usr/local/lib/hive-spend-guard.py --kill-at ${HIVE_SPEND_KILL_AT:-1000}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > /etc/systemd/system/hive-spend-guard.timer <<'EOF'
+[Unit]
+Description=Run the Scaleway spend killswitch every 30 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl enable --now hive-spend-guard.timer
+
 echo "=== hive startup done $(date -Is) ==="
