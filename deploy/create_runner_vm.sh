@@ -52,8 +52,9 @@ for i in $(seq 1 24); do
 done
 
 # Scaleway credentials for boot-time secret fetches.
+. "$(dirname "$0")/hive_scw_key.sh"
 $SSH "mkdir -p /etc/hive && umask 077 && cat > /etc/hive/scw.env" <<EOF
-SCW_SECRET_KEY=$(scw config get secret-key)
+SCW_SECRET_KEY=$HIVE_SCW_SECRET_KEY
 SCW_PROJECT_ID=$(scw config get default-project-id)
 SCW_REGION=$REGION
 EOF
