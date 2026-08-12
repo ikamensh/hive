@@ -135,9 +135,14 @@ def find_token() -> str:
     sys.exit("no Scaleway secret key: set SCW_SECRET_KEY, or configure the scw CLI")
 
 
-def trip(scw: Scaleway, project: str, access_key: str, dry_run: bool) -> list[str]:
-    """Stop the meter, then remove the key. Order matters: deleting the key we
-    authenticate with revokes our own ability to power anything off."""
+def trip(scw: Scaleway, project: str, access_key: str, dry_run: bool, delete_key: bool = True) -> list[str]:
+    """Stop the meter, then optionally remove the key. Order matters: deleting the
+    key we authenticate with revokes our own ability to power anything off.
+
+    Key deletion is off when running on the agent VM. Deleting a key needs org-wide
+    IAM rights, and a box where agents run as root is the last place to put those —
+    the poweroffs are the part that actually stops the spend.
+    """
     actions = []
     for zone in ZONES:
         for server in scw.servers(zone, project):
@@ -146,9 +151,12 @@ def trip(scw: Scaleway, project: str, access_key: str, dry_run: bool) -> list[st
             actions.append(f"poweroff {server['name']} ({server['commercial_type']}, {zone})")
             if not dry_run:
                 scw.poweroff(zone, server["id"])
-    actions.append(f"delete api key {access_key}")
-    if not dry_run:
-        scw.delete_api_key(access_key)
+    if delete_key:
+        actions.append(f"delete api key {access_key}")
+        if not dry_run:
+            scw.delete_api_key(access_key)
+    else:
+        actions.append(f"keep api key {access_key} (--no-delete-key)")
     return actions
 
 
@@ -159,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--scope", default="org", help="'org' for the whole organization's credit burn, or a project name (e.g. 'hive')")
     p.add_argument("--project", default=HIVE_PROJECT, help="project whose instances get powered off when tripped")
     p.add_argument("--kill-key", default=HIVE_KEY, help="access key to delete when tripped")
+    p.add_argument("--no-delete-key", action="store_true", help="power off only; skip key deletion (needs org IAM rights the agent VM must not have)")
     p.add_argument("--dry-run", action="store_true", help="report what would happen, touch nothing")
     args = p.parse_args(argv)
 
@@ -177,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
     if state != "kill":
         return {"ok": 0, "warn": 1}[state]
 
-    for action in trip(scw, args.project, args.kill_key, args.dry_run):
+    for action in trip(scw, args.project, args.kill_key, args.dry_run, delete_key=not args.no_delete_key):
         print(f"{'would ' if args.dry_run else ''}{action}")
     return 2
 

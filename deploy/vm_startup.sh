@@ -216,7 +216,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/hive/scw.env
-ExecStart=/usr/bin/python3 /usr/local/lib/hive-spend-guard.py --kill-at ${HIVE_SPEND_KILL_AT:-1000}
+ExecStart=/usr/bin/python3 /usr/local/lib/hive-spend-guard.py --kill-at ${HIVE_SPEND_KILL_AT:-1000} --no-delete-key
 
 [Install]
 WantedBy=multi-user.target

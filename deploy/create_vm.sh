@@ -25,8 +25,27 @@ IP=$(scw instance server get $ID zone=$ZONE -o json | json 'json.load(sys.stdin)
 SSH="ssh -o StrictHostKeyChecking=accept-new root@$IP"
 
 # Scaleway credentials for boot-time secret fetches (vm_startup.sh).
+#
+# Deliberately NOT `scw config get secret-key`: that is a personal key, and a
+# personal key inherits its owner's group policies — for an org Administrator
+# that is AllProductsFullAccess org-wide. This file lands in /etc/hive/env, which
+# is the EnvironmentFile for hive-runner, so whatever goes here is an environment
+# variable in every agent process on this box. It must be an IAM *application*
+# key scoped to the hive project (see ~/secrets/scaleway.md).
+HIVE_SCW_SECRET_KEY=${HIVE_SCW_SECRET_KEY:-$(awk '/^## hive-vm/,/^## [^h]/ {if ($1 == "Secret" && $2 == "Key:") print $3}' ~/secrets/scaleway.md)}
+[ -n "$HIVE_SCW_SECRET_KEY" ] || { echo "no hive-vm key: set HIVE_SCW_SECRET_KEY" >&2; exit 1; }
+
+# Least privilege is a property, so assert it rather than trusting the source:
+# a key that can read IAM can also mint itself more permissions. 403 is the pass.
+iam_status=$(curl -s -o /dev/null -w '%{http_code}' -H "X-Auth-Token: $HIVE_SCW_SECRET_KEY" \
+  "https://api.scaleway.com/iam/v1alpha1/policies?organization_id=$(scw config get default-organization-id)")
+[ "$iam_status" = "403" ] || {
+  echo "refusing to push this key: it reads IAM (HTTP $iam_status, want 403) — too privileged for an agent VM" >&2
+  exit 1
+}
+
 $SSH "mkdir -p /etc/hive && umask 077 && cat > /etc/hive/scw.env" <<EOF
-SCW_SECRET_KEY=$(scw config get secret-key)
+SCW_SECRET_KEY=$HIVE_SCW_SECRET_KEY
 SCW_PROJECT_ID=$(scw config get default-project-id)
 SCW_REGION=$REGION
 EOF

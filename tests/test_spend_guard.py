@@ -109,6 +109,15 @@ def test_dry_run_changes_nothing():
     assert any("poweroff" in a for a in actions) and any("delete" in a for a in actions)
 
 
+def test_no_delete_key_still_stops_the_meter():
+    """The agent VM runs without IAM rights, so it powers off and leaves the key.
+    The poweroff is the part that stops spend; dropping it would make the flag a no-op guard."""
+    scw = FakeScaleway({}, {"fr-par-1": [{"id": "s1", "name": "hive-vm", "commercial_type": "PLAY2-NANO", "state": "running"}]})
+    spend_guard.trip(scw, "proj", "SCWKEY", dry_run=False, delete_key=False)
+    assert scw.powered_off == ["s1"]
+    assert scw.deleted == []
+
+
 def test_trip_stops_running_instances_then_deletes_the_key():
     scw = FakeScaleway({}, {"fr-par-1": [
         {"id": "running-1", "name": "hive-vm", "commercial_type": "PLAY2-NANO", "state": "running"},
