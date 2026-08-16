@@ -342,7 +342,6 @@ def test_spend_accumulates_across_attempts():
     store = MemoryStore()
     processor, _ = make_processor(store, "/tmp")
     project, conversation, task = make_intake_turn(store)
-    runner = store.put(Runner(name="box", backends=["gemini-cli"]))
     resource = store.put(
         Resource(machine_id="m-1", runner_id="r-1", backend="gemini-cli")
     )
