@@ -20,6 +20,7 @@ CONFIG_KEYS: dict[str, str] = {
     "GEMINI_API_KEY": "Gemini API key for the orchestrator",
     "HIVE_ORCH_PROVIDER": "orchestrator provider: auto | openai | gemini",
     "HIVE_ORCH_MODEL": "pin a specific orchestrator model",
+    "HIVE_OPENCODE_MODEL": "default OpenCode worker/probe model (provider/model)",
     "HIVE_OPENAI_BASE_URL": "OpenAI-compatible endpoint base URL",
     "HIVE_GCP_PROJECT": "Firestore project for required managed runtime state",
     "HIVE_GCS_BUCKET": "GCS bucket for required managed blob state",

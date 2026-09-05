@@ -11,6 +11,7 @@ only the runner machine needs the agent CLIs installed.
 from __future__ import annotations
 
 import re
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -118,6 +119,27 @@ def _gemini_cli(model: str, resume_session: str = ""):
     return GeminiCliSession(model=model, **kwargs) if model else GeminiCliSession(**kwargs)
 
 
+def _opencode(model: str, resume_session: str = ""):
+    from kodo.sessions.opencode import OpenCodeSession
+
+    return OpenCodeSession(
+        model=model or opencode_model(),
+        resume_session_id=resume_session or None,
+    )
+
+
+def opencode_model() -> str:
+    return os.environ.get("HIVE_OPENCODE_MODEL", "opencode/muse-spark-1.3-contributor-free")
+
+
+def included_model(backend: str, model: str) -> bool:
+    """Backends admitted by the included-only policy (CLIs must use subscription logins)."""
+    return backend in {"claude", "codex", "cursor"} or (
+        backend == "opencode" and (model or opencode_model()).startswith("opencode/")
+        and (model or opencode_model()).endswith("-free")
+    )
+
+
 @dataclass(frozen=True)
 class Backend:
     """One coding-agent backend. `make_session(model)` builds a kodo session
@@ -156,6 +178,11 @@ class BackendDiscovery:
 REGISTRY: dict[str, Backend] = {
     b.name: b
     for b in (
+        Backend(
+            "opencode", _opencode, binary="opencode", preflight=("opencode", "--version"),
+            login_hint="Run `opencode` and `/connect` on the runner; select OpenCode Zen.",
+            licensing="machine_bound",
+        ),
         Backend(
             "claude",
             _claude,

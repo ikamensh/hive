@@ -73,7 +73,8 @@ def test_empty_store_has_every_section():
     assert view["subscriptions"]["subscriptions"] == []
     assert view["subscriptions"]["unregistered"] == []
     # an empty org owns access to nothing hive supports
-    assert set(view["subscriptions"]["unowned"]) == {"claude", "codex", "cursor", "gemini-cli"}
+    from hive.agents import BACKEND_NAMES
+    assert set(view["subscriptions"]["unowned"]) == set(BACKEND_NAMES)
     [watch] = view["autonomy"]
     assert watch["job"] == "dark_machine_watch"
     assert watch["action_now"] == "" and watch["reason"]

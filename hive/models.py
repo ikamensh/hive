@@ -159,6 +159,11 @@ class Project(BaseModel):
     # usage (subscription CLIs report ~zero cost), so sessions/day is the cap
     # that actually meters it. Empty = anything allowed.
     agent_grants: list[AgentGrant] = []
+    build_backend: str = ""  # explicit plan role; empty uses automatic selection
+    build_model: str = ""
+    review_backend: str = ""  # empty uses a fresh session on the builder's backend
+    review_model: str = ""
+    included_only: bool = False  # subscription CLIs/free OpenCode models; no paid planner calls
     # Machine environments every task of this project needs (e.g. ["android"]):
     # dispatch only sends the project's work to runners advertising them all.
     required_capabilities: list[str] = []

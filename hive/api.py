@@ -183,6 +183,11 @@ class ProjectCreate(BaseModel):
 
 
 class ProjectPatch(BaseModel):
+    build_backend: str | None = None
+    build_model: str | None = None
+    review_backend: str | None = None
+    review_model: str | None = None
+    included_only: bool | None = None
     name: str | None = None
     archived: bool | None = None
     spec_repo: str | None = None
@@ -1127,6 +1132,8 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         """Ask the planner for a plan proposal (fire-and-forget: the draft
         appears when the invocation lands)."""
         project = require_project(project_id, ctx)
+        if project.included_only:
+            raise HTTPException(400, "Paid planning is disabled for this project; import a plan or disable included-only mode.")
         if (existing := plans.active_plan(store, project)) and existing.status == PlanStatus.approved:
             raise HTTPException(400, "an approved plan is executing; abandon it first")
         supervisor.wake(
@@ -1644,6 +1651,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def patch_project(project_id: str, body: ProjectPatch, ctx: AuthContext = Depends(editor)):
         project = require_project(project_id, ctx)
         updates = body.model_dump(exclude_none=True)
+        for role in ("build", "review"):
+            backend = updates.get(f"{role}_backend")
+            if backend and backend not in BACKEND_NAMES:
+                raise HTTPException(400, f"unknown {role} backend: {backend}")
         note = updates.pop("new_iteration_note", None)
         if updates.pop("agent_grants", None) is not None:
             problem = allowances.grant_problems(body.agent_grants, BACKEND_NAMES)
@@ -2452,6 +2463,9 @@ def make_todo_triage(store, config: Config) -> Callable[[], None]:
         return adapter.step().text
 
     def todo_triage() -> None:
+        if not any(not p.included_only and p.daily_budget_usd > 0
+                   for p in store.list(Project, workspace_id=config.workspace_id)):
+            return
         triage_open_todos(store, transport, workspace_id=config.workspace_id)
 
     return todo_triage

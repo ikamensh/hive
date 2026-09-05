@@ -240,6 +240,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="raw payload instead of the readable summary")
 
     p = sub.add_parser("set", help="patch project settings")
+    p.add_argument("--builder", help="plan builder: backend[=model], e.g. opencode=opencode/muse-spark-1.3-contributor-free")
+    p.add_argument("--reviewer", help="independent reviewer: backend[=model], e.g. codex")
+    p.add_argument("--included-only", choices=["true", "false"], help="use subscription CLIs/free models and disable paid planner calls")
     p.add_argument("project_id")
     p.add_argument("--autonomy")
     p.add_argument("--ci-autofix", choices=["true", "false"], help="poll repo CI and auto-fix red builds")
@@ -1519,9 +1522,13 @@ def run(args: argparse.Namespace, client) -> dict | list:
         return data[args.part] if args.part else data
     elif c == "set":
         body = {}
+        for flag, role in (("builder", "build"), ("reviewer", "review")):
+            if (choice := getattr(args, flag)) is not None:
+                backend, _, model = choice.partition("=")
+                body[f"{role}_backend"], body[f"{role}_model"] = backend, model
         if args.autonomy is not None:
             body["autonomy"] = args.autonomy
-        for flag in ("ci_autofix", "testing_auto", "paused"):
+        for flag in ("ci_autofix", "testing_auto", "paused", "included_only"):
             if (v := getattr(args, flag)) is not None:
                 body[flag] = v == "true"
         if args.daily_budget is not None:

@@ -334,6 +334,24 @@ def test_transient_plan_retry_preserves_progress_and_stops_after_limit(tmp_path)
     assert not store.list(Task, status=TaskStatus.pending)
 
 
+def test_plan_uses_explicit_builder_and_independent_reviewer(tmp_path):
+    """The configured roles apply to the first item, review, and every subsequent item."""
+    store = MemoryStore()
+    project = store.put(Project(name="roles", spec_repo="https://github.com/o/r.git",
+                                build_backend="opencode", build_model="opencode/test-free",
+                                review_backend="claude", review_model="default-review"))
+    activated_plan(store, project)
+    processor, _ = make_processor(store, tmp_path)
+    for _ in ITEMS:
+        builder = only_resolve_task(store, project)
+        assert (builder.backend, builder.model) == ("opencode", "opencode/test-free")
+        report(store, processor, builder, "built\nOUTCOME: FIXED")
+        reviewer = store.list(Task, status=TaskStatus.pending)[0]
+        assert (reviewer.backend, reviewer.model) == ("claude", "default-review")
+        assert not reviewer.session_handle
+        report(store, processor, reviewer, "good\nREVIEW: ACCEPT")
+
+
 def test_resolve_blocked_parks_item_and_stalls_the_queue(tmp_path):
     """BLOCKED parks the item with the agent's own report as the reason (the
     marker line stripped) and — strict sequencing — starts nothing behind it."""
@@ -576,6 +594,13 @@ def test_plan_api_review_loop(app, monkeypatch):
     monkeypatch.setattr("hive.api.SpecRepo", FakeSpecRepo)
     FakeSpecRepo.commits = {}
     pid = _api_project(client)
+    from test_cli import cli
+    cli(client, "set", pid, "--builder", "opencode=opencode/test-free", "--reviewer", "codex",
+        "--included-only", "true", "--daily-budget", "0")
+    configured = store.get(Project, pid)
+    assert configured.build_backend == "opencode" and configured.build_model == "opencode/test-free"
+    assert configured.review_backend == "codex" and configured.included_only
+    assert client.patch(f"/api/projects/{pid}", json={"review_backend": "typo"}).status_code == 400
 
     payload = client.post(
         f"/api/projects/{pid}/plan",

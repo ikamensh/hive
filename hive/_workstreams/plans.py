@@ -436,7 +436,15 @@ def _make_plan_task(
         f"You are on git branch `{branch}` (already checked out).\n\n"
         f"--- ITEM DOCUMENT ---\n{build_work_doc(plan, item)}\n--- END ITEM DOCUMENT ---\n"
     )
-    backend, model = build_agent(store, project, backend, model)
+    role = "build" if kind == TaskKind.resolve else "review"
+    selected = getattr(project, f"{role}_backend")
+    if selected:
+        backend, model = selected, getattr(project, f"{role}_model")
+    else:
+        backend, model = build_agent(store, project, backend, model)
+    if backend == "opencode" and not model:
+        from hive.agents.backends import opencode_model
+        model = opencode_model()
     return store.put(
         Task(
             workspace_id=project.workspace_id,

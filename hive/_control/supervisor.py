@@ -19,6 +19,7 @@ from collections import defaultdict
 from typing import Callable
 
 from hive._control import allowances, pause
+from hive.agents.backends import included_model
 from hive._control.agent_choice import available_backends
 from hive._control.allowances import utc_day_start
 from hive._control.escalation import escalate, resolve_open_todos
@@ -227,7 +228,12 @@ def state_reason(
             )
         return "waiting for agent capacity — check the machines page"
     if state == ProjectState.blocked_budget:
-        if spend >= project.daily_budget_usd:
+        if project.included_only:
+            disallowed = [t for t in store.list(Task, project_id=project.id, status=TaskStatus.pending)
+                          if not included_model(t.backend, t.model)]
+            if disallowed:
+                return "included-only policy blocks this model — select a subscription CLI or a free OpenCode model"
+        if not project.included_only and spend >= project.daily_budget_usd:
             return (
                 f"daily budget spent (${spend:.2f} of ${project.daily_budget_usd:.2f}) — "
                 "paid work resumes at UTC midnight; raise the budget to continue now"
@@ -365,7 +371,7 @@ class Supervisor:
 
     def over_budget(self, project: Project) -> bool:
         """The daily budget caps every spender; 0 means paid work is paused."""
-        return self.spend_today(project.id) >= project.daily_budget_usd
+        return not project.included_only and self.spend_today(project.id) >= project.daily_budget_usd
 
     def refresh_state(self, project: Project) -> ProjectState:
         conversation = (
@@ -696,8 +702,6 @@ class Supervisor:
     def _grant_blocked(self, project: Project, all_tasks: list[Task]) -> set[str]:
         """Pending task ids the project's agent allowance blocks right now."""
         grants = project.agent_grants
-        if not grants:
-            return set()
         left = allowances.remaining(
             grants, allowances.sessions_today(all_tasks, utc_day_start())
         )
@@ -706,7 +710,8 @@ class Supervisor:
             for t in all_tasks
             if t.status == TaskStatus.pending
             and not allowances.exempt(t)
-            and not allowances.admits(grants, left, t.backend, t.model)
+            and (not allowances.admits(grants, left, t.backend, t.model)
+                 or (project.included_only and not included_model(t.backend, t.model)))
         }
 
     def _dispatch_unlocked(self, project: Project) -> int:
@@ -750,6 +755,8 @@ class Supervisor:
         dispatched = 0
         for task in tasks:
             if task.status != TaskStatus.pending:
+                continue
+            if project.included_only and not included_model(task.backend, task.model):
                 continue
             if _serializes_repo(task) and task.repo in busy_repos:
                 continue
@@ -989,6 +996,9 @@ class Supervisor:
                 asyncio.get_running_loop().create_task(self._run_issue_scan(project.id))
             self.dispatch(project)
             state = self.refresh_state(project)
+            if project.included_only:
+                self._events.pop(project.id, None)
+                continue  # approved plans advance deterministically, without paid planning
             if state == ProjectState.intake:
                 # Intake is a runner-backed scout conversation. It can dispatch
                 # tasks above, but it is not the build orchestrator's turn yet.

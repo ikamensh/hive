@@ -28,6 +28,26 @@ The instructions below describe the managed alternative: the chief runs on your
 laptop while Firestore and GCS hold shared state. `hive run` without `--local`
 continues to require that managed configuration.
 
+For an existing plan project, select included capacity and separate roles:
+
+```bash
+uv run hive set <project> --included-only true --daily-budget 0 \
+  --builder opencode=opencode/muse-spark-1.3-contributor-free --reviewer codex \
+  --grant 'opencode:unlimited' --grant 'codex:5/day'
+```
+
+Included-only mode disables paid planner calls and admits Claude, Codex, and
+Cursor CLIs using your existing subscription logins, plus explicitly free
+OpenCode Zen models. Configure those CLIs with subscription authentication;
+this policy selects backends/models, not your provider account's billing mode.
+Session grants still apply at a zero dollar budget. To let Hive draft plans
+using an API key again, set `--included-only false` and a positive daily budget.
+
+OpenCode must be installed and connected (`opencode`, then `/connect`). Its
+default is Muse Spark 1.3 Contributor Free; `HIVE_OPENCODE_MODEL` overrides the
+default for probes and unpinned work. Contributor Free permits using prompts
+and completions for model training; see [OpenCode Zen](https://opencode.ai/docs/zen/).
+
 ### 0. Prerequisites
 
 - **[uv](https://docs.astral.sh/uv/)** (Python runner; everything below is `uv run …`).

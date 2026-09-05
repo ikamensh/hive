@@ -7,9 +7,32 @@ the provider session handle lands on the result.
 """
 
 import json
+import os
+import sys
 
 import hive.agents.run as run_mod
 from hive.agents import run_agent, session_handle
+
+
+def test_opencode_runs_through_the_agent_lifecycle(tmp_path, monkeypatch):
+    """OpenCode's JSON events, selected model, and resumed session cross the real adapter."""
+    cli = tmp_path / "opencode"
+    cli.write_text(f"#!{sys.executable}\n" + '''import json, sys
+from pathlib import Path
+Path("arguments.json").write_text(json.dumps(sys.argv[1:]))
+print(json.dumps({"type":"text", "sessionID":"session-test", "part":{"text":"done"}}))
+print(json.dumps({"type":"step_finish", "part":{"tokens":{"input":3,"output":2}}}))
+''')
+    cli.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    result = run_agent("opencode", "do it", tmp_path, model="opencode/test-free",
+                       resume_session="session-test", timeout_s=10)
+    args = json.loads((tmp_path / "arguments.json").read_text())
+    assert args[:3] == ["run", "--format", "json"]
+    assert args[args.index("--model")+1] == "opencode/test-free"
+    assert args[args.index("--session")+1] == "session-test"
+    assert result.text == "done" and not result.is_error
+    assert result.session_handle == "session-test"
 
 
 class FakeSession:

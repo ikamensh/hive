@@ -44,6 +44,35 @@ from hive.models import (
 )
 from hive.persistence.store import MemoryStore
 
+
+def test_included_only_runs_at_zero_budget_without_a_planner():
+    """Included work still advances at $0; paid models and planner calls are excluded."""
+    import asyncio
+    from hive._workstreams import plans
+    store = MemoryStore()
+    project = store.put(Project(name="free", spec_repo="repo", daily_budget_usd=0,
+                                included_only=True, build_backend="opencode",
+                                build_model="opencode/test-free", testing_auto=False))
+    plan = plans.create_draft(store, project, "goal", [{"title": "first"}])
+    plans.approve_all(store, plan)
+    plans.activate(store, project, plan)
+    runner = store.put(Runner(name="local", backends=["opencode"]))
+    store.put(Resource(runner_id=runner.id, backend="opencode", usability_status=ResourceUsability.usable))
+    calls = []
+    supervisor = Supervisor(store, lambda *args: calls.append(args))
+    supervisor.wake(project.id, "plan approved")
+    async def tick():
+        await supervisor._step()
+        await asyncio.sleep(0)
+    asyncio.run(tick())
+    assert not calls
+    assert len(store.list(Task, status=TaskStatus.running)) == 1
+    running = store.list(Task, status=TaskStatus.running)[0]
+    store.update(Task, running.id, lambda t: setattr(t, "status", TaskStatus.done))
+    store.put(Task(project_id=project.id, workstream_id="paid", repo="repo", instructions="no",
+                   backend="opencode", model="opencode/paid-model"))
+    assert supervisor.dispatch(project) == 0
+
 CHEAP = AgentGrant(backends=["codex"], models=["gpt-5.4-mini"])
 ANY_5 = AgentGrant(sessions_per_day=5)
 
