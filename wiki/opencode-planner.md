@@ -36,7 +36,13 @@ Integration tests exercise executable CLI fixtures through the real tool loop
 and planner, including draft persistence, validation-before-side-effects,
 raw JSON triage, timeout cleanup, and provider errors. A live Muse smoke also
 completed a two-round tool/result exchange and a separate JSON triage call.
-That establishes transport behavior, not general planning quality.
+`uv run python scripts/smoke_opencode_planner.py` exercises the actual seven-tool
+planner surface in an isolated in-memory project: it requires exactly one
+two-item draft, a final response within three rounds, and no execution tasks.
+This caught a temporal prompt bug: treating the initial snapshot as permanently
+authoritative made the planner repeat successful calls. Later tool results now
+explicitly update the snapshot's state; the same live case finishes in two rounds.
+These checks establish transport behavior, not general planning quality.
 
 The adapter uses OpenCode's documented [CLI](https://opencode.ai/docs/cli/)
 and [permission configuration](https://opencode.ai/docs/permissions/).
