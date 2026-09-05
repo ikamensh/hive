@@ -312,15 +312,17 @@ def _codex_usage(sessions_dir: Path | None = None) -> dict | None:
 
 def _codex_snapshot(limits: dict, timestamp: str) -> dict:
     windows = []
-    for key, kind in (("primary", "session"), ("secondary", "weekly")):
+    for key in ("primary", "secondary"):
         block = limits.get(key) or {}
         if not block:
             continue
+        window_minutes = int(block.get("window_minutes") or 0)
         windows.append(
             {
-                "kind": kind,
+                # Codex can put a weekly window in either native slot.
+                "kind": {300: "session", 10080: "weekly"}.get(window_minutes, key),
                 "used_percent": float(block.get("used_percent") or 0.0),
-                "window_minutes": int(block.get("window_minutes") or 0),
+                "window_minutes": window_minutes,
                 "resets_at": float(block.get("resets_at") or 0.0),
                 "severity": "exceeded" if limits.get("rate_limit_reached_type") == key else "",
             }

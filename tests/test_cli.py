@@ -31,6 +31,67 @@ def cli(client, *argv: str):
     return run(build_parser().parse_args(argv), client)
 
 
+@pytest.mark.parametrize(("durations", "kinds", "reached"), [
+    pytest.param((10080, None), ("weekly", None), None, id="weekly-primary-only"),
+    pytest.param((10080, 300), ("weekly", "session"), "secondary", id="swapped-native-slots"),
+    pytest.param((10080, 300), ("weekly", "session"), "primary", id="weekly-primary-exceeded"),
+    pytest.param((90, 0), ("primary", "secondary"), "primary", id="unknown-and-missing-duration"),
+])
+def test_codex_window_cadence_survives_collector_heartbeat_and_cli(
+    harness, tmp_path, monkeypatch, durations, kinds, reached,
+):
+    """Native slots do not imply a cadence: actual rollout durations reach the
+    operator intact, while severity and cooldown stay attached to the right slot."""
+    import json
+    import time
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from hive.agents import collect_usage
+    from hive.cli import format_show
+
+    now = time.time()
+    native = {"plan_type": "pro", "rate_limit_reached_type": reached}
+    expected = {}
+    for slot, duration, kind in zip(("primary", "secondary"), durations, kinds):
+        if duration is None:
+            native[slot] = None
+            continue
+        block = {"used_percent": 99 if slot == reached else 47,
+                 "resets_at": now + (6 * 86400 if slot == "primary" else 7200)}
+        if duration:
+            block["window_minutes"] = duration
+        native[slot] = block
+        expected[kind] = (duration, block["used_percent"], block["resets_at"],
+                          "exceeded" if slot == reached else "")
+    day = tmp_path / ".codex/sessions/2026/09/06"
+    day.mkdir(parents=True)
+    (day / "rollout-test.jsonl").write_text(json.dumps({
+        "timestamp": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+        "payload": {"rate_limits": native},
+    }) + "\n")
+    with monkeypatch.context() as isolated_home:
+        isolated_home.setattr(Path, "home", lambda: tmp_path)
+        snapshot = collect_usage("codex")
+    assert snapshot is not None
+    client, _ = harness
+    response = client.post("/api/runners/register", json={
+        "name": "raven", "backends": ["codex"], "usage_snapshots": {"codex": snapshot},
+    }, headers=RUNNER_HEADERS)
+    assert response.status_code == 200
+    payload = cli(client, "show", "limits")
+    windows = payload[0]["windows"]
+    assert {w["kind"]: (w["window_minutes"], w["used_percent"], w["resets_at"], w["severity"])
+            for w in windows} == expected
+    assert payload[0]["cooldown_until"] == (native[reached]["resets_at"] if reached else 0)
+    text = format_show(payload, "limits")
+    rendered = [line.split() for line in text.splitlines() if "[scope:" in line]
+    assert {line[0] for line in rendered} == set(expected)
+    assert len(rendered) == len(expected)
+    for _, percent, _, _ in expected.values():
+        assert f"{percent}% used" in text
+
+
 @pytest.fixture
 def harness(tmp_path):
     store = MemoryStore()
