@@ -1,7 +1,8 @@
 # Live experiment progress
 
-The acceptance criteria in `metrics.md` remain the completion contract. Two of
-nine items have landed; the event simulation and dashboard are still pending.
+The acceptance criteria in `metrics.md` remain the completion contract. Three of
+nine items have landed; orders, stochastic behavior, replay, and the dashboard
+are still pending.
 
 ## Install and evidence
 
@@ -126,12 +127,56 @@ nine items have landed; the event simulation and dashboard are still pending.
     suitable task boundary. This was an observer-imposed maintenance wait, not
     a capacity failure; `evidence/resume-during-safeguard-work.json` records the
     transition. The prepared drill has not changed live quota state.
+17. Removed the obsolete quota-triggered planner wakeup: deterministic dispatch
+    owns provider fallback, so a capacity wait must not prompt plan amendments.
+    Fixed the fleet-pause explanation in project/CLI output. A separate API-to-
+    restart regression caught the next-goal gate: human requests now persist as
+    `pending_iteration_goal`, produce one draft after restart, and are consumed
+    when that draft is created. Completed goals cannot trigger unsolicited plans.
+18. Fixed explicit CLI-version and configuration refusals. They now create an
+    actionable runtime-repair todo and an immutable successor on the same branch,
+    allowing another configured provider to continue. The incompatible CLI stays
+    unavailable until the exact failed model probes successfully; a default-model
+    probe cannot clear it. No quota exhaustion is inferred from a runtime fault.
+19. Completed shared OpenCode model isolation in Kodo `4040284`, pinned by Hive
+    `e386f96`: private configuration discovery, one permitted provider/model,
+    pinned native agents and auxiliaries, fixed titles, and a check of resolved
+    settings before model execution. Real hostile personal/managed settings were
+    excluded or rejected before a paid model call. Muse built and tested code in
+    35.1 seconds; a fresh reviewer accepted it in 54.5 seconds, and a native
+    subagent's metadata confirms the same free model. Nested repository
+    instructions were delivered. Preflight and native-tool children now stop on
+    cancellation; structured errors retain HTTP status. Planner parsing selects
+    the final response without joining preceding commentary into its JSON. The
+    real normal-goal planner passed in 23.8 seconds and three rounds, producing
+    one draft and no execution tasks. Evidence: `evidence/muse-isolation/`.
+20. Astra pushed item three at `213e65fa0ec2bf42e062d7aec84b3faabe7d3d4e`.
+    Opus independently fuzzed pacing and multi-press conservation, accepted it
+    without edits, and Hive ran the 185-test gate before landing it in `50c28f0`.
+    A separate clean clone passed 17 external checks across 13 CLI fixtures and
+    four pacing comparisons: the one-hour 480-part case, starvation/deliveries,
+    per-event material conservation including WIP, final-horizon boundaries, and
+    canonical trace equality. The reviewed SHA and main have identical trees.
+    Evidence: `evidence/third-landing.json` and `evidence/item3-independent/`.
+21. Full Hive validation at `e386f96`: 661 tests passed, one skipped (119.21s),
+    lint passed, and wheel/source builds passed in a separate acceptance
+    environment. Stopped the idle chief, updated its environment to the tested
+    dependency, and applied a **300-second synthetic** scoped capacity drill.
+    Actual provider snapshots were preserved. Restarted chief 33865, verified
+    the truthful paused CLI state and free-planner banner, then resumed. Real
+    item-four task `5cfa44645981` selected free Muse at `1788644131.147882` after
+    skipping Astra, Fable, and Opus; it is building on `hive/plan-8b390602`.
+    This proves live availability-based fallback at a task boundary, not a
+    naturally exhausted subscription or an interrupted cross-provider attempt.
+    Expiry and the task's eventual reviewed landing remain to be observed.
+    Evidence: `evidence/capacity-h8h9/` and `evidence/verified-runtime-rollout.json`.
 
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
-for items one and two and must continue to hold for every later item. H7 has
-substantive Astra, Fable, and Opus work. H8–H9 still
-need the controlled capacity drill, and all full-simulator product criteria remain
-open. No spontaneous subscription exhaustion has been observed or claimed.
+for items one through three and must continue to hold for every later item. H7
+has substantive Astra, Fable, and Opus work. H8–H9 now have a labeled live fallback
+dispatch; continued work, expiry, and return to preferred capacity still need
+observation. Full-simulator product criteria remain open. No spontaneous
+subscription exhaustion has been observed or claimed.
 
 ## User refinement: Muse in every role
 
@@ -141,9 +186,9 @@ the same selector. The planner/triage adapter confines native tools and validate
 Hive tool requests before executing them; included-only projects can use it at a
 zero-dollar daily budget without a paid API fallback. Live planner and worker/
 reviewer tests passed. Fresh review sessions and executable validation remain
-required when the same model fills every role. A further worker safeguard is
-being completed: personal OpenCode title/compaction agent settings must not cause
-auxiliary calls to a paid model. The controlled fallback drill waits for that fix.
+required when the same model fills every role. Shared worker/planner configuration
+isolation now prevents personal OpenCode title/compaction settings from selecting
+paid auxiliary models; conflicting managed settings fail before a model call.
 Free availability is temporary according to https://opencode.ai/docs/zen/;
 the Contributor Free offering also allows model-training use of prompts and
 completions. The selected model remains configurable.
