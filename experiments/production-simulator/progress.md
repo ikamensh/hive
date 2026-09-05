@@ -1,9 +1,10 @@
 # Live experiment progress
 
-The acceptance criteria in `metrics.md` remain the completion contract. Five of
-ten items have landed. Free Muse built and freshly reviewed item five; independent
-checks found a rejection-cause reporting defect, now queued as an explicit repair
-before the dashboard. Astra is building save/replay, with Opus selected for review.
+The acceptance criteria in `metrics.md` remain the completion contract. Six of
+ten items have landed. Free Muse built and freshly reviewed item five; Astra
+built save/replay and Opus accepted it. Independent checks found rejection-cause
+attribution and duplicate-JSON-key validation defects, now combined in a repair
+before the dashboard. The install is paused at an idle maintenance boundary.
 
 ## Install and evidence
 
@@ -276,8 +277,42 @@ before the dashboard. Astra is building save/replay, with Opus selected for revi
     plan/validation integration tests pass. The chief caches prompts, so live
     adoption awaits an idle restart; existing task instructions are unchanged.
 
+32. Astra completed save/replay task `8d2591c67f77` in 867.38 seconds and
+    pushed `75394c730fb1bd4317a5f95d3978c4bf933b099d`. Fresh Opus review
+    `bd9f02beb1a7` accepted the unchanged SHA after 500.89 seconds, independently
+    checking chained stochastic checkpoints, live HTTP rollback, unlimited-mode
+    resume, and pacing. Hive's gate passed all 308 tests and landed the item in
+    `4a670593a0b9ccd889a5e5a0c8792fcc9be97d5e`, with an identical tree.
+    Independent checks passed across 32 real processes and 429 HTTP requests,
+    including 29 atomic invalid-input cases, exact RNG/state/event continuity,
+    future commands, CLI replay/resume, setup/purge WIP, and finished boundaries.
+    Loads reconstruct and verify the saved state by replay; this documented
+    tradeoff makes load time grow with history. Evidence: `evidence/item6-build.json`,
+    `evidence/sixth-landing.json`, and `evidence/item6-independent/`.
+33. Independent raw-byte checks found duplicate JSON version keys silently
+    accepted by both HTTP and CLI checkpoint loading. The core save/replay
+    checks pass, but this input-boundary gap needs repair. Paused new dispatches
+    during the running Opus review at `1788648965.064064` to permit an idle
+    chief update. After review finished, Hive had prepared pending task
+    `8305e2cd2783` for the existing repair. Editing refused until cancellation,
+    as the item was already resolving. Inspection found manual retry would
+    wrongly preserve a checkout for this never-delivered task, whose branch
+    has never been created. Cancelled it through the CLI and amended the repair
+    to cover both independent findings; retry waits for the tested Hive fix.
+    No running task was interrupted and no simulator code was edited. Evidence:
+    `evidence/review-prompt-rollout-paused.json` and
+    `evidence/item6-duplicate-key-repair-amendment.json`.
+
+34. Fixed the never-delivered retry case in Hive `ea8cd45`: continuation
+    history now considers only tasks delivered to a runner. A canceled pending
+    or dispatched-but-unpolled task gets a fresh checkout; an earlier delivered
+    attempt still preserves its work when a later undelivered retry is canceled.
+    All 76 relevant plan/recovery/real-Git checkout tests pass, with lint clean.
+    The fix is committed and pushed. Live retry will follow the idle restart;
+    the canceled unrun task remains in history with zero execution time.
+
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
-for items one through five and must continue to hold for every later item. H7
+for items one through six and must continue to hold for every later item. H7
 has substantive Astra, Fable, and Opus work. H8–H9 now have a labeled live fallback
 dispatch, natural expiry, and return to preferred capacity with preserved partial
 work and the recovered increment's reviewed landing. Full-simulator product criteria
