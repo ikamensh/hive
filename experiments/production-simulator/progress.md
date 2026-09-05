@@ -165,17 +165,37 @@ are still pending.
     Actual provider snapshots were preserved. Restarted chief 33865, verified
     the truthful paused CLI state and free-planner banner, then resumed. Real
     item-four task `5cfa44645981` selected free Muse at `1788644131.147882` after
-    skipping Astra, Fable, and Opus; it is building on `hive/plan-8b390602`.
+    skipping Astra, Fable, and Opus on `hive/plan-8b390602`.
     This proves live availability-based fallback at a task boundary, not a
     naturally exhausted subscription or an interrupted cross-provider attempt.
-    Expiry and the task's eventual reviewed landing remain to be observed.
+    The task's eventual reviewed landing remains to be observed.
     Evidence: `evidence/capacity-h8h9/` and `evidence/verified-runtime-rollout.json`.
+22. The synthetic windows expired naturally without changing real exhaustion
+    history. Muse remained on the selected free model and stopped 4.57 seconds
+    after expiry, but item four did not finish. OpenCode rejected a native shell
+    call involving a temporary file in its noninteractive permission path, then
+    exited zero without a final response. Kodo treated the last commentary as
+    success. Hive's report-only repair offered only fixed/blocked, so the model
+    marked the item blocked solely because the report had been missing. This
+    was an integration failure, not evidence of a context limit or a missing
+    owner decision. Two simulator source files contain partial implementation;
+    their hashes and the immutable task report are recorded before recovery.
+    Evidence: `evidence/muse-item4-diagnosis/`,
+    `evidence/muse-item4-before-recovery.json`, and
+    `evidence/capacity-h8h9/independent-audit.md`.
+23. A real Git regression showed manual plan retry discarded unpushed commits,
+    staged changes, dirty files, and untracked files. Hive `3d71c51` now derives
+    continuation from durable attempt history and preserves the branch and
+    runner, with a fresh session carrying the amended item document and prior
+    report. All 55 relevant plan/runner tests pass. Deployment and live recovery
+    await the coordinated unfinished-result and OpenCode permission fixes; the
+    partial simulator checkout has not been reset or edited by the observer.
 
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
 for items one through three and must continue to hold for every later item. H7
 has substantive Astra, Fable, and Opus work. H8–H9 now have a labeled live fallback
-dispatch; continued work, expiry, and return to preferred capacity still need
-observation. Full-simulator product criteria remain open. No spontaneous
+dispatch and natural expiry; continued work and return to preferred capacity
+still need observation. Full-simulator product criteria remain open. No spontaneous
 subscription exhaustion has been observed or claimed.
 
 ## User refinement: Muse in every role
