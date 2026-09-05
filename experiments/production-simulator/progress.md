@@ -1,7 +1,7 @@
 # Live experiment progress
 
-The acceptance criteria in `metrics.md` remain the completion contract. No
-completed simulator increment or product-quality verdict is claimed yet.
+The acceptance criteria in `metrics.md` remain the completion contract. One of
+nine items has landed; the engineering simulation and dashboard are still pending.
 
 ## Install and evidence
 
@@ -73,10 +73,24 @@ completed simulator increment or product-quality verdict is claimed yet.
    had not happened. Clarified that later tool results supersede that snapshot;
    the bounded live regression then produced one draft and stopped in round two.
    Included-only/free-provider admission is being integration-tested separately.
+10. The resumed Astra build pushed `cc59891`. Fable independently reviewed it,
+    reproduced the clean setup/check flow and six invalid-input CLI cases, and
+    fixed a missing inventory count in the CLI summary. Hive ran `make check`
+    successfully against reviewed SHA `b134518863f1b6193b321b89609173d54d6433fe`
+    before landing item one. Only then did task `c3d6c9ac7195` start item two;
+    its instructions contain the queued `1e-6` diffusivity amendment. Changed
+    the configured reviewer to Opus for that next increment.
+11. Independent observer checkout of the pushed build passed `make setup`,
+    `make check` (82 tests), the documented validation CLI, and `make dev` on an
+    alternate port with a real `GET /scenario`. The temporary service was then
+    stopped. The observer made no simulator code changes. This proves the first
+    contract increment, not physical simulation or dashboard quality.
 
-The three successful marker probes prove runtime access only. H7 still requires
-substantive simulator work by all three models. H4–H6, H8–H10, and the product
-criteria still require live execution evidence.
+H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
+for item one and must continue to hold for every later item. H7 has substantive
+Astra and Fable work; Opus has only a successful access probe so far. H8–H9 still
+need the controlled capacity drill, and all full-simulator product criteria remain
+open. No spontaneous subscription exhaustion has been observed or claimed.
 
 ## User refinement: Muse in every role
 
