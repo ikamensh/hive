@@ -79,7 +79,7 @@ class OpenCodeAdapter:
                 "text when finished.\nResponse schema:\n" + json.dumps(self.turn_model.model_json_schema())
             )
         stdout, stderr, returncode = self._run(system, json.dumps({"messages": self.messages}))
-        texts, usage = [], Usage()
+        text, usage = "", Usage()
         for line in stdout.splitlines():
             if not line.strip():
                 continue
@@ -96,7 +96,9 @@ class OpenCodeAdapter:
             if kind == "tool_use":
                 raise RuntimeError("OpenCode attempted a native tool; Hive LLM sessions only return tool requests")
             if kind == "text":
-                texts.append(part["text"])
+                # CLI text events are completed parts, not streaming deltas.
+                # The final part is the response; earlier parts may be commentary.
+                text = part["text"]
             if kind == "step_finish":
                 tokens = part.get("tokens", {})
                 cache = tokens.get("cache", {})
@@ -104,7 +106,6 @@ class OpenCodeAdapter:
                                tokens.get("output", 0) + tokens.get("reasoning", 0))
         if returncode:
             raise RuntimeError(f"OpenCode exited {returncode}: {stderr[-1000:]}")
-        text = "\n".join(texts)
         if not text.strip():
             raise RuntimeError("OpenCode returned no model text")
         self.round += 1
@@ -125,17 +126,12 @@ class OpenCodeAdapter:
                               "tool_call_id": result.call.id, "content": result.content} for result in results)
 
     def _run(self, system: str, prompt: str) -> tuple[str, str, int]:
-        with tempfile.TemporaryDirectory(prefix="hive-llm-opencode-") as directory:
-            config = {"model": self.model, "small_model": self.model, "share": "disabled",
-                      "permission": "deny", "agent": {"hive-llm": {
-                          "mode": "primary", "prompt": system, "permission": "deny"}}}
-            config_path = Path(directory) / "opencode.json"
-            config_path.write_text(json.dumps(config))
-            env = {**os.environ, "PWD": directory, "OPENCODE_CONFIG": str(config_path),
-                   "OPENCODE_CONFIG_DIR": directory, "XDG_CONFIG_HOME": directory,
-                   "OPENCODE_CONFIG_CONTENT": json.dumps(config),
-                   "OPENCODE_PERMISSION": '"deny"', "OPENCODE_AUTO_SHARE": "false",
-                   "OPENCODE_DISABLE_CLAUDE_CODE": "1", "OPENCODE_DISABLE_AUTOUPDATE": "1"}
+        from kodo.opencode_config import isolated_opencode_config
+
+        with tempfile.TemporaryDirectory(prefix="hive-llm-opencode-") as directory, \
+             isolated_opencode_config(self.model, Path(directory), agent="hive-llm",
+                                      prompt=system, permission="deny",
+                                      repository_instructions=False) as env:
             try:
                 process = subprocess.Popen(
                     ["opencode", "run", "--pure", "--format", "json", "--model", self.model,

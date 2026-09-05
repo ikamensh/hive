@@ -15,7 +15,14 @@ from test_llm import _config
 
 def executable(tmp_path: Path, source: str) -> Path:
     script = tmp_path / "opencode"
-    script.write_text(f"#!{sys.executable}\n" + source)
+    script.write_text(f"#!{sys.executable}\n" + '''import json, os, sys
+if sys.argv[1:3] == ["debug", "config"]:
+    config = json.loads(os.environ["OPENCODE_CONFIG_CONTENT"])
+    if os.environ.get("HOSTILE_MANAGED_COMPACTION"):
+        config["agent"]["compaction"]["model"] = "paid/compaction"
+    print(json.dumps(config))
+    sys.exit(0)
+''' + source)
     script.chmod(0o755)
     return script
 
@@ -26,8 +33,8 @@ def test_keyless_opencode_selection_and_tool_round_trip(tmp_path, monkeypatch):
     script = executable(tmp_path, '''
 import json, os, sys
 cfg = json.loads(os.environ["OPENCODE_CONFIG_CONTENT"])
-assert cfg["permission"] == "deny"
-assert cfg["agent"]["hive-llm"]["permission"] == "deny"
+assert cfg["permission"] == {"*": "deny"}
+assert cfg["agent"]["hive-llm"]["permission"] == {"*": "deny"}
 assert cfg["small_model"] == cfg["model"] == "opencode/test-free"
 assert cfg["share"] == "disabled" and "--pure" in sys.argv
 assert os.getcwd() != os.environ["CALLER_DIRECTORY"]
@@ -74,12 +81,78 @@ config = json.loads(os.environ["OPENCODE_CONFIG_CONTENT"])
 assert config["model"] == config["small_model"] == "opencode/muse-spark-1.3-contributor-free"
 assert "Response schema" not in config["agent"]["hive-llm"]["prompt"]
 json.load(sys.stdin)
+print(json.dumps({"type": "text", "part": {"text": "Checking the requested decisions."}}))
 print(json.dumps({"type": "text", "part": {"text": '{"decisions": []}'}}))
 ''')
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     adapter = build_adapter(_config(orch_provider="opencode"))
     result = ToolLoop(1).run(adapter, "Answer with JSON only.", [], "Return empty decisions", ToolSet([]))
     assert json.loads(result.text) == {"decisions": []}
+
+
+def test_completed_commentary_does_not_corrupt_the_final_tool_response(tmp_path, monkeypatch):
+    """OpenCode emits complete text parts, not deltas: commentary precedes the
+    final envelope, whose tools execute once and whose terminal text survives."""
+    executable(tmp_path, '''
+import json, sys
+request = json.load(sys.stdin)
+if request["messages"][-1]["role"] == "tool":
+    turn = {"text": "Recorded once.", "tool_calls": []}
+else:
+    turn = {"text": "", "tool_calls": [{"name": "record", "arguments": {"text": "final"}}]}
+for index, text in enumerate(["I will prepare the requested change.", json.dumps(turn)]):
+    print(json.dumps({"type": "text", "part": {
+        "id": str(index), "messageID": "assistant-message", "type": "text",
+        "time": {"start": 1, "end": index + 2}, "text": text}}))
+print(json.dumps({"type": "step_finish", "part": {"tokens": {"input": 3, "output": 2}}}))
+''')
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    recorded = []
+
+    def record(text: str) -> str:
+        recorded.append(text)
+        return "recorded"
+
+    result = ToolLoop(2).run(build_adapter(_config(orch_provider="opencode")),
+                             "", [], "Record a note", ToolSet([record]))
+    assert recorded == ["final"]
+    assert result.text == "Recorded once."
+    assert result.usage == Usage(input_tokens=6, output_tokens=4)
+
+
+def test_invalid_final_response_cannot_execute_an_earlier_valid_envelope(tmp_path, monkeypatch):
+    """Selection is temporal, not a search for parseable JSON: a malformed
+    final response fails without executing a superseded tool proposal."""
+    from pydantic import ValidationError
+
+    executable(tmp_path, '''
+import json
+turn = {"text": "", "tool_calls": [{"name": "record", "arguments": {"text": "superseded"}}]}
+for text in [json.dumps(turn), "The final response is not a valid envelope."]:
+    print(json.dumps({"type": "text", "part": {"text": text}}))
+''')
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    recorded = []
+
+    def record(text: str) -> str:
+        recorded.append(text)
+        return "recorded"
+
+    with pytest.raises(ValidationError):
+        ToolLoop(2).run(build_adapter(_config(orch_provider="opencode")),
+                        "", [], "Record a note", ToolSet([record]))
+    assert recorded == []
+
+
+def test_managed_paid_auxiliary_model_blocks_planning_before_any_model_call(tmp_path, monkeypatch):
+    """Later org/managed settings cannot bypass a free planner's model configuration."""
+    marker = tmp_path / "model-called"
+    executable(tmp_path, f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("HOSTILE_MANAGED_COMPACTION", "1")
+    with pytest.raises(ValueError, match="OpenCode isolation preflight failed:.*compaction"):
+        ToolLoop(1).run(build_adapter(_config(orch_provider="opencode")), "", [], "go", ToolSet([]))
+    assert not marker.exists()
 
 
 @pytest.mark.parametrize("invalid", [

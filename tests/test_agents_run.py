@@ -60,7 +60,13 @@ def test_opencode_runs_through_the_agent_lifecycle(tmp_path, monkeypatch):
     cli = tmp_path / "opencode"
     cli.write_text(f"#!{sys.executable}\n" + '''import json, sys
 from pathlib import Path
+import os
+if sys.argv[1:3] == ["debug", "config"]:
+    print(os.environ["OPENCODE_CONFIG_CONTENT"])
+    sys.exit(0)
 Path("arguments.json").write_text(json.dumps(sys.argv[1:]))
+config = json.loads(os.environ["OPENCODE_CONFIG_CONTENT"])
+assert config["agent"]["compaction"]["model"] == config["small_model"] == "opencode/test-free"
 print(json.dumps({"type":"text", "sessionID":"session-test", "part":{"text":"done"}}))
 print(json.dumps({"type":"step_finish", "part":{"tokens":{"input":3,"output":2}}}))
 ''')
@@ -74,6 +80,18 @@ print(json.dumps({"type":"step_finish", "part":{"tokens":{"input":3,"output":2}}
     assert args[args.index("--session")+1] == "session-test"
     assert result.text == "done" and not result.is_error
     assert result.session_handle == "session-test"
+
+
+@pytest.mark.parametrize("model,isolated", [
+    ("opencode/test-free", True), ("", True), ("openai/custom-model", False),
+])
+def test_free_opencode_workers_isolate_auxiliary_models(model, isolated, monkeypatch):
+    """Only Hive's explicitly included OpenCode selections opt into single-model isolation."""
+    from hive.agents import make_session
+
+    monkeypatch.delenv("HIVE_OPENCODE_MODEL", raising=False)
+    session = make_session("opencode", model)
+    assert session.isolated_model is isolated
 
 
 class FakeSession:

@@ -132,9 +132,11 @@ def _gemini_cli(model: str, resume_session: str = ""):
 def _opencode(model: str, resume_session: str = ""):
     from kodo.sessions.opencode import OpenCodeSession
 
+    selected = model or opencode_model()
     return OpenCodeSession(
-        model=model or opencode_model(),
+        model=selected,
         resume_session_id=resume_session or None,
+        isolated_model=included_model("opencode", selected),
     )
 
 
