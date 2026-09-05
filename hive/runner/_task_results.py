@@ -13,9 +13,11 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from hive.runner._agent_results import (
+    ResolveResult,
+    ReviewResult,
     test_repro_outcome as structured_test_repro_outcome,
     test_sweep_outcome as structured_test_sweep_outcome,
     test_ux_outcome as structured_test_ux_outcome,
@@ -142,6 +144,7 @@ LANDING_INTEGRATION_PROMPT = "landing_integration"
 # is requeued this many times before the failure counts as real. Kept small:
 # a flake heals on the first retry; anything that survives two is not a flake.
 TRANSIENT_RETRY_LIMIT = 2
+CONTINUATION_LIMIT = 2
 
 
 class TaskResult(BaseModel):
@@ -153,6 +156,7 @@ class TaskResult(BaseModel):
     output_tokens: int = 0
     structured_result: dict = Field(default_factory=dict)
     structured_result_error: str = ""
+    incomplete_reason: str = ""
     resource_exhausted: bool = False  # rate limit / quota detected by runner
     auth_blocked: bool = False  # login/policy block detected by runner (needs a human)
     cancelled: bool = False  # runner stopped the task on an operator cancel request
@@ -166,13 +170,34 @@ class TaskResult(BaseModel):
                 and classify_failure(self.text, is_error=self.is_error) == "runtime")
 
 
+def _incomplete_task_reason(task: Task, body: TaskResult) -> str:
+    if task.kind not in (TaskKind.resolve, TaskKind.review) or body.cancelled or task.cancel_requested:
+        return ""
+    if body.is_error and (not body.structured_result_error or body.auth_blocked
+                          or body.resource_exhausted or classify_failure(body.text, is_error=True)):
+        return ""
+    if body.structured_result_error:
+        return f"Invalid {task.kind} report: {body.structured_result_error}"
+    if body.structured_result:
+        try:
+            model = ResolveResult if task.kind == TaskKind.resolve else ReviewResult
+            result = model.model_validate(body.structured_result)
+        except ValidationError as error:
+            return f"Invalid {task.kind} report: {error}"
+        if result.task_id != task.id:
+            return f"Invalid {task.kind} report: task_id does not match this attempt"
+        return result.remaining_work if result.outcome == "incomplete" else ""
+    return body.incomplete_reason
+
+
 def _structured_or_legacy_verdict(
     kind: TaskKind,
     body: TaskResult,
     legacy: Verdict,
 ) -> Verdict:
-    structured = verdict_from_structured(kind, body.structured_result)
-    return structured if structured != Verdict.none else legacy
+    if body.structured_result:
+        return verdict_from_structured(kind, body.structured_result)
+    return Verdict.none if body.structured_result_error or body.incomplete_reason else legacy
 
 
 def _test_refresh_done(body: TaskResult) -> bool:
@@ -295,6 +320,8 @@ class TaskResultProcessor:
             raise LookupError(task_id)
 
         transient = self._should_requeue_transient(existing, body)
+        incomplete_reason = _incomplete_task_reason(existing, body)
+        continuing = bool(incomplete_reason) and existing.continuation_attempts < CONTINUATION_LIMIT
 
         finished_at = time.time()
         recorded: list[bool] = []
@@ -305,19 +332,24 @@ class TaskResultProcessor:
             if body.cancelled:
                 task.status = TaskStatus.cancelled
             else:
-                task.status = TaskStatus.failed if body.is_error else TaskStatus.done
-            self._record_verdict(task, body)
+                task.status = TaskStatus.failed if body.is_error or incomplete_reason else TaskStatus.done
+            if not incomplete_reason:
+                self._record_verdict(task, body)
             task.result_text = body.text
             task.validation = body.validation
             task.session_handle = body.session_handle or task.session_handle
-            task.retryable_interruption = (
+            retryable_failure = (
                 body.is_error and not body.cancelled and not task.cancel_requested
                 and not body.auth_blocked
                 and (transient or ((body.resource_exhausted or body.runtime_blocked) and task.kind != TaskKind.probe))
             )
+            task.retryable_interruption = continuing or retryable_failure
             if transient:
                 task.transient_retries += 1
-            task.is_error = body.is_error
+            if continuing:
+                task.continuation_attempts += 1
+            task.incomplete_reason = body.incomplete_reason or incomplete_reason
+            task.is_error = body.is_error or bool(incomplete_reason)
             task.cost_usd = body.cost_usd
             task.input_tokens = body.input_tokens
             task.output_tokens = body.output_tokens
@@ -349,6 +381,16 @@ class TaskResultProcessor:
                 return {"ok": True, "requeued": True, "retry_task_id": successor.id,
                         "transient_retries": task.transient_retries}
             return {"ok": True, "retry_suppressed": True}  # owner is no longer in flight
+        if incomplete_reason:
+            reason = (f"Work still unfinished after {CONTINUATION_LIMIT} continuation attempts. "
+                      f"The checkout on `{task.branch}` is preserved; inspect the report and retry "
+                      f"the item to continue.\n\n{incomplete_reason[-1500:]}")
+            if self.store.get(PlanItem, task.work_item_id):
+                plans.set_item_status(self.store, task.work_item_id, PlanItemStatus.rejected, reason)
+            else:
+                _set_ws_status(self.store, task.workstream_id, IssueItemStatus.rejected, reason)
+                self._refresh_run(task)
+            return {"ok": True, "continuation_exhausted": True}
         if task.kind == TaskKind.probe:
             self._handle_probe_result(task, body, probe_resources, workspace_id)
             return {"ok": True}
@@ -441,11 +483,7 @@ class TaskResultProcessor:
         if body.cancelled or body.is_error:
             return
         if task.kind == TaskKind.resolve:
-            task.verdict = _structured_or_legacy_verdict(
-                task.kind,
-                body,
-                parse_resolve(body.text),
-            )
+            task.verdict = _structured_or_legacy_verdict(task.kind, body, parse_resolve(body.text))
         elif task.kind == TaskKind.review:
             task.verdict = _structured_or_legacy_verdict(
                 task.kind,
@@ -1050,7 +1088,9 @@ class TaskResultProcessor:
             )
             return
         if task.verdict != Verdict.accept:
-            report = self._agent_report(body.text) or "the agent reported BLOCKED without a reason"
+            report = "\n\n".join(filter(None, [body.structured_result.get("summary", ""),
+                                               body.structured_result.get("blocking_question", "")]))
+            report = report or self._agent_report(body.text) or "the agent reported BLOCKED without a reason"
             plans.set_item_status(self.store, item.id, PlanItemStatus.blocked_clarity, report)
             log.info("plan item '%s' blocked at build (task %s)", item.title, task.id)
             return

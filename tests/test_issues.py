@@ -1094,6 +1094,7 @@ def test_directive_blocked_resolve_surfaces_needs_you(app, monkeypatch):
         resolve["id"],
         "Which database do you mean?",
         structured_result={"task_id": resolve["id"], "outcome": "blocked",
+                           "blocking_question": "Which database do you mean?",
                            "tests_run": [], "branch_pushed": False},
     )
 

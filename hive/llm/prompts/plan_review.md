@@ -10,6 +10,7 @@ You may fix small problems on the spot: edit, commit, and push to this branch (`
 Decide:
 - **ACCEPT** if the work (including any edits you just made) delivers the item with no major flaws. On accept it is merged to the default branch automatically.
 - **REJECT** for major flaws you cannot fix here. Explain the failure and recommended correction. Hive sends this report to the builder for up to two repair attempts, then parks the item for the owner.
+- **INCOMPLETE** if review or verification is unfinished. Preserve the checkout and describe `remaining_work` so Hive can continue this review before deciding whether to accept or reject.
 
 End with exactly one line, nothing after it:
-`REVIEW: ACCEPT` or `REVIEW: REJECT`
+`REVIEW: ACCEPT`, `REVIEW: REJECT`, or `REVIEW: INCOMPLETE`

@@ -41,6 +41,15 @@ def _resume(store, task: Task) -> Task | None:
     successor = store.get(Task, retry_id)
     if successor is None:
         probe = task.kind == TaskKind.probe
+        instructions = task.instructions
+        if task.incomplete_reason and task.continuation_attempts:
+            progress = task.structured_result.get("remaining_work") or task.incomplete_reason
+            instructions += (
+                "\n\nContinue the existing task on this branch. The previous attempt "
+                "ended before it was complete. Finish the original task and its required checks; "
+                "this is a work continuation, not a report-only repair.\n\n"
+                + progress[-2000:]
+            )
         successor = store.put(Task(**{
             **task.model_dump(),
             "id": retry_id, "retry_of_task_id": task.id,
@@ -49,6 +58,7 @@ def _resume(store, task: Task) -> Task | None:
             "fresh_branch": False, "preserve_checkout": not probe,
             "resume_runner_id": task.runner_id or task.resume_runner_id,
             "retryable_interruption": False, "dispatch_reason": "",
+            "instructions": instructions, "incomplete_reason": "",
             "validation": None, "verdict": Verdict.none, "trace_blob": "", "artifact_blobs": [],
             "result_text": "", "is_error": False, "cost_usd": 0,
             "input_tokens": 0, "output_tokens": 0,

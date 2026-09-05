@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from hive.agents import ResultSpec
 from hive.models import (
@@ -29,17 +29,46 @@ class AgentResultBase(BaseModel):
 
 
 class ResolveResult(AgentResultBase):
-    outcome: Literal["fixed", "blocked"]
+    outcome: Literal["fixed", "blocked", "incomplete"] = Field(description=(
+        "fixed: implementation verified and pushed; blocked: an owner decision is required; "
+        "incomplete: implementation, verification, or reporting remains unfinished."
+    ))
+    blocking_question: str = Field(default="", description=(
+        "For blocked: the specific product decision or unavailable prerequisite the owner must resolve. "
+        "A missing report, session limit, or unfinished code is not an owner decision."
+    ))
+    remaining_work: str = Field(default="", description=(
+        "For incomplete: concrete work to finish from the existing checkout, including verification/push."
+    ))
     tests_run: list[str] = Field(default_factory=list)
     branch_pushed: bool = False
     github_comment_posted: bool = False
 
+    @model_validator(mode="after")
+    def require_outcome_details(self):
+        if self.outcome == "blocked" and not self.blocking_question.strip():
+            raise ValueError("blocked requires a nonblank blocking_question for the owner")
+        if self.outcome == "incomplete" and not self.remaining_work.strip():
+            raise ValueError("incomplete requires nonblank remaining_work for continuation")
+        return self
+
 
 class ReviewResult(AgentResultBase):
-    outcome: Literal["accept", "reject"]
+    outcome: Literal["accept", "reject", "incomplete"] = Field(description=(
+        "accept/reject: completed review verdict; incomplete: review or verification remains unfinished."
+    ))
+    remaining_work: str = Field(default="", description=(
+        "For incomplete: review or verification still needed from the existing checkout."
+    ))
     tests_run: list[str] = Field(default_factory=list)
     changes_pushed: bool = False
     github_comment_posted: bool = False
+
+    @model_validator(mode="after")
+    def require_remaining_review(self):
+        if self.outcome == "incomplete" and not self.remaining_work.strip():
+            raise ValueError("incomplete requires nonblank remaining_work for continuation")
+        return self
 
 
 class TestRefreshResult(AgentResultBase):

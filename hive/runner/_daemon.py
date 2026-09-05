@@ -830,6 +830,7 @@ def execute(task: dict, headers: dict, auth) -> dict:
         "output_tokens": result.output_tokens,
         "structured_result": result.structured_result,
         "structured_result_error": result.structured_result_error,
+        "incomplete_reason": result.incomplete_reason,
         "resource_exhausted": failure == "exhausted",
         "auth_blocked": failure == "auth",
         "session_handle": result.session_handle,

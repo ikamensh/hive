@@ -55,6 +55,7 @@ class AgentCallResult:
     output_tokens: int = 0
     structured_result: dict = field(default_factory=dict)
     structured_result_error: str = ""
+    incomplete_reason: str = ""  # transport stopped before its terminal response
     attempts: int = 1
     session_handle: str = ""  # provider session id, when the backend exposes one
     raw_result: object | None = None
@@ -99,7 +100,7 @@ def call_agent(
     while error and attempts <= spec.repair_attempts:
         attempts += 1
         repair = agent.run(
-            _repair_prompt(spec, task_id, error),
+            _repair_prompt(spec, task_id, error, total.incomplete_reason),
             workdir,
             agent_name=f"{agent_name}-result-repair",
         )
@@ -141,16 +142,20 @@ def _read_result(workdir: Path, spec: ResultSpec, task_id: str) -> tuple[dict, s
     return payload, ""
 
 
-def _repair_prompt(spec: ResultSpec, task_id: str, error: str) -> str:
+def _repair_prompt(spec: ResultSpec, task_id: str, error: str, incomplete_reason: str = "") -> str:
     schema = json.dumps(spec.model.model_json_schema(), indent=2, sort_keys=True)
+    progress = f"\nExecution ended without a terminal response: {incomplete_reason}\n" if incomplete_reason else ""
     return f"""Hive could not validate `{spec.path}` for task `{task_id}`.
 
 Validation error:
 ```
 {error}
 ```
+{progress}
 
 Do not change product code, tests, commits, branches, or artifacts. Only create or repair `{spec.path}` so it validates against this schema and uses task_id `{task_id}`:
+
+Report the work's actual state. A missing or invalid report is not itself a blocker. If implementation or verification remains unfinished and the schema offers `incomplete`, use it and describe the remaining work. Reserve `blocked` for a specific decision or prerequisite the owner must provide.
 
 ```json
 {schema}
@@ -168,6 +173,7 @@ def _from_agent_result(result) -> AgentCallResult:
         input_tokens=getattr(query, "input_tokens", 0) or 0,
         output_tokens=getattr(query, "output_tokens", 0) or 0,
         raw_result=result,
+        incomplete_reason=getattr(query, "incomplete_reason", ""),
     )
 
 
@@ -183,4 +189,5 @@ def _merge(left: AgentCallResult, right: AgentCallResult) -> AgentCallResult:
         attempts=max(left.attempts, right.attempts),
         session_handle=right.session_handle or left.session_handle,
         raw_result=right.raw_result or left.raw_result,
+        incomplete_reason=left.incomplete_reason or right.incomplete_reason,
     )

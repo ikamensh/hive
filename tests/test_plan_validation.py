@@ -148,7 +148,7 @@ def test_review_runner_evidence_gates_landing(repo, tmp_path, monkeypatch, comma
     def agent_result(text):
         return SimpleNamespace(
         text=text, is_error=False, cost_usd=0, input_tokens=0, output_tokens=0,
-        structured_result={}, structured_result_error="", session_handle="",
+        structured_result={}, structured_result_error="", session_handle="", incomplete_reason="",
         )
     monkeypatch.setattr(daemon, "run_agent", lambda *a, **kw: agent_result("REVIEW: ACCEPT"))
     payload = daemon.execute(review.model_dump(mode="json"), {}, None)
