@@ -567,6 +567,38 @@ def test_local_launch_overrides_saved_cloud_target(monkeypatch, tmp_path, capsys
     assert "store: local" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("provider,model", [
+    ("opencode", ""),
+    ("auto", "opencode/muse-spark-1.3-contributor-free"),
+])
+@pytest.mark.parametrize("api_key", ["", "unused-api-key"])
+def test_local_launch_reports_opencode_without_requesting_api_credentials(
+    monkeypatch, tmp_path, capsys, provider, model, api_key,
+):
+    """A working CLI planner must not be presented as a missing paid API setup."""
+    import uvicorn
+    from hive.cli import main
+
+    monkeypatch.setattr(os, "environ", os.environ.copy())
+    _fake_gh(monkeypatch, "")
+    monkeypatch.setattr("hive.cli.load_stored_config", lambda: {})
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
+    monkeypatch.setenv("HIVE_ORCH_PROVIDER", provider)
+    monkeypatch.setenv("HIVE_ORCH_MODEL", model)
+    monkeypatch.setenv("OPENAI_API_KEY", api_key)
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+
+    main(["run", "--local", "--data-dir", str(tmp_path), "--no-web-build"])
+
+    out = capsys.readouterr().out
+    assert "orchestrator: OpenCode CLI" in out
+    assert "no API key required" in out
+    assert "NO API key" not in out
+    assert "OPENAI_API_KEY from" not in out
+    if model:
+        assert model in out
+
+
 def test_run_chief_caps_graceful_shutdown(monkeypatch, tmp_path, capsys):
     import uvicorn
 

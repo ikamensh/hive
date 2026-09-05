@@ -1122,8 +1122,11 @@ def prepare_run_env(env: dict[str, str], stored: dict[str, str]) -> list[str]:
     else:
         notes.append("github: no token (`gh auth login` or `hive config set HIVE_GH_TOKEN …`)")
 
-    provider = env.get("HIVE_ORCH_PROVIDER", "auto")
-    if env.get("OPENAI_API_KEY"):
+    provider = (env.get("HIVE_ORCH_PROVIDER") or "auto").strip().lower()
+    model = env.get("HIVE_ORCH_MODEL", "").strip()
+    if provider == "opencode" or (provider == "auto" and model.lower().startswith("opencode/")):
+        notes.append(f"orchestrator: OpenCode CLI (model={model or 'default'}; no API key required)")
+    elif env.get("OPENAI_API_KEY"):
         notes.append(f"orchestrator: OPENAI_API_KEY from {src('OPENAI_API_KEY')} (provider={provider})")
     elif env.get("GEMINI_API_KEY"):
         notes.append(f"orchestrator: GEMINI_API_KEY from {src('GEMINI_API_KEY')} (provider={provider})")
