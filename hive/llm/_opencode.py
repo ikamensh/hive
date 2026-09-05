@@ -131,7 +131,7 @@ class OpenCodeAdapter:
                           "mode": "primary", "prompt": system, "permission": "deny"}}}
             config_path = Path(directory) / "opencode.json"
             config_path.write_text(json.dumps(config))
-            env = {**os.environ, "OPENCODE_CONFIG": str(config_path),
+            env = {**os.environ, "PWD": directory, "OPENCODE_CONFIG": str(config_path),
                    "OPENCODE_CONFIG_DIR": directory, "XDG_CONFIG_HOME": directory,
                    "OPENCODE_CONFIG_CONTENT": json.dumps(config),
                    "OPENCODE_PERMISSION": '"deny"', "OPENCODE_AUTO_SHARE": "false",
@@ -139,7 +139,7 @@ class OpenCodeAdapter:
             try:
                 process = subprocess.Popen(
                     ["opencode", "run", "--pure", "--format", "json", "--model", self.model,
-                     "--agent", "hive-llm", "--title", "Hive LLM"],
+                     "--agent", "hive-llm", "--title", "Hive LLM", "--dir", directory],
                     cwd=directory, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE, text=True, start_new_session=True,
                 )

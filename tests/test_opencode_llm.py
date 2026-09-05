@@ -30,6 +30,8 @@ assert cfg["agent"]["hive-llm"]["permission"] == "deny"
 assert cfg["small_model"] == cfg["model"] == "opencode/test-free"
 assert cfg["share"] == "disabled" and "--pure" in sys.argv
 assert os.getcwd() != os.environ["CALLER_DIRECTORY"]
+assert os.path.realpath(sys.argv[sys.argv.index("--dir") + 1]) == os.getcwd()
+assert os.path.realpath(os.environ["PWD"]) == os.getcwd()
 assert os.environ["OPENCODE_DISABLE_CLAUDE_CODE"] == "1"
 request = json.load(sys.stdin)
 assert request["messages"][0]["content"] == "Previous project context"
