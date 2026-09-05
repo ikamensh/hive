@@ -16,7 +16,7 @@ from fastapi import HTTPException
 
 from hive.config.settings import Config
 from hive._control.allowances import permitted
-from hive.agents.backends import BACKEND_NAMES, included_model, opencode_model
+from hive.agents.backends import BACKEND_NAMES, codex_model, included_model, opencode_model
 from hive._integrations.specrepo import REQUIRED_INTAKE_FILES, SpecRepo, SpecStatus, spec_status_dir
 from hive.models import (
     AgentConversation,
@@ -31,9 +31,9 @@ from hive.models import (
     TaskStatus,
 )
 
-# Retain the existing defaults when no project preference is configured;
-# every registered backend can scout. Explicit preferences/models take priority.
-DEFAULT_SCOUT_MODELS = {"codex": "gpt-5.5", "claude": "opus", "gemini-cli": "gemini-3.1-pro-preview"}
+# Empty models use the backend's current default; explicit preferences take priority.
+# Every registered backend can scout, preserving this default preference order.
+DEFAULT_SCOUT_MODELS = {"codex": "", "claude": "opus", "gemini-cli": "gemini-3.1-pro-preview"}
 
 
 def _scout_pairs(project: Project) -> list[tuple[str, str]]:
@@ -48,7 +48,12 @@ def _scout_pairs(project: Project) -> list[tuple[str, str]]:
             candidates.extend(AgentPreference(backend=backend, model=model) for model in models)
     scouts = []
     for candidate in candidates:
-        model = candidate.model or (opencode_model() if candidate.backend == "opencode" else "")
+        model = candidate.model
+        if not model:
+            if candidate.backend == "codex":
+                model = codex_model()
+            elif candidate.backend == "opencode":
+                model = opencode_model()
         pair = candidate.backend, model
         if (permitted(project.agent_grants, *pair)
                 and (not project.included_only or included_model(*pair)) and pair not in scouts):

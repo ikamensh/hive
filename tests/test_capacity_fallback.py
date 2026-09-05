@@ -2,6 +2,8 @@
 
 import time
 
+import pytest
+
 from hive._control.supervisor import Supervisor
 from hive.models import AgentPreference, PlanItemStatus, Project, Resource, ResourceUsability, Runner, Task, TaskStatus
 from hive.persistence.store import MemoryStore
@@ -96,6 +98,37 @@ def test_status_and_dispatch_obey_scoped_limits_grants_and_recovery(tmp_path):
     assert supervisor.refresh_state(project) == ProjectState.working
     assert supervisor.dispatch(project) == 1
     assert store.list(Task, status=TaskStatus.running)[0].model == "claude-fable-5-1"
+
+
+@pytest.mark.parametrize("override", [None, "configured-model"])
+@pytest.mark.parametrize("has_preferences", [False, True])
+def test_blank_codex_selection_checks_its_actual_model_scope(monkeypatch, override, has_preferences):
+    """Own-model caps wait; unrelated caps cannot block the concrete default after recovery."""
+    from hive.models import ProjectState
+
+    if override is None:
+        monkeypatch.delenv("HIVE_CODEX_MODEL", raising=False)
+    else:
+        monkeypatch.setenv("HIVE_CODEX_MODEL", override)
+    model = override or "gpt-6-astra"
+    store = MemoryStore()
+    project = store.put(Project(name="p", included_only=True, daily_budget_usd=0,
+                                agent_preferences=[AgentPreference(backend="codex")] if has_preferences else []))
+    runner = store.put(Runner(name="laptop", backends=["codex"]))
+    resource = store.put(Resource(runner_id=runner.id, backend="codex",
+                                  usability_status=ResourceUsability.usable,
+                                  model_cooldowns={model: time.time() + 3600,
+                                                   "unrelated-model": time.time() + 3600}))
+    task = store.put(Task(project_id=project.id, workstream_id="w", repo="r",
+                          backend="codex", model="", instructions="work"))
+    supervisor = Supervisor(store, lambda *_: None)
+    assert supervisor.refresh_state(project) == ProjectState.blocked_resources
+    assert supervisor.dispatch(project) == 0
+    assert store.get(Task, task.id).status == TaskStatus.pending
+    store.update(Resource, resource.id, lambda saved: saved.model_cooldowns.pop(model))
+    assert supervisor.refresh_state(project) == ProjectState.working
+    assert supervisor.dispatch(project) == 1
+    assert store.get(Task, task.id).model == model
 
 
 def test_intake_fallback_preserves_context_without_cross_provider_session(tmp_path):

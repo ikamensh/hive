@@ -8,6 +8,8 @@ question → answer → goal complete.
 
 import time
 import subprocess
+import os
+import sys
 
 import pytest
 from fastapi import FastAPI
@@ -1104,7 +1106,7 @@ def test_web_intake_contract_holds_until_durable_spec_finalize(harness, tmp_path
 
     conversation = client.post(f"/api/projects/{pid}/intake/start").json()
     assert conversation["backend"] == "codex"
-    assert conversation["model"] == "gpt-5.5"
+    assert conversation["model"]
     assert store.get(Project, pid).state == "intake"
     assert [
         task.kind for task in store.list(Task, project_id=pid)
@@ -1469,6 +1471,52 @@ def test_intake_start_rejects_unknown_backend(harness):
     bad = client.post(f"/api/projects/{pid}/intake/start", json={"backend": "not-an-agent"})
     assert bad.status_code == 400
     assert "intake scout" in bad.json()["detail"]
+
+
+@pytest.mark.parametrize(("override", "patch", "expected"), [
+    pytest.param(None, {}, "gpt-6-astra", id="default"),
+    pytest.param("configured-model", {}, "configured-model", id="environment"),
+    pytest.param("configured-model", {
+        "agent_preferences": [{"backend": "codex", "model": ""}],
+    }, "configured-model", id="preference-with-default-model"),
+    pytest.param("configured-model", {
+        "agent_preferences": [{"backend": "codex", "model": "requested-model"}],
+    }, "requested-model", id="explicit-preference"),
+    pytest.param("configured-model", {
+        "agent_grants": [{"backends": ["codex"], "models": ["granted-model"]}],
+    }, "granted-model", id="explicit-grant"),
+])
+def test_codex_intake_uses_the_factory_default(harness, tmp_path, monkeypatch, override, patch, expected):
+    """HTTP scout selection reaches the real factory with defaults and explicit models intact."""
+    from hive.agents import run_agent
+
+    if override is None:
+        monkeypatch.delenv("HIVE_CODEX_MODEL", raising=False)
+    else:
+        monkeypatch.setenv("HIVE_CODEX_MODEL", override)
+    cli = tmp_path / "codex"
+    cli.write_text(f"#!{sys.executable}\n" + '''import json, sys
+print(json.dumps({"type":"item.completed", "item":{"type":"agent_message", "text":sys.argv[sys.argv.index("-m")+1]}}))
+''')
+    cli.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    client, store, _orch = harness
+    pid = client.post("/api/projects", json={"name": "codex-intake"}).json()["id"]
+    _configure_project(client, pid, str(tmp_path), **patch)
+    rid = _register_usable_runner(client, backend="codex")
+
+    assert client.get(f"/api/projects/{pid}").json()["intake_scouts"] == [
+        {"backend": "codex", "model": expected}]
+    response = client.post(f"/api/projects/{pid}/intake/start")
+    assert response.status_code == 200, response.json()
+    assert response.json()["model"] == expected
+    _pump(client, store)
+    turn = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert (turn["backend"], turn["model"]) == ("codex", expected)
+    result = run_agent(turn["backend"], turn["instructions"], tmp_path,
+                       model=turn["model"], task_id=turn["id"], timeout_s=10)
+    assert not result.is_error
+    assert result.text == expected
 
 
 @pytest.mark.parametrize("configured_preferences", [True, False])
