@@ -4,7 +4,8 @@ The acceptance criteria in `metrics.md` remain the completion contract. Six of
 ten items have landed. Free Muse built and freshly reviewed item five; Astra
 built save/replay and Opus accepted it. Independent checks found rejection-cause
 attribution and duplicate-JSON-key validation defects, now combined in a repair
-before the dashboard. The install is paused at an idle maintenance boundary.
+before the dashboard. The install has resumed on the tested Hive fixes; Astra is
+working on that combined repair.
 
 ## Install and evidence
 
@@ -310,6 +311,18 @@ before the dashboard. The install is paused at an idle maintenance boundary.
     All 76 relevant plan/recovery/real-Git checkout tests pass, with lint clean.
     The fix is committed and pushed. Live retry will follow the idle restart;
     the canceled unrun task remains in history with zero execution time.
+
+35. Stopped idle chief 53095 and started chief 89922 from `4f1187b`,
+    loading the shared Codex defaults, independent review prompt, and safe
+    never-delivered retry fix. Official CLI retry created `4359cc691d25` with
+    `fresh_branch=True`, `preserve_checkout=False`, no session/runner pin,
+    and the amended two-finding document. Resumed and verified Astra received
+    it at `1788649983.629233`; the real checkout is now `hive/plan-4d94b15b`.
+    The canceled task remains never-delivered with zero start time. No active
+    task was interrupted by maintenance. The next freshly created review will
+    carry the stronger prompt; existing historical instructions are unchanged.
+    Evidence: `evidence/review-prompt-rollout-{before-stop,after-retry}.json`
+    and `evidence/combined-repair-start.json`.
 
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
 for items one through six and must continue to hold for every later item. H7
