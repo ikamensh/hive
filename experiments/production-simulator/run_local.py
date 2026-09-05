@@ -26,6 +26,8 @@ def main():
         HIVE_ISSUE_BACKEND="codex",
         HIVE_ISSUE_MODEL="gpt-6-astra",
         HIVE_OPENCODE_MODEL=free_model,
+        HIVE_ORCH_PROVIDER="opencode",
+        HIVE_ORCH_MODEL=free_model,
         # Title generation must use the same free provider too.
         OPENCODE_CONFIG_CONTENT=json.dumps({"small_model": free_model, "share": "disabled"}),
         KODO_RUNS_DIR=str(state / "agent-runs"),
