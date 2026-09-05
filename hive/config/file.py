@@ -18,7 +18,7 @@ CONFIG_KEYS: dict[str, str] = {
     "HIVE_GH_TOKEN": "GitHub token for clone/push (auto-detected from `gh auth token`)",
     "OPENAI_API_KEY": "OpenAI API key for the orchestrator",
     "GEMINI_API_KEY": "Gemini API key for the orchestrator",
-    "HIVE_ORCH_PROVIDER": "orchestrator provider: auto | openai | gemini",
+    "HIVE_ORCH_PROVIDER": "orchestrator provider: auto | openai | gemini | opencode",
     "HIVE_ORCH_MODEL": "pin a specific orchestrator model",
     "HIVE_OPENCODE_MODEL": "default OpenCode worker/probe model (provider/model)",
     "HIVE_OPENAI_BASE_URL": "OpenAI-compatible endpoint base URL",

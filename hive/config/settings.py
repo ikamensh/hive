@@ -21,7 +21,7 @@ class Config:
     runner_token: str
     data_dir: Path
     storage_mode: str = "managed"  # managed | local (explicitly isolated from cloud state)
-    orch_provider: str = "auto"  # auto | openai | gemini
+    orch_provider: str = "auto"  # auto | openai | gemini | opencode (local CLI)
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
     issue_backend: str = "codex"

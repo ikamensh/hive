@@ -13,6 +13,7 @@ from __future__ import annotations
 from hive.llm._core import LLMAdapter
 from hive.llm._gemini import GeminiAdapter
 from hive.llm._openai import OpenAIAdapter
+from hive.llm._opencode import OpenCodeAdapter
 
 # Gemini has no list-and-pick auto-select like OpenAI's, so auto-fallback needs a
 # concrete model. The strongest tool-caller the key serves (see hive.llm._model_intel).
@@ -22,11 +23,13 @@ DEFAULT_GEMINI_MODEL = "gemini-3.1-pro-preview"
 def candidate_providers(config) -> list[str]:
     """Ordered providers to try, preferred first."""
     provider = (config.orch_provider or "auto").strip().lower()
-    if provider not in {"auto", "openai", "gemini"}:
-        raise ValueError("HIVE_ORCH_PROVIDER must be one of: auto, openai, gemini.")
+    if provider not in {"auto", "openai", "gemini", "opencode"}:
+        raise ValueError("HIVE_ORCH_PROVIDER must be one of: auto, openai, gemini, opencode.")
     if provider != "auto":
         return [provider]
     model = config.orch_model.strip().lower()
+    if model.startswith("opencode/"):
+        return ["opencode"]
     if model.startswith("gemini"):
         return ["gemini"]
     if model.startswith(("gpt-", "o")):
@@ -39,7 +42,8 @@ def candidate_providers(config) -> list[str]:
     if not order:
         raise ValueError(
             "No orchestrator provider is configured. Set OPENAI_API_KEY for OpenAI-compatible "
-            "orchestration, or set HIVE_ORCH_PROVIDER=gemini with GEMINI_API_KEY."
+            "orchestration, HIVE_ORCH_PROVIDER=gemini with GEMINI_API_KEY, "
+            "or HIVE_ORCH_PROVIDER=opencode for the installed OpenCode CLI."
         )
     return order
 
@@ -50,6 +54,8 @@ def resolve_provider(config) -> str:
 
 
 def _adapter_for(provider: str, config) -> LLMAdapter:
+    if provider == "opencode":
+        return OpenCodeAdapter(config.orch_model.strip())
     if provider == "openai":
         return OpenAIAdapter(config.openai_api_key, config.openai_base_url, config.orch_model.strip())
     return GeminiAdapter(config.gemini_api_key, config.orch_model.strip() or DEFAULT_GEMINI_MODEL)
