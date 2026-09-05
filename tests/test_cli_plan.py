@@ -133,3 +133,47 @@ def test_agent_preferences_round_trip_through_import_and_set(app, tmp_path):
         cli(client, "plan-import", "bad-choice", str(source), "--repo", "https://github.com/o/r.git",
             "--prefer", "typo")
     assert [project["name"] for project in cli(client, "projects")] == ["demo"]
+
+
+def test_import_preferences_choose_first_agent_without_default_role_pins(app, tmp_path, monkeypatch):
+    """A newly imported plan honors the explicit preference chain; hidden
+    OpenCode/Codex role defaults must not jump ahead of its first choice."""
+    client, _ = app
+    monkeypatch.setattr("hive.api.SpecRepo", FakeSpecRepo)
+    source = tmp_path / "tasks.md"
+    source.write_text("# Goal\n\n## First\nBuild it.\n")
+    plan = cli(client, "plan-import", "demo", str(source), "--repo", "https://github.com/o/r.git",
+               "--prefer", "codex=gpt-6-astra", "--prefer", "opencode=opencode/test-free", "--start")
+    project = cli(client, "project", "demo")["project"]
+    assert project["build_backend"] == project["review_backend"] == ""
+    assert [(task["backend"], task["model"]) for task in plan["tasks"]] == [("codex", "gpt-6-astra")]
+
+
+def test_limits_cli_distinguishes_shared_and_model_specific_capacity(app):
+    """A Fable limit must be displayed as Fable-only, with the attempted model
+    and reset, while shared usage remains separately visible."""
+    import time
+    from hive.cli import format_show
+    from hive.models import Task
+
+    client, store = app
+    now = time.time()
+    snapshot = {"captured_at": now, "source": "oauth", "windows": [
+        {"kind": "weekly_all", "model_scope": "", "used_percent": 10, "resets_at": now + 3600},
+        {"kind": "weekly_fable", "model_scope": "fable", "used_percent": 100, "resets_at": now + 1800},
+    ]}
+    rid = client.post("/api/runners/register", headers=RUNNER_HEADERS, json={
+        "name": "local", "backends": ["claude"], "usage_snapshots": {"claude": snapshot},
+    }).raise_for_status().json()["runner_id"]
+    project = client.post("/api/projects", json={"name": "demo"}).json()
+    task = store.put(Task(project_id=project["id"], workstream_id="fixture", repo="https://github.com/o/r.git",
+                          instructions="Finish the work", backend="claude", model="claude-fable-5-1",
+                          runner_id=rid, status="running"))
+    client.post(f"/api/tasks/{task.id}/result", headers=RUNNER_HEADERS, json={
+        "text": "Fable usage limit reached", "is_error": True, "resource_exhausted": True,
+        "usage_snapshot": snapshot,
+    }).raise_for_status()
+    rendered = format_show(cli(client, "show", "limits"), "limits")
+    assert "scope: shared" in rendered and "scope: fable" in rendered
+    assert "fable cooling down until" in rendered
+    assert "model: claude-fable-5-1" in rendered

@@ -658,7 +658,7 @@ def _reset_stamp(epoch: float) -> str:
 def _fmt_limits(rows: list[dict]) -> list[str]:
     out = ["LIMITS — what each license knows about its own usage windows"]
     for r in rows:
-        if not r["windows"] and not r["exhaustions_seen"]:
+        if not r["windows"] and not r["exhaustions_seen"] and not r.get("model_cooldowns") and not r["cooldown_until"]:
             out.append(
                 f"  {r['backend']:<11} @ {r['machine']:<12} no usage gauge — empirical only, no limit hit yet"
             )
@@ -674,15 +674,21 @@ def _fmt_limits(rows: list[dict]) -> list[str]:
             if w.get("estimated_tokens_left"):
                 extra += f", est ~{w['estimated_tokens_left']:,} tok left"
             out.append(
-                f"      {w['kind']:<14} {w['used_percent']:>3.0f}% used, resets {resets}{extra}"
+                f"      {w['kind']:<14} [scope: {w.get('model_scope') or 'shared'}] "
+                f"{w['used_percent']:>3.0f}% used, resets {resets}{extra}"
             )
         if r["cooldown_until"]:
-            out.append(f"      cooling down until {_reset_stamp(r['cooldown_until'])}")
+            out.append(f"      shared cooling down until {_reset_stamp(r['cooldown_until'])}")
+        for scope, until in r.get("model_cooldowns", {}).items():
+            out.append(f"      {scope} cooling down until {_reset_stamp(until)}")
         if r["last_exhaustion"]:
             e = r["last_exhaustion"]
             hint = f" (message said resets {_local_stamp(e['reset_at_hint'])})" if e["reset_at_hint"] else ""
+            scope = e.get("model_scope") or "shared"
+            model = e.get("model") or "unknown"
             out.append(
-                f"      hit limit {r['exhaustions_seen']}x, last {_local_stamp(e['at'])}: {e['text']}{hint}"
+                f"      hit limit {r['exhaustions_seen']}x, last {_local_stamp(e['at'])} "
+                f"[model: {model}; scope: {scope}]: {e['text']}{hint}"
             )
     if not rows:
         out.append("  (no agents discovered)")
@@ -955,6 +961,8 @@ def format_plan(payload: dict, *, command_prefix: str = "hive") -> str:
         elapsed = _human_duration(max(0, (task.get("finished_at") or time.time()) - start))
         clock_label = "waiting" if task["status"] == "pending" else "elapsed"
         lines.append(f"      {task['kind']} [{task['status']}] {agent} · task {task['id']} · {clock_label} {elapsed}")
+        if task.get("dispatch_reason"):
+            lines.append(f"      selection: {task['dispatch_reason']}")
         if task.get("runner_id") or task.get("resume_runner_id"):
             lines.append(f"      runner: {task.get('runner_id') or task['resume_runner_id']}")
         latest_result = next((t for t in reversed(tasks) if t.get("result_text")), None)
@@ -1512,7 +1520,8 @@ def _import_plan(args, client) -> dict:
         client.patch(f"/api/projects/{pid}", json={
             "spec_repo": args.repo, "member_repos": [args.repo], "included_only": True,
             "daily_budget_usd": 0, "testing_auto": False,
-            "build_backend": "opencode", "review_backend": "codex",
+            "build_backend": "" if preferences else "opencode",
+            "review_backend": "" if preferences else "codex",
             "agent_grants": [{"backends": ["opencode"]}, {"backends": ["codex"], "sessions_per_day": 5}],
         }).raise_for_status()
     else:
