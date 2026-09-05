@@ -936,6 +936,48 @@ def test_testing_check_due_respects_envelope_and_interval():
     assert not no_cb._testing_check_due(on)
 
 
+def test_included_only_project_runs_automatic_testing_with_zero_dollar_budget(tmp_path):
+    """The real poller, repository sync, dispatch, and overview agree on free automatic testing."""
+    import asyncio
+    from hive.api import make_testing_check
+    from hive._control.overview import build_overview
+    from tests.test_api_e2e import _complete_intake
+
+    repo = empty_spec_repo(tmp_path)
+    client, store = app(tmp_path, repo)
+    pid = _project_with_repo(client, repo)
+    model = "opencode/muse-spark-1.3-contributor-free"
+    response = client.patch(f"/api/projects/{pid}", json={
+        "included_only": True, "daily_budget_usd": 0, "testing_auto": True,
+        "agent_preferences": [{"backend": "opencode", "model": model}],
+    })
+    assert response.status_code == 200, response.json()
+    _complete_intake(client, pid)
+    rid = _register_usable_runner(client, backend="opencode")
+    supervisor = client.app.state.supervisor
+    supervisor.testing_check = make_testing_check(store, Config(
+        gcp_project="", gcs_bucket="", gh_token="", gemini_api_key="",
+        orch_model="", runner_token="test-token", data_dir=tmp_path / "autonomy",
+    ))
+
+    async def tick_and_finish_callbacks():
+        await supervisor._step()
+        callbacks = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
+        await asyncio.gather(*callbacks)
+
+    asyncio.run(tick_and_finish_callbacks())
+    project = store.get(Project, pid)
+    assert supervisor.dispatch(project) == 1
+    refresh = _poll(client, rid)
+    assert refresh["kind"] == "test_refresh"
+    assert (refresh["backend"], refresh["model"]) == ("opencode", model)
+    assert not build_overview(store, project.workspace_id, supervisor.spend_today)["attention"]["offers"]
+
+    # A second poll cannot duplicate the work while its first refresh is live.
+    supervisor.testing_check(pid)
+    assert len(store.list(Task, project_id=pid, kind=TaskKind.test_refresh)) == 1
+
+
 def test_failing_story_survives_reconcile_and_green_closes_every_issue(tmp_path, monkeypatch):
     """Regression for two live-run bugs: (1) a failing sweep must record the
     tested baseline, or the next backlog reconcile downgrades a confirmed

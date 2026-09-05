@@ -17,7 +17,7 @@ from typing import Callable
 from hive._control import pause
 from hive._control.capacity import capacity_summary, group_machines
 from hive._control.supervisor import state_reason
-from hive._workstreams.testing import story_health
+from hive._workstreams.testing import automatic_testing_enabled, story_health
 from hive.models import (
     HumanTask,
     HumanTaskStatus,
@@ -62,7 +62,7 @@ def testing_offers(
 ) -> list[dict]:
     """Standing testing offers hive cannot act on by itself.
 
-    A project inside the autonomy envelope (testing_auto + a daily budget) is
+    A project with automatic testing and included capacity or a daily budget is
     already handled by the supervisor's testing tick, a paused project said
     stop, and an intake-stage project has no approved spec to test against —
     none belong on the dashboard. What remains is the honest ask: 'Hive can do
@@ -73,7 +73,7 @@ def testing_offers(
     for project in projects:
         if project.paused or project.state == ProjectState.intake:
             continue
-        if project.testing_auto and project.daily_budget_usd > 0:
+        if automatic_testing_enabled(project):
             continue
         for workstream in streams_by_project.get(project.id, []):
             if workstream.kind != ProjectWorkstreamKind.testing or not workstream.enabled:

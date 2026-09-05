@@ -24,7 +24,7 @@ from hive._control.allowances import (
     resolve_agent,
     sessions_today,
 )
-from hive._control.intake import TRUSTED_SCOUTS, trusted_capacity
+from hive._control.intake import scout_capacity
 from hive._control.orchestrator import Tools
 from hive._control.supervisor import Supervisor, compute_state
 from hive._workstreams.issues import advance_issues, reconcile
@@ -317,7 +317,7 @@ def test_testing_episode_resolves_every_phase_through_grants():
 
 
 def test_intake_respects_grants():
-    """A project whose allowance covers no trusted scout gets an actionable
+    """A project whose allowance covers no usable scout gets an actionable
     409 up front; one that covers claude gets the claude scout even when the
     default (codex) is installed and usable."""
     store = MemoryStore()
@@ -325,13 +325,13 @@ def test_intake_respects_grants():
     for backend in ("codex", "claude"):
         store.put(Resource(runner_id=runner.id, backend=backend,
                            usability_status=ResourceUsability.usable))
-    untrusted_only = [AgentGrant(backends=["cursor"])]
+    offline_only = [AgentGrant(backends=["cursor"])]
     with pytest.raises(HTTPException) as err:
-        trusted_capacity(store, "default", grants=untrusted_only)
+        scout_capacity(store, Project(name="p", agent_grants=offline_only))
     assert err.value.status_code == 409 and "allowance" in err.value.detail
     claude_ok = [AgentGrant(backends=["claude"])]
-    backend, model, _ = trusted_capacity(store, "default", grants=claude_ok)
-    assert (backend, model) in TRUSTED_SCOUTS and backend == "claude"
+    backend, model, _ = scout_capacity(store, Project(name="p", agent_grants=claude_ok))
+    assert backend == "claude"
     # No grants: the historical default order still wins.
-    backend, model, _ = trusted_capacity(store, "default")
+    backend, model, _ = scout_capacity(store, Project(name="p"))
     assert backend == "codex"

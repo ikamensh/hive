@@ -1,4 +1,4 @@
-"""Project intake: the trusted-scout conversation that aligns a project with the
+"""Project intake: the scout conversation that aligns a project with the
 user and pushes durable spec files before planning starts.
 
 These were inline closures in `hive.api`; kept here as free functions taking the
@@ -16,10 +16,11 @@ from fastapi import HTTPException
 
 from hive.config.settings import Config
 from hive._control.allowances import permitted
+from hive.agents.backends import BACKEND_NAMES, included_model, opencode_model
 from hive._integrations.specrepo import REQUIRED_INTAKE_FILES, SpecRepo, SpecStatus, spec_status_dir
 from hive.models import (
     AgentConversation,
-    AgentGrant,
+    AgentPreference,
     ConversationStatus,
     Project,
     ProjectState,
@@ -30,51 +31,54 @@ from hive.models import (
     TaskStatus,
 )
 
-# Intake is high leverage, so only trusted backends qualify (preference order).
-# gemini-cli closes the list so a Gemini-only fleet can still run intake at
-# all; pinned to pro — the CLI's default flash flakes with "Invalid stream:
-# empty response or malformed tool call" on long agentic turns (observed live).
-TRUSTED_SCOUTS = (("codex", "gpt-5.5"), ("claude", "opus"), ("gemini-cli", "gemini-3.1-pro-preview"))
+# Retain the existing defaults when no project preference is configured;
+# every registered backend can scout. Explicit preferences/models take priority.
+DEFAULT_SCOUT_MODELS = {"codex": "gpt-5.5", "claude": "opus", "gemini-cli": "gemini-3.1-pro-preview"}
 
 
-def trusted_capacity(
-    store, workspace_id: str, prefer_backend: str = "", grants: list[AgentGrant] = ()
-) -> tuple[str, str, str]:
-    """Return (backend, model, runner_id) for an available trusted intake scout.
-
-    `prefer_backend` pins the choice when that backend is available (the user
-    explicitly picked it on retry); otherwise the first available backend in
-    preference order is used, so a project is never stuck because the default
-    scout is blocked while another trusted one is ready. `grants` (the
-    project's agent allowance) narrows the pool further — intake is still an
-    agent session, so a restricted project may only use scouts it permits.
-    """
-    online = {r.id: r for r in store.list(Runner, workspace_id=workspace_id) if r.online()}
-    scouts = [bm for bm in TRUSTED_SCOUTS if permitted(list(grants), *bm)]
+def scout_capacity(store, project: Project, prefer_backend: str = "") -> tuple[str, str, str]:
+    """Choose a usable scout within project preferences, grants, and included-only policy."""
+    online = {r.id: r for r in store.list(Runner, workspace_id=project.workspace_id) if r.online()}
+    candidates = list(project.agent_preferences)
+    if not candidates:
+        for backend in dict.fromkeys((*DEFAULT_SCOUT_MODELS, *BACKEND_NAMES)):
+            models = dict.fromkeys([
+                DEFAULT_SCOUT_MODELS.get(backend, ""),
+                *(model for grant in project.agent_grants
+                  if not grant.backends or backend in grant.backends for model in grant.models),
+            ])
+            candidates.extend(AgentPreference(backend=backend, model=model) for model in models)
+    scouts = []
+    for candidate in candidates:
+        model = candidate.model or (opencode_model() if candidate.backend == "opencode" else "")
+        pair = candidate.backend, model
+        if (permitted(project.agent_grants, *pair)
+                and (not project.included_only or included_model(*pair)) and pair not in scouts):
+            scouts.append(pair)
     if not scouts:
         raise HTTPException(
             409,
-            "this project's agent allowance permits none of the trusted intake scouts "
-            f"({', '.join(f'{b} {m}' for b, m in TRUSTED_SCOUTS)}); widen agent_grants "
-            "to cover one, or run intake before restricting the project",
+            "no intake scout is permitted by this project's agent preferences, "
+            "allowance, and included-only policy; configure an allowed backend/model",
         )
-    ordered = sorted(scouts, key=lambda bm: (bm[0] != prefer_backend, scouts.index(bm)))
+    ordered = sorted(scouts, key=lambda bm: bm[0] != prefer_backend)
     if prefer_backend and prefer_backend not in dict(scouts):
         raise HTTPException(
             400,
-            f"unknown or disallowed trusted scout {prefer_backend!r}; choose one of "
+            f"unknown or disallowed intake scout {prefer_backend!r}; choose one of "
             f"{', '.join(b for b, _ in scouts)}",
         )
     for backend, model in ordered:
-        for resource in store.list(Resource, workspace_id=workspace_id, backend=backend):
+        for resource in store.list(Resource, workspace_id=project.workspace_id, backend=backend):
             runner = online.get(resource.runner_id)
-            if runner and backend in runner.backends and resource.available():
+            if (runner and backend in runner.backends and resource.available(model)
+                    and resource.supports(project.required_capabilities)):
                 return backend, model, runner.id
     raise HTTPException(
         409,
-        "intake requires a usable trusted scout backend "
+        "intake requires usable capacity matching its allowance and capabilities "
         f"({', '.join(f'{b} {m}' for b, m in scouts)}); "
-        "probe or fix a trusted scout, then retry",
+        "probe or fix an allowed scout, then retry",
     )
 
 
@@ -127,9 +131,7 @@ def _carried_answers(store, project: Project) -> list[dict]:
 
 
 def create_conversation(store, project: Project, prefer_backend: str = "") -> AgentConversation:
-    backend, model, _runner_id = trusted_capacity(
-        store, project.workspace_id, prefer_backend, grants=project.agent_grants
-    )
+    backend, model, _runner_id = scout_capacity(store, project, prefer_backend)
     conversation = store.put(
         AgentConversation(
             workspace_id=project.workspace_id,
@@ -187,9 +189,7 @@ def start(store, project: Project, prefer_backend: str = "") -> AgentConversatio
                 and prefer_backend
                 and prefer_backend != existing.backend
             ):
-                backend, model, _ = trusted_capacity(
-                    store, project.workspace_id, prefer_backend, grants=project.agent_grants
-                )
+                backend, model, _ = scout_capacity(store, project, prefer_backend)
 
                 def repin(conversation: AgentConversation) -> None:
                     conversation.backend = backend

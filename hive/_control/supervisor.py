@@ -880,16 +880,19 @@ class Supervisor:
                     t.is_error = True
                     t.result_text = f"Runner {t.runner_id} went offline mid-task."
                     t.finished_at = time.time()
-                    t.retryable_interruption = not t.cancel_requested
+                    t.retryable_interruption = not t.cancel_requested and t.kind != TaskKind.probe
                     failed.append(True)
 
             self.store.update(Task, task.id, fail)
             if failed:
-                from hive._workstreams.plans import cancel_plan_work, resume_interrupted_task
+                from hive._workstreams.plans import cancel_plan_work
+                from hive._control.retries import resume_interrupted_task
 
                 if task.cancel_requested:
                     cancel_plan_work(self.store, task)
-                elif resume_interrupted_task(self.store, task) is not None:
+                elif (retry := resume_interrupted_task(self.store, task)) is not None:
+                    log.warning("runner %s went offline; task %s ended and successor %s awaits its checkout",
+                                task.runner_id, task.id, retry.id)
                     continue  # deterministic recovery; no planner intervention needed
                 silent = "unknown" if runner is None else f"{offline_s:.0f}s"
                 name = runner.name if runner else task.runner_id
@@ -997,10 +1000,11 @@ class Supervisor:
         elapsed and which has no testing check already running. Pure gate so it is
         testable without a loop (the per-action daily cooldown lives in
         `auto_testing_action` as store facts)."""
+        from hive._workstreams.testing import automatic_testing_enabled
+
         return (
             self.testing_check is not None
-            and project.testing_auto
-            and project.daily_budget_usd > 0
+            and automatic_testing_enabled(project)
             and project.id not in self._testing_busy
             and time.time() - self._last_testing_check.get(project.id, 0) > self.TESTING_CHECK_INTERVAL_S
         )
@@ -1016,7 +1020,7 @@ class Supervisor:
 
     async def _step(self) -> None:
         self.fail_orphaned_tasks()
-        from hive._workstreams.plans import resume_interrupted_task
+        from hive._control.retries import resume_interrupted_task
 
         for task in self.store.list(Task, workspace_id=self.workspace_id, status=TaskStatus.failed):
             if task.retryable_interruption:

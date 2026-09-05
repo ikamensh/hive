@@ -530,6 +530,11 @@ def story_health(stories: Iterable[Story], *, refresh_active: bool = False) -> S
 AUTO_TESTING_INTERVAL_S = 24 * 3600.0
 
 
+def automatic_testing_enabled(project: Project) -> bool:
+    """Testing may use included capacity at zero dollars, or an explicit paid budget."""
+    return project.testing_auto and (project.included_only or project.daily_budget_usd > 0)
+
+
 def autonomy_envelope_reason(store, project: Project, workstream: ProjectWorkstream) -> str:
     """The repo-independent autonomy gates: "" inside the envelope, else why not.
 
@@ -540,7 +545,7 @@ def autonomy_envelope_reason(store, project: Project, workstream: ProjectWorkstr
     """
     if not project.testing_auto:
         return "autonomous testing is off (testing_auto)"
-    if project.daily_budget_usd <= 0:
+    if not automatic_testing_enabled(project):
         return "no daily budget (autonomy only spends inside a positive cap)"
     if not workstream.enabled:
         return "workstream disabled"
@@ -571,7 +576,7 @@ def auto_testing_decision(
 
     Acts on the `story_health` and `testability_health` verdicts, but only
     inside the autonomy envelope: the project opted in (`testing_auto`) *and*
-    set a positive daily budget (no auto-spend on unbudgeted projects), intake
+    chose included-only capacity or set a positive daily budget, intake
     is behind it (drafting stories from an unapproved spec would test unvetted
     intention), the workstream is enabled, nothing testing-related is in
     flight, and the last same-kind activity is older than

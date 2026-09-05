@@ -680,7 +680,7 @@ CODEX_QUOTA_ERROR = (
 
 def test_codex_quota_exhaustion_blocks_project(harness):
     """End-to-end view of a codex quota hit: task fails, resource cools down,
-    project blocks on resources, orchestrator is woken with the failure."""
+    project waits on resources and a separate attempt resumes without paid planning."""
     client, store, orch = harness
     project = _create_started(client, "codex-quota")
     pid = project["id"]
@@ -741,10 +741,10 @@ def test_codex_quota_exhaustion_blocks_project(harness):
     assert detail["project"]["state"] == "blocked_resources"
     assert store.list(Task, project_id=pid, status=TaskStatus.pending)
 
-    assert len(orch.invocations) > invocations_before
-    wake_text = orch.invocations[-1][0]
-    assert "failed" in wake_text
-    assert "usage limit" in wake_text
+    assert len(orch.invocations) == invocations_before
+    (retry,) = store.list(Task, retry_of_task_id=task.id)
+    assert retry.status == TaskStatus.pending
+    assert retry.resume_runner_id == rid
 
     # A later successful probe proves the temporary availability cooldown is stale.
     queued = client.post(f"/api/resources/{codex_res['id']}/probe").json()
@@ -1466,9 +1466,66 @@ def test_intake_start_rejects_unknown_backend(harness):
     pid = project["id"]
     _configure_project(client, pid, "https://example.com/spec.git")
     _register_usable_runner(client, backend="codex")
-    bad = client.post(f"/api/projects/{pid}/intake/start", json={"backend": "cursor"})
+    bad = client.post(f"/api/projects/{pid}/intake/start", json={"backend": "not-an-agent"})
     assert bad.status_code == 400
-    assert "trusted scout" in bad.json()["detail"]
+    assert "intake scout" in bad.json()["detail"]
+
+
+@pytest.mark.parametrize("configured_preferences", [True, False])
+def test_opencode_only_project_can_start_and_continue_intake(harness, configured_preferences):
+    """Free OpenCode can scout with either ordered preferences or its sole session grant."""
+    client, store, _orch = harness
+    model = "opencode/muse-spark-1.3-contributor-free"
+    pid = client.post("/api/projects", json={"name": "muse-intake"}).json()["id"]
+    patch = {
+        "included_only": True, "daily_budget_usd": 0,
+        "agent_grants": [] if configured_preferences else [
+            {"backends": ["opencode"], "models": [model], "sessions_per_day": None}],
+    }
+    if configured_preferences:
+        patch["agent_preferences"] = [{"backend": "opencode", "model": model}]
+    _configure_project(client, pid, **patch)
+    rid = _register_usable_runner(client, backend="opencode")
+    _register_usable_runner(client, name="other-coder", backend="codex")
+    response = client.post(f"/api/projects/{pid}/intake/start")
+    assert response.status_code == 200, response.json()
+    conversation = response.json()
+    assert (conversation["backend"], conversation["model"]) == ("opencode", model)
+    _pump(client, store)
+    turn = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert (turn["backend"], turn["model"]) == ("opencode", model)
+    client.post(f"/api/tasks/{turn['id']}/result", headers=RUNNER_HEADERS,
+                json={"text": "Mission: simulate molding. Next: conserve material.", "session_handle": "muse-session"})
+    response = client.post(f"/api/conversations/{conversation['id']}/message",
+                           json={"message": "Include energy accounting"})
+    assert response.status_code == 200, response.json()
+    _pump(client, store)
+    followup = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert followup["backend"] == "opencode" and followup["session_handle"] == "muse-session"
+    assert "energy accounting" in followup["instructions"]
+
+
+def test_intake_chooses_the_next_project_model_when_only_one_scope_is_exhausted(harness):
+    """Intake applies the same concrete-model capacity policy as later task dispatch."""
+    from hive.models import UsageWindow
+
+    client, store, _orch = harness
+    pid = client.post("/api/projects", json={"name": "scoped-intake"}).json()["id"]
+    _configure_project(client, pid, agent_preferences=[
+        {"backend": "claude", "model": "claude-fable-5-1"},
+        {"backend": "claude", "model": "claude-opus-5"},
+    ])
+    rid = _register_usable_runner(client, backend="claude")
+    resource = store.list(Resource, runner_id=rid, backend="claude")[0]
+    store.update(Resource, resource.id, lambda saved: saved.usage_windows.append(
+        UsageWindow(kind="weekly_fable", model_scope="fable", used_percent=100,
+                    resets_at=time.time() + 3600)))
+    response = client.post(f"/api/projects/{pid}/intake/start")
+    assert response.status_code == 200, response.json()
+    assert response.json()["model"] == "claude-opus-5"
+    _pump(client, store)
+    task = client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).json()["task"]
+    assert task["model"] == "claude-opus-5"
 
 
 class _NullSpecRepo:
