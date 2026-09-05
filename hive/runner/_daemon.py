@@ -367,7 +367,7 @@ def _run_checkout_git(
         ) from exc
 
 
-def checkout(repo_url: str, branch: str = "", fresh_branch: bool = False) -> Path:
+def checkout(repo_url: str, branch: str = "", fresh_branch: bool = False, *, preserve: bool = False) -> Path:
     """Fresh-ish checkout: clone once, fetch, then hard-reset to the target.
 
     With no branch, resets to the origin default (work that lands on main).
@@ -380,6 +380,14 @@ def checkout(repo_url: str, branch: str = "", fresh_branch: bool = False) -> Pat
     env = _with_env(auth_overlay)
     slug = checkout_url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
     path = WORKDIR / slug
+    if preserve and path.exists():
+        current = _run_checkout_git(
+            ["branch", "--show-current"], cwd=path, timeout=60, env=env,
+            repo_url=checkout_url, branch=branch,
+        ).stdout.strip()
+        if current != branch:
+            raise CheckoutError(f"Cannot resume {branch}: checkout is on {current}; edits were preserved.")
+        return path
     if path.exists():
         _run_checkout_git(
             ["remote", "set-url", "origin", checkout_url],
@@ -742,6 +750,7 @@ def execute(task: dict, headers: dict, auth) -> dict:
                 task["repo"],
                 task.get("branch", ""),
                 fresh_branch=bool(task.get("fresh_branch")),
+                preserve=bool(task.get("preserve_checkout")),
             )
         except CheckoutError as exc:
             return {"text": str(exc), "is_error": True}

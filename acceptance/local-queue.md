@@ -10,6 +10,13 @@ make reviewed progress across interruptions without configuring cloud storage.
 - Stopping the chief stops its runner. Restarting reopens the same projects.
 - Only one chief may hold a local workspace's leader lease at a time.
 - GitHub remains the landing destination for this iteration.
+- Quota exhaustion waits for capacity and resumes the interrupted build or
+  review. A returning runner resumes its interrupted stage, including after a
+  chief restart. Each retry has its own task record; late results are ignored.
+- Retrying an interrupted stage preserves the original runner's checkout,
+  including unpushed commits and dirty files. Other tasks cannot reset it while
+  the retry waits. Provider flakes have bounded retries; actual build failures
+  and operator cancellations still park for attention.
 
 ## Examples
 - Given no GCP configuration, when I run `hive run --local`, then the chief and

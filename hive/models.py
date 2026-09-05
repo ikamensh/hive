@@ -497,6 +497,9 @@ class Task(BaseModel):
     conversation_id: str = ""
     conversation_turn: str = ""  # intake: initial | message | proceed | finalize
     session_handle: str = ""  # runner resumes this backend session when possible
+    resume_runner_id: str = ""  # interrupted work stays with its checkout and session
+    preserve_checkout: bool = False  # do not reset edits left by an interrupted attempt
+    retryable_interruption: bool = False  # failed attempt whose successor can be recovered after a crash
     issue_number: int = 0  # issue solving: the issue this task resolves/reviews
     issue_doc: str = ""  # issue solving: full issue markdown (title+body+comments) -> .hive ISSUE.md
     issue_attachments: list[str] = []  # issue solving: image filenames the runner fetches from the chief

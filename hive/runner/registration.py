@@ -304,6 +304,23 @@ def _requeue_dropped_work(store, workspace_id: str, runner: Runner) -> None:
     for task in store.list(
         Task, workspace_id=workspace_id, status=TaskStatus.running, runner_id=runner.id
     ):
+        from hive.models import PlanItem
+        from hive._workstreams.plans import cancel_plan_work, resume_interrupted_task
+
+        if task.work_item_id and store.get(PlanItem, task.work_item_id) is not None:
+            def interrupt(saved: Task) -> None:
+                saved.status = TaskStatus.failed
+                saved.is_error = True
+                saved.finished_at = time.time()
+                saved.result_text = "Runner restarted; resuming interrupted work."
+                saved.retryable_interruption = not saved.cancel_requested
+
+            interrupted = store.update(Task, task.id, interrupt)
+            if interrupted.cancel_requested:
+                cancel_plan_work(store, interrupted)
+            else:
+                resume_interrupted_task(store, interrupted)
+            continue
         updated = store.update(Task, task.id, requeue)
         if updated and updated.kind == TaskKind.probe:
             for resource in store.list(

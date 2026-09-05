@@ -285,7 +285,9 @@ class TaskResultProcessor:
         if not existing or existing.workspace_id != workspace_id:
             raise LookupError(task_id)
 
-        if self._should_requeue_transient(existing, body):
+        plan_item = self.store.get(PlanItem, existing.work_item_id) if existing.work_item_id else None
+        transient = self._should_requeue_transient(existing, body)
+        if transient and plan_item is None:
             return self._requeue_transient(existing, body, workspace_id)
 
         finished_at = time.time()
@@ -300,6 +302,14 @@ class TaskResultProcessor:
                 task.status = TaskStatus.failed if body.is_error else TaskStatus.done
             self._record_verdict(task, body)
             task.result_text = body.text
+            task.session_handle = body.session_handle or task.session_handle
+            if plan_item is not None:
+                task.retryable_interruption = (
+                    body.is_error and not body.cancelled and not task.cancel_requested
+                    and not body.auth_blocked and (body.resource_exhausted or transient)
+                )
+                if transient:
+                    task.transient_retries += 1
             task.is_error = body.is_error
             # += not =: a transient-requeued task carries the spend of its
             # failed attempts, so budgets see the whole cost of the work.
@@ -987,6 +997,9 @@ class TaskResultProcessor:
                 PlanItemStatus.blocked_clarity,
                 "task cancelled by the operator — retry the item to continue",
             )
+            return
+        if task.retryable_interruption:
+            plans.resume_interrupted_task(self.store, task)
             return
         if task.kind == TaskKind.resolve:
             self._land_plan_resolve(project, plan, task, body, item)

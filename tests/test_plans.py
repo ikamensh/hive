@@ -222,6 +222,118 @@ def test_resolve_fixed_chains_review(tmp_path):
     assert reviews[0].backend == task.backend
 
 
+@pytest.mark.parametrize("stage", [TaskKind.resolve, TaskKind.review])
+def test_quota_reset_resumes_the_same_plan_stage(tmp_path, stage):
+    """Quota is a capacity wait; reset resumes that stage without advancing or rebuilding."""
+    import time
+    from hive.models import Runner, Resource, ResourceUsability
+    from hive._control.supervisor import Supervisor
+
+    store = MemoryStore()
+    project = make_project(store)
+    plan = activated_plan(store, project)
+    processor, _ = make_processor(store, tmp_path)
+    if stage == TaskKind.review:
+        report(store, processor, only_resolve_task(store, project), "built\nOUTCOME: FIXED")
+    runner = store.put(Runner(name="local", backends=["codex"]))
+    resource = store.put(Resource(runner_id=runner.id, backend="codex",
+                                 usability_status=ResourceUsability.usable))
+    supervisor = Supervisor(store, lambda *_: None)
+    assert supervisor.dispatch(project) == 1
+    task = store.list(Task, status=TaskStatus.running)[0]
+    processor.handle(task.id, TaskResult(text="Rate limit; retry in 1 hour", is_error=True,
+                                        resource_exhausted=True, reset_at_hint=time.time()+3600,
+                                        session_handle="resume-me"), task.workspace_id)
+    pending = store.list(Task, status=TaskStatus.pending)
+    assert len(pending) == 1
+    retry = pending[0]
+    assert retry.id != task.id  # late result for the old attempt cannot complete its retry
+    assert retry.kind == stage
+    assert retry.session_handle == "resume-me"
+    assert retry.resume_runner_id == runner.id
+    assert retry.preserve_checkout
+    assert supervisor.dispatch(project) == 0
+    store.update(Resource, resource.id, lambda r: setattr(r, "cooldown_until", 0))
+    assert supervisor.dispatch(project) == 1
+    processor.handle(task.id, TaskResult(text="late\nOUTCOME: FIXED"), task.workspace_id)
+    assert store.get(Task, retry.id).status == TaskStatus.running
+    assert plans.plan_items(store, plan)[1].status == PlanItemStatus.queued
+
+
+def test_plan_recovers_after_runner_disappears_and_chief_restarts(tmp_path):
+    """Recovery survives disk reload, stays on the original runner, and finishes the sequence."""
+    import time
+    from hive.models import Runner, Resource, ResourceUsability
+    from hive.persistence import FileStore
+    from hive._control.supervisor import Supervisor
+
+    store = FileStore(tmp_path / "store")
+    project = make_project(store)
+    plan = activated_plan(store, project)
+    runner = store.put(Runner(name="local", backends=["codex"]))
+    store.put(Resource(runner_id=runner.id, backend="codex", usability_status=ResourceUsability.usable))
+    supervisor = Supervisor(store, lambda *_: None)
+    supervisor.dispatch(project)
+    store.update(Runner, runner.id, lambda r: setattr(r, "last_seen", time.time()-600))
+    supervisor.fail_orphaned_tasks()
+    assert len(store.list(Task, status=TaskStatus.pending)) == 1
+    store = FileStore(tmp_path / "store")
+    supervisor = Supervisor(store, lambda *_: None)
+    other = store.put(Runner(name="other", backends=["codex"]))
+    store.put(Resource(runner_id=other.id, backend="codex", usability_status=ResourceUsability.usable))
+    assert supervisor.dispatch(project) == 0  # only the original runner has the unfinished checkout
+    from hive.models import ProjectState
+    assert supervisor.refresh_state(project) == ProjectState.blocked_resources
+    store.update(Runner, runner.id, lambda r: setattr(r, "last_seen", time.time()))
+    processor, _ = make_processor(store, tmp_path)
+    for _ in ITEMS:
+        for text in ("built\nOUTCOME: FIXED", "tested\nREVIEW: ACCEPT"):
+            assert supervisor.dispatch(project) == 1
+            task = store.list(Task, status=TaskStatus.running)[0]
+            processor.handle(task.id, TaskResult(text=text), task.workspace_id)
+    assert store.get(Plan, plan.id).status == PlanStatus.complete
+
+
+def test_waiting_retry_reserves_its_checkout(tmp_path):
+    """Other work cannot reset a checkout while its interrupted plan stage waits for quota."""
+    import time
+    from hive.models import Runner, Resource, ResourceUsability
+    from hive._control.supervisor import Supervisor
+    store = MemoryStore()
+    project = make_project(store)
+    activated_plan(store, project)
+    runner = store.put(Runner(name="local", backends=["codex", "claude"]))
+    for backend in runner.backends:
+        store.put(Resource(runner_id=runner.id, backend=backend, usability_status=ResourceUsability.usable))
+    supervisor = Supervisor(store, lambda *_: None)
+    supervisor.dispatch(project)
+    task = store.list(Task, status=TaskStatus.running)[0]
+    processor, _ = make_processor(store, tmp_path)
+    processor.handle(task.id, TaskResult(text="Rate limit", is_error=True, resource_exhausted=True,
+                                        reset_at_hint=time.time()+3600), task.workspace_id)
+    other = store.put(Project(name="other", spec_repo=project.spec_repo))
+    store.put(Task(project_id=other.id, workstream_id="other", repo=project.spec_repo,
+                   instructions="other work", backend="claude"))
+    assert supervisor.dispatch(other) == 0
+
+
+def test_transient_plan_retry_preserves_progress_and_stops_after_limit(tmp_path):
+    """Provider flakes resume the same stage; persistent errors still ask for help."""
+    from hive.runner._task_results import TRANSIENT_RETRY_LIMIT
+    store = MemoryStore()
+    project = make_project(store)
+    plan = activated_plan(store, project)
+    processor, _ = make_processor(store, tmp_path)
+    for attempt in range(TRANSIENT_RETRY_LIMIT + 1):
+        task = only_resolve_task(store, project)
+        report(store, processor, task, "503 Service Unavailable", is_error=True)
+        if attempt < TRANSIENT_RETRY_LIMIT:
+            retry = only_resolve_task(store, project)
+            assert retry.id != task.id and retry.preserve_checkout
+    assert plans.plan_items(store, plan)[0].status == PlanItemStatus.blocked_clarity
+    assert not store.list(Task, status=TaskStatus.pending)
+
+
 def test_resolve_blocked_parks_item_and_stalls_the_queue(tmp_path):
     """BLOCKED parks the item with the agent's own report as the reason (the
     marker line stripped) and — strict sequencing — starts nothing behind it."""

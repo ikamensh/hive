@@ -84,6 +84,7 @@ def compute_state(
     grant_blocked: set[str] | None = None,
     plan_status: PlanStatus | None = None,
     plan_items: list[PlanItem] | None = None,
+    unavailable_tasks: set[str] | None = None,
 ) -> ProjectState:
     running = [t for t in tasks if t.status == TaskStatus.running]
     pending = [t for t in tasks if t.status == TaskStatus.pending]
@@ -106,7 +107,8 @@ def compute_state(
         with_capacity = [
             t
             for t in pending
-            if has_capacity(capacity, t.backend, effective_capabilities(t, project))
+            if t.id not in (unavailable_tasks or set())
+            and has_capacity(capacity, t.backend, effective_capabilities(t, project))
         ]
         if any(t.id not in blocked for t in with_capacity):
             return ProjectState.working
@@ -201,6 +203,11 @@ def state_reason(
         return "needs you: " + "; ".join(bits) if bits else "needs you — see the project page"
     if state == ProjectState.blocked_resources:
         pending = store.list(Task, project_id=project.id, status=TaskStatus.pending)
+        for task in pending:
+            if task.resume_runner_id:
+                runner = store.get(Runner, task.resume_runner_id)
+                name = runner.name if runner else task.resume_runner_id
+                return f"waiting to resume {task.kind} on {name} — its checkout is preserved; resumes when capacity returns"
         missing = sorted({t.backend for t in pending if t.backend not in available_backends})
         resources = [
             r
@@ -418,6 +425,11 @@ class Supervisor:
             if p.status in (PlanStatus.draft, PlanStatus.approved)
         ]
         plan = live_plans[-1] if live_plans else None
+        online = {r.id for r in self.store.list(Runner, workspace_id=self.workspace_id) if r.online()}
+        ready_pairs = {
+            (r.runner_id, r.backend) for r in self.store.list(Resource, workspace_id=self.workspace_id)
+            if r.available() and r.runner_id in online
+        }
         state = compute_state(
             project,
             workstreams,
@@ -428,6 +440,8 @@ class Supervisor:
             available_capacity,
             self._grant_blocked(project, all_tasks),
             plan_status=plan.status if plan else None,
+            unavailable_tasks={t.id for t in tasks if t.resume_runner_id
+                               and (t.resume_runner_id, t.backend) not in ready_pairs},
             plan_items=(
                 self.store.list(PlanItem, workspace_id=self.workspace_id, plan_id=plan.id)
                 if plan
@@ -728,6 +742,11 @@ class Supervisor:
             for r in self.store.list(Resource, workspace_id=self.workspace_id)
             if r.available()
         }
+        reserved_checkouts = {
+            (t.resume_runner_id, t.repo): t.id
+            for t in self.store.list(Task, workspace_id=self.workspace_id, status=TaskStatus.pending)
+            if t.preserve_checkout and t.resume_runner_id
+        }
         dispatched = 0
         for task in tasks:
             if task.status != TaskStatus.pending:
@@ -742,6 +761,11 @@ class Supervisor:
                 continue  # session allowance spent for this pair; waits for UTC midnight
             required = effective_capabilities(task, project)
             for runner in runners:
+                reserved = reserved_checkouts.get((runner.id, task.repo))
+                if reserved and reserved != task.id:
+                    continue
+                if task.resume_runner_id and runner.id != task.resume_runner_id:
+                    continue
                 if runner.id in busy_runners:
                     continue
                 resource = resources.get((runner.id, task.backend))
@@ -794,10 +818,17 @@ class Supervisor:
                     t.is_error = True
                     t.result_text = f"Runner {t.runner_id} went offline mid-task."
                     t.finished_at = time.time()
+                    t.retryable_interruption = not t.cancel_requested
                     failed.append(True)
 
             self.store.update(Task, task.id, fail)
             if failed:
+                from hive._workstreams.plans import cancel_plan_work, resume_interrupted_task
+
+                if task.cancel_requested:
+                    cancel_plan_work(self.store, task)
+                elif resume_interrupted_task(self.store, task) is not None:
+                    continue  # deterministic recovery; no planner intervention needed
                 silent = "unknown" if runner is None else f"{offline_s:.0f}s"
                 name = runner.name if runner else task.runner_id
                 log.warning(
@@ -923,6 +954,11 @@ class Supervisor:
 
     async def _step(self) -> None:
         self.fail_orphaned_tasks()
+        from hive._workstreams.plans import resume_interrupted_task
+
+        for task in self.store.list(Task, workspace_id=self.workspace_id, status=TaskStatus.failed):
+            if task.retryable_interruption:
+                resume_interrupted_task(self.store, task)
         self.check_dark_machines()
         self.power_down_idle_machines()
         resolve_open_todos(self.store, self.workspace_id)

@@ -5,7 +5,7 @@ with "Invalid stream: The model returned an empty response or malformed tool
 call". Each one hard-failed its task — failing the intake conversation (a
 fresh scout loses the brief) or parking the plan item until a human ran
 plan-retry. The property under test: a failure that `classify_failure` calls
-"transient" requeues the same task (bounded by TRANSIENT_RETRY_LIMIT) and is
+"transient" retries work (bounded by TRANSIENT_RETRY_LIMIT) and is
 invisible to the owning workflow — conversations stay running, plan items stay
 resolving — while anything past the budget, or any non-transient failure,
 lands exactly as before.
@@ -114,7 +114,10 @@ def run_until_final(store, processor, task: Task, **result_kwargs) -> int:
         outcome = processor.handle(
             task.id, TaskResult(text=FLAKE, is_error=True, **result_kwargs), task.workspace_id
         )
-        if not outcome.get("requeued"):
+        pending = store.list(Task, project_id=task.project_id, status=TaskStatus.pending)
+        if pending:
+            task = pending[0]
+        elif not outcome.get("requeued"):
             return attempts
 
 
@@ -132,15 +135,13 @@ def test_transient_failure_requeues_instead_of_failing():
 
     outcome = processor.handle(task.id, TaskResult(text=FLAKE, is_error=True), task.workspace_id)
 
-    saved = store.get(Task, task.id)
-    assert outcome == {"ok": True, "requeued": True, "transient_retries": 1}
-    assert saved.status == TaskStatus.pending
-    assert saved.runner_id == ""
-    assert saved.delivered is False
-    assert saved.transient_retries == 1
-    assert FLAKE in saved.result_text
-    # The retry is the supervisor's business (poke), never the planner's (wake).
-    assert supervisor.pokes == 1
+    assert outcome["ok"]
+    (retry,) = store.list(Task, project_id=project.id, status=TaskStatus.pending)
+    assert retry.id != task.id
+    assert retry.runner_id == "" and not retry.delivered
+    assert retry.resume_runner_id == "r-1" and retry.preserve_checkout
+    assert retry.transient_retries == 1
+    assert FLAKE in store.get(Task, task.id).result_text
     assert supervisor.events == []
 
 
@@ -168,9 +169,9 @@ def test_retry_budget_exhausts_then_fails_for_real():
     attempts = run_until_final(store, processor, task)
 
     assert attempts == TRANSIENT_RETRY_LIMIT + 1
-    saved = store.get(Task, task.id)
-    assert saved.status == TaskStatus.failed
-    assert saved.transient_retries == TRANSIENT_RETRY_LIMIT
+    attempts_saved = store.list(Task, project_id=project.id)
+    assert all(t.status == TaskStatus.failed for t in attempts_saved)
+    assert max(t.transient_retries for t in attempts_saved) == TRANSIENT_RETRY_LIMIT
     (item,) = plans.plan_items(store, store.list(Plan, project_id=project.id)[0])
     assert item.status == PlanItemStatus.blocked_clarity
     assert FLAKE in item.parked_reason
@@ -236,7 +237,8 @@ def test_duplicate_result_post_requeues_once():
     first = processor.handle(task.id, TaskResult(text=FLAKE, is_error=True), task.workspace_id)
     second = processor.handle(task.id, TaskResult(text=FLAKE, is_error=True), task.workspace_id)
 
-    assert first.get("requeued") is True
+    assert first["ok"]
+    assert len(store.list(Task, project_id=project.id, status=TaskStatus.pending)) == 1
     assert second.get("ignored") is True
     assert store.get(Task, task.id).transient_retries == 1
 

@@ -359,6 +359,50 @@ def _git(args, cwd):
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
 
 
+def test_resumed_checkout_preserves_unpushed_commit_and_dirty_files(tmp_path, monkeypatch):
+    """Interrupted work retains committed, staged, unstaged, and untracked progress."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(["init", "-b", "main"], origin)
+    _git(["config", "user.email", "test@example.invalid"], origin)
+    _git(["config", "user.name", "Test"], origin)
+    _git(["commit", "--allow-empty", "-m", "seed"], origin)
+    monkeypatch.setattr("hive.runner._daemon.WORKDIR", tmp_path / "work")
+    path = checkout(str(origin), "hive/plan-test", fresh_branch=True)
+    _git(["config", "user.email", "test@example.invalid"], path)
+    _git(["config", "user.name", "Test"], path)
+    _git(["commit", "--allow-empty", "-m", "progress"], path)
+    sha = _git(["rev-parse", "HEAD"], path).stdout
+    (path / "part.txt").write_text("staged")
+    _git(["add", "part.txt"], path)
+    (path / "part.txt").write_text("unstaged")
+    (path / "new.txt").write_text("untracked")
+    before = _git(["status", "--porcelain"], path).stdout
+    assert checkout(str(origin), "hive/plan-test", preserve=True) == path
+    assert _git(["rev-parse", "HEAD"], path).stdout == sha
+    assert _git(["status", "--porcelain"], path).stdout == before
+    assert (path / "part.txt").read_text() == "unstaged"
+
+
+def test_boot_resumes_plan_with_a_separate_attempt(tmp_path):
+    """A clean runner reboot retries the current plan stage, preserving its checkout."""
+    from test_plans import make_project, activated_plan, only_resolve_task
+    store = MemoryStore()
+    project = make_project(store)
+    activated_plan(store, project)
+    client = make_client(store)
+    payload = {"name": "local", "backends": ["codex"], "boot": True}
+    rid = client.post("/api/runners/register", json=payload, headers=H).json()["runner_id"]
+    task = only_resolve_task(store, project)
+    task.status, task.runner_id = TaskStatus.running, rid
+    store.put(task)
+    client.post("/api/runners/register", json=payload, headers=H).raise_for_status()
+    retry = only_resolve_task(store, project)
+    assert retry.id != task.id
+    assert retry.preserve_checkout and retry.resume_runner_id == rid
+    assert store.get(Task, task.id).status == TaskStatus.failed
+
+
 def test_fresh_issue_checkout_resets_existing_branch_and_preserves_backup(tmp_path, monkeypatch):
     remote = tmp_path / "remote.git"
     seed = tmp_path / "seed"

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 
 from hive._control.agent_choice import build_agent
 from hive._control.escalation import escalate
@@ -36,6 +37,7 @@ from hive.models import (
     Project,
     Task,
     TaskKind,
+    TaskStatus,
 )
 from hive.llm.prompts import load as load_prompt
 
@@ -98,6 +100,31 @@ def cancel_plan_work(store, task: Task) -> None:
         PlanItemStatus.blocked_clarity,
         "task cancelled by the operator — retry the item to continue",
     )
+
+
+def resume_interrupted_task(store, task: Task) -> Task | None:
+    """Retry an interrupted plan stage, retaining its checkout and separate attempt ledger.
+
+    A deterministic successor ID makes repeated recovery idempotent. The old
+    attempt stays terminal, so a late result cannot finish the new attempt.
+    """
+    item = store.get(PlanItem, task.work_item_id) if task.work_item_id else None
+    if item is None or item.status not in PLAN_ITEM_IN_FLIGHT:
+        return None
+    retry_id = uuid.uuid5(uuid.NAMESPACE_URL, f"hive-retry:{task.id}").hex[:12]
+    existing = store.get(Task, retry_id)
+    if existing:
+        return existing
+    return store.put(Task(
+        id=retry_id, workspace_id=task.workspace_id, project_id=task.project_id,
+        workstream_id=task.workstream_id, work_item_id=task.work_item_id, run_id=task.run_id,
+        repo=task.repo, branch=task.branch, kind=task.kind, instructions=task.instructions,
+        backend=task.backend, model=task.model, session_handle=task.session_handle,
+        resume_runner_id=task.runner_id or task.resume_runner_id, preserve_checkout=True,
+        required_capabilities=task.required_capabilities, prompt_versions=task.prompt_versions,
+        transient_retries=task.transient_retries,
+        status=TaskStatus.pending,
+    ))
 
 
 # -- drafting + review ----------------------------------------------------------
