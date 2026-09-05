@@ -81,6 +81,7 @@ from hive._workstreams.testability import (
 from hive.models import (
     AgentConversation,
     AgentGrant,
+    AgentPreference,
     Autonomy,
     Checkout,
     ConversationStatus,
@@ -183,6 +184,7 @@ class ProjectCreate(BaseModel):
 
 
 class ProjectPatch(BaseModel):
+    agent_preferences: list[AgentPreference] | None = None
     validation_command: str | None = None
     build_backend: str | None = None
     build_model: str | None = None
@@ -1092,6 +1094,12 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return {
             "plan": plan.model_dump(),
             "items": [i.model_dump() for i in plans.plan_items(store, plan)],
+            "tasks": [t.model_dump() for t in store.list(
+                Task, workspace_id=project.workspace_id, project_id=project.id, run_id=plan.id
+            )],
+            "state_reason": state_reason(
+                store, project, supervisor.available_backends(), supervisor.spend_today(project.id)
+            ),
         }
 
     def plan_spec_or_reporter(project: Project):
@@ -1656,6 +1664,11 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             backend = updates.get(f"{role}_backend")
             if backend and backend not in BACKEND_NAMES:
                 raise HTTPException(400, f"unknown {role} backend: {backend}")
+        if updates.pop("agent_preferences", None) is not None:
+            for choice in body.agent_preferences:
+                if choice.backend not in BACKEND_NAMES:
+                    raise HTTPException(400, f"unknown preferred backend: {choice.backend}")
+            project.agent_preferences = body.agent_preferences
         note = updates.pop("new_iteration_note", None)
         if updates.pop("agent_grants", None) is not None:
             problem = allowances.grant_problems(body.agent_grants, BACKEND_NAMES)
