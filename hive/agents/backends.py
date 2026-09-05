@@ -108,11 +108,8 @@ def _codex(model: str, resume_session: str = ""):
 
     sandbox = "danger-full-access"
     kwargs = {"resume_session_id": resume_session} if resume_session else {}
-    return (
-        CodexSession(model=model, sandbox=sandbox, **kwargs)
-        if model
-        else CodexSession(sandbox=sandbox, **kwargs)
-    )
+    selected = model or os.environ.get("HIVE_CODEX_MODEL") or "gpt-6-astra"
+    return CodexSession(model=selected, sandbox=sandbox, **kwargs)
 
 
 def _gemini_cli(model: str, resume_session: str = ""):

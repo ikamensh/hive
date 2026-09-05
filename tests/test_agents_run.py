@@ -9,9 +9,31 @@ the provider session handle lands on the result.
 import json
 import os
 import sys
+import pytest
 
 import hive.agents.run as run_mod
 from hive.agents import run_agent, session_handle
+
+
+@pytest.mark.parametrize(("override", "requested", "expected"), [
+    ("", "", "gpt-6-astra"),
+    ("configured-model", "", "configured-model"),
+    ("configured-model", "requested-model", "requested-model"),
+])
+def test_codex_probe_and_tasks_use_hives_selected_model(
+    tmp_path, monkeypatch, override, requested, expected,
+):
+    """A probe cannot inherit Kodo's stale default and reject usable capacity."""
+    cli = tmp_path / "codex"
+    cli.write_text(f"#!{sys.executable}\n" + '''import json, sys
+print(json.dumps({"type":"item.completed", "item":{"type":"agent_message", "text":sys.argv[sys.argv.index("-m")+1]}}))
+''')
+    cli.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("HIVE_CODEX_MODEL", override)
+    result = run_agent("codex", "probe", tmp_path, model=requested, timeout_s=10)
+    assert not result.is_error
+    assert result.text == expected
 
 
 def test_opencode_runs_through_the_agent_lifecycle(tmp_path, monkeypatch):
