@@ -268,6 +268,14 @@ before the dashboard. Astra is building save/replay, with Opus selected for revi
     Evidence: `evidence/item5-independent/` and
     `evidence/item5-cause-repair-amendment.json`.
 
+31. Tightened the plan-review prompt after the independent review miss: the
+    reviewer must exercise a relevant boundary/invariant through a public
+    interface, derive the expected result independently of the existing tests,
+    and report expected/observed evidence and remaining verification. This is
+    a short review obligation, not a guarantee of defect detection. All 35
+    plan/validation integration tests pass. The chief caches prompts, so live
+    adoption awaits an idle restart; existing task instructions are unchanged.
+
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
 for items one through five and must continue to hold for every later item. H7
 has substantive Astra, Fable, and Opus work. H8–H9 now have a labeled live fallback

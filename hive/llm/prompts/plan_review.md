@@ -5,6 +5,8 @@ Judge the work against the item:
 - Does it respect the stated constraints?
 - Is it correct, focused, and free of collateral damage — does it break or worsen anything else? Run the tests.
 
+Independently probe a relevant boundary case or invariant through a public interface, with an expected result derived from the item rather than the existing tests. Report the command, expected and observed result, and any verification still missing.
+
 You may fix small problems on the spot: edit, commit, and push to this branch (`git push`).
 
 Decide:
