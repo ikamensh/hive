@@ -90,7 +90,7 @@ later; it cannot retroactively establish exact eligibility during every sample.
 | `gpt-6-astra` | Two build stages; one also has an interrupted predecessor | 3,423,248 / 25,903 | $0.00000000 |
 | `claude-fable-5-1` | Item-one fresh review, six invalid-input checks and inventory-summary fix | 394 / 8,653 | $1.60279275 |
 | `claude-opus-5` | Item-two fresh physics review and two code improvements | 58 / 11,585 | $1.63880050 |
-| `opencode/muse-spark-free` | No simulator stage by this cutoff; separate real planner and worker/fresh-review smokes passed | Excluded: different workloads | Excluded |
+| `opencode/muse-spark-1.3-contributor-free` | No simulator stage by this cutoff; separate real planner and worker/fresh-review smokes passed | Excluded: different workloads | Excluded |
 
 The three strong models did substantive work, beyond probes. Token counters have
 different provider/cache semantics and exclude the interrupted attempt's missing
@@ -121,7 +121,7 @@ scope handling, but do not prove live provider switching or natural exhaustion.
 
 | Criterion | Evidence now | Remaining limit |
 | --- | --- | --- |
-| H1 | Local chief/managed runner, durable restart and documented launcher | Initial runtime upgrades were necessary; first-run convenience was imperfect. |
+| H1 | Local chief and supervised local runner, durable restart and documented launcher | Initial runtime upgrades were necessary; first-run convenience was imperfect. |
 | H2 | CLI imported, edited and appended while Astra ran; item two received and implemented the unit amendment | Appended ninth item has not executed. |
 | H3 | Live plan/watch output; SIGINT left task running and chief healthy | Earlier fleet-pause wait text was inaccurate; full wait-cause behavior needs later live evidence. |
 | H4–H6 | Two sequential, fresh-reviewed, validated landings; independent clean-clone checks | Continue for remaining items. No live rejected-review/repair episode yet. Observer clean-clone checks preceded reviewers' final minor edits; final SHAs have the runner's checks. |
