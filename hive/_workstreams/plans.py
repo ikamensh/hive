@@ -522,11 +522,13 @@ def advance_plan(
 
     item = store.update(PlanItem, nxt.id, promote) or nxt
     # A manual retry may wait behind another item. Derive its continuation from
-    # durable attempt history here, so a chief restart cannot lose the checkout.
+    # durable delivered-attempt history here, so a chief restart cannot lose the
+    # checkout. An undelivered attempt never owned one, even if it was dispatched.
     previous = max(
         (task for task in store.list(Task, workspace_id=project.workspace_id, work_item_id=item.id)
          if task.run_id == plan.id and task.repo == (item.repo or project.spec_repo)
          and task.branch == plan_branch(item)
+         and task.delivered
          and task.status in (TaskStatus.done, TaskStatus.failed, TaskStatus.cancelled)),
         key=lambda task: task.created_at, default=None,
     )
