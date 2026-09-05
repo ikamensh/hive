@@ -523,6 +523,7 @@ class Task(BaseModel):
     session_handle: str = ""  # runner resumes this backend session when possible
     resume_runner_id: str = ""  # interrupted work stays with its checkout and session
     preserve_checkout: bool = False  # do not reset edits left by an interrupted attempt
+    retry_of_task_id: str = ""  # previous immutable attempt; result/cost belong to this attempt only
     retryable_interruption: bool = False  # failed attempt whose successor can be recovered after a crash
     validation_command: str = ""
     validation: ValidationResult | None = None

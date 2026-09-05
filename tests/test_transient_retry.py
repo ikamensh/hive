@@ -261,7 +261,10 @@ def test_intake_turn_retries_same_conversation_instead_of_failing():
     saved_conv = store.get(AgentConversation, conversation.id)
     assert saved_conv.status == ConversationStatus.running
     assert all(entry.get("role") != "assistant" for entry in saved_conv.transcript)
-    assert store.get(Task, task.id).status == TaskStatus.pending
+    assert store.get(Task, task.id).status == TaskStatus.failed
+    (successor,) = store.list(Task, retry_of_task_id=task.id)
+    assert successor.status == TaskStatus.pending
+    assert saved_conv.last_task_id == successor.id
     assert intake.start(store, store.get(Project, project.id)).id == conversation.id
     assert store.get(Project, project.id).state == "intake"
 
@@ -299,12 +302,13 @@ def test_probe_flake_redelivers_without_a_usability_verdict():
 
     outcome = processor.handle(task.id, TaskResult(text=FLAKE, is_error=True), task.workspace_id)
 
-    saved = store.get(Task, task.id)
+    saved = store.get(Task, outcome["retry_task_id"])
     assert outcome.get("requeued") is True
     assert saved.status == TaskStatus.running  # still pinned to its runner
     assert saved.runner_id == runner.id
     assert saved.delivered is False  # the next poll re-delivers it
     saved_resource = store.get(Resource, resource.id)
+    assert saved_resource.last_probe_task_id == saved.id
     assert saved_resource.usability_status == ResourceUsability.probing
     assert saved_resource.total_tasks == 1  # the attempt's spend still counts
     assert supervisor.pokes == 0  # nothing to dispatch
@@ -327,6 +331,7 @@ def test_probe_past_budget_fails_resource_as_before():
         )
         if not outcome.get("requeued"):
             break
+        task = store.get(Task, outcome["retry_task_id"])
 
     assert attempts == TRANSIENT_RETRY_LIMIT + 1
     assert store.get(Task, task.id).status == TaskStatus.failed
@@ -339,15 +344,11 @@ def test_probe_past_budget_fails_resource_as_before():
 
 
 def test_spend_accumulates_across_attempts():
-    """Budgets see the whole cost of retried work: the task row and the
-    resource both carry the sum of every attempt, failed and final alike."""
+    """Budgets sum separate attempt ledgers; resource totals include failed and final attempts."""
     store = MemoryStore()
     processor, _ = make_processor(store, "/tmp")
     project, conversation, task = make_intake_turn(store)
-    runner = store.put(Runner(name="box", backends=["gemini-cli"]))
-    resource = store.put(
-        Resource(machine_id="m-1", runner_id="r-1", backend="gemini-cli")
-    )
+    resource = store.put(Resource(machine_id="m-1", runner_id="r-1", backend="gemini-cli"))
 
     costs = [round(0.5 * (i + 1), 2) for i in range(TRANSIENT_RETRY_LIMIT)]  # failed attempts
     for cost in costs:
@@ -358,6 +359,7 @@ def test_spend_accumulates_across_attempts():
             task.workspace_id,
         )
         assert outcome.get("requeued") is True
+        task = store.get(Task, outcome["retry_task_id"])
     claim(store, store.get(Task, task.id))
     processor.handle(
         task.id,
@@ -368,8 +370,10 @@ def test_spend_accumulates_across_attempts():
     saved = store.get(Task, task.id)
     total = sum(costs) + 2.0
     assert saved.status == TaskStatus.done
-    assert saved.cost_usd == total
-    assert saved.input_tokens == 10 * (TRANSIENT_RETRY_LIMIT + 1)
-    assert saved.output_tokens == 5 * (TRANSIENT_RETRY_LIMIT + 1)
+    attempts = store.list(Task, project_id=project.id)
+    assert saved.cost_usd == 2.0
+    assert sum(t.cost_usd for t in attempts) == total
+    assert sum(t.input_tokens for t in attempts) == 10 * (TRANSIENT_RETRY_LIMIT + 1)
+    assert sum(t.output_tokens for t in attempts) == 5 * (TRANSIENT_RETRY_LIMIT + 1)
     assert store.get(Resource, resource.id).total_cost_usd == total
     assert store.get(AgentConversation, conversation.id).status == ConversationStatus.open

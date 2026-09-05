@@ -286,53 +286,38 @@ def register(store, body: RunnerRegister, workspace_id: str) -> dict:
 
 
 def _requeue_dropped_work(store, workspace_id: str, runner: Runner) -> None:
-    """A booting daemon executes nothing: whatever was in flight on this runner
-    died with the previous process — requeue it (or fail probes) before queuing
-    fresh startup probes."""
-
-    def requeue(task: Task) -> None:
-        if task.kind == TaskKind.probe:
-            task.status = TaskStatus.failed
-            task.is_error = True
-            task.result_text = "Probe interrupted because the runner rebooted."
-            task.finished_at = time.time()
-        else:
-            task.status = TaskStatus.pending
-            task.runner_id = ""
-            task.delivered = False
+    """A reboot ends every running attempt; only a new ID may resume its checkout."""
+    from hive._control.retries import resume_interrupted_task
+    from hive._workstreams.plans import cancel_plan_work
 
     for task in store.list(
         Task, workspace_id=workspace_id, status=TaskStatus.running, runner_id=runner.id
     ):
-        from hive.models import PlanItem
-        from hive._workstreams.plans import cancel_plan_work, resume_interrupted_task
+        changed = []
 
-        if task.work_item_id and store.get(PlanItem, task.work_item_id) is not None:
-            def interrupt(saved: Task) -> None:
-                saved.status = TaskStatus.failed
-                saved.is_error = True
-                saved.finished_at = time.time()
-                saved.result_text = "Runner restarted; resuming interrupted work."
-                saved.retryable_interruption = not saved.cancel_requested
+        def interrupt(saved: Task) -> None:
+            if saved.status != TaskStatus.running:
+                return
+            saved.status = TaskStatus.cancelled if saved.cancel_requested else TaskStatus.failed
+            saved.is_error = True
+            saved.finished_at = time.time()
+            saved.result_text = "Runner restarted; the previous attempt was interrupted."
+            saved.retryable_interruption = not saved.cancel_requested and saved.kind != TaskKind.probe
+            changed.append(True)
 
-            interrupted = store.update(Task, task.id, interrupt)
-            if interrupted.cancel_requested:
-                cancel_plan_work(store, interrupted)
-            else:
-                resume_interrupted_task(store, interrupted)
+        interrupted = store.update(Task, task.id, interrupt)
+        if not changed:
             continue
-        updated = store.update(Task, task.id, requeue)
-        if updated and updated.kind == TaskKind.probe:
+        if interrupted.kind == TaskKind.probe:
             for resource in store.list(
-                Resource,
-                workspace_id=workspace_id,
-                runner_id=runner.id,
-                backend=updated.backend,
+                Resource, workspace_id=workspace_id, runner_id=runner.id, backend=interrupted.backend,
             ):
-                if resource.last_probe_task_id == updated.id:
+                if resource.last_probe_task_id == interrupted.id:
                     resource.usability_status = ResourceUsability.unknown
-                    resource.last_probe_text = updated.result_text
+                    resource.last_probe_text = interrupted.result_text
                     store.put(resource)
-            log.info("failed probe %s after runner %s reboot", task.id, runner.name)
+        elif interrupted.cancel_requested:
+            cancel_plan_work(store, interrupted)
         else:
-            log.info("requeued task %s after runner %s reboot", task.id, runner.name)
+            resume_interrupted_task(store, interrupted)
+        log.info("ended attempt %s after runner %s reboot", task.id, runner.name)

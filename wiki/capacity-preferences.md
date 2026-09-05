@@ -12,8 +12,11 @@ actual backend/model are recorded atomically when the task becomes running;
 finished attempts never have their model rewritten. A fresh review gets its own
 session even when it selects the same model as the builder.
 
-Quota interruption preserves the plan item, branch, original runner and dirty
-checkout, and creates a separate attempt. A different backend or model clears
+Quota interruption preserves the owning work item or intake conversation, branch,
+original runner and dirty checkout, and creates a separate attempt. Transient
+provider errors and runner restarts follow the same rule. `retry_of_task_id`
+links each attempt to its predecessor; finished attempts retain their own
+result and spend, so a late delivery cannot complete a newer attempt. A different backend or model clears
 the session handle; provider sessions are never interchangeable. If all choices
 are exhausted, the attempt waits and dispatch resumes after capacity returns.
 Every dispatched attempt consumes its matching daily session grant.

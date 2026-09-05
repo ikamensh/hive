@@ -49,6 +49,9 @@ class WakeRecorder:
     def wake(self, project_id, event):
         self.events.append((project_id, event))
 
+    def poke(self):
+        pass
+
 
 def make_project(store) -> Project:
     return store.put(Project(name="demo", spec_repo="https://github.com/o/r.git"))

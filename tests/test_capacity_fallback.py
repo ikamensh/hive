@@ -145,3 +145,75 @@ def test_dispatch_records_why_preferred_model_was_skipped():
     )
     assert supervisor.dispatch(project) == 0
     assert store.get(Task, task.id).dispatch_reason == chosen.dispatch_reason
+
+
+def test_intake_quota_or_flake_creates_fresh_attempt_and_rejects_late_results(tmp_path):
+    """Switching a failed intake attempt to Muse preserves the brief and isolates provider ledgers."""
+    from hive._control.intake import queue_turn
+    from hive.models import AgentConversation, ConversationStatus
+
+    for quota in (False, True):
+        store = MemoryStore()
+        project = store.put(Project(name="p", spec_repo="https://github.com/o/r.git",
+                                    agent_preferences=[PREFERENCES[1], PREFERENCES[-1]]))
+        runner = store.put(Runner(name="laptop", backends=["claude", "opencode"]))
+        claude = store.put(Resource(runner_id=runner.id, backend="claude", usability_status=ResourceUsability.usable))
+        store.put(Resource(runner_id=runner.id, backend="opencode", usability_status=ResourceUsability.usable))
+        conversation = store.put(AgentConversation(project_id=project.id, repo=project.spec_repo,
+                                                   backend="claude", model=PREFERENCES[1].model,
+                                                   latest_brief="Deterministic physics"))
+        original = queue_turn(store, project, conversation, "message", "Include energy accounting")
+        supervisor = Supervisor(store, lambda *_: None)
+        processor, _ = make_processor(store, tmp_path)
+        processor.supervisor = supervisor
+        assert supervisor.dispatch(project) == 1
+        processor.handle(original.id, TaskResult(
+            text="Fable weekly limit reached" if quota else "Internal server error", is_error=True,
+            resource_exhausted=quota, reset_at_hint=time.time()+3600 if quota else 0,
+            input_tokens=1000, session_handle="fable-session",
+        ), project.workspace_id)
+        store.update(Resource, claude.id, lambda r: setattr(r, "cooldown_until", time.time()+3600))
+        assert store.get(AgentConversation, conversation.id).status == ConversationStatus.running
+        assert supervisor.dispatch(project) == 1
+        successor = store.list(Task, status=TaskStatus.running)[0]
+        assert successor.id != original.id
+        assert successor.retry_of_task_id == original.id
+        assert successor.backend == "opencode" and successor.input_tokens == 0
+        assert successor.preserve_checkout and successor.resume_runner_id == runner.id
+        assert successor.session_handle == ""
+        assert store.get(AgentConversation, conversation.id).last_task_id == successor.id
+        late = processor.handle(original.id, TaskResult(text="Stale brief", input_tokens=50), project.workspace_id)
+        assert late["ignored"]
+        assert store.get(Task, successor.id).status == TaskStatus.running
+        assert store.get(AgentConversation, conversation.id).latest_brief == "Deterministic physics"
+        processor.handle(successor.id, TaskResult(text="New brief", input_tokens=200), project.workspace_id)
+        assert store.get(AgentConversation, conversation.id).latest_brief == "New brief"
+        assert store.get(Task, original.id).input_tokens == 1000
+        assert store.get(Task, successor.id).input_tokens == 200
+
+
+def test_interrupted_attempt_recovers_after_store_restart_without_relinking_a_newer_turn(tmp_path):
+    """Failure recording may precede a chief crash; recovery is idempotent and cannot reopen old work."""
+    from concurrent.futures import ThreadPoolExecutor
+    from hive._control.retries import resume_interrupted_task
+    from hive.models import AgentConversation, ConversationStatus
+    from hive.persistence.store import FileStore
+
+    store = FileStore(tmp_path / "store")
+    task = store.put(Task(project_id="p", workstream_id="", repo="r", instructions="continue",
+                          kind="intake", backend="claude", model=PREFERENCES[1].model,
+                          status=TaskStatus.failed, runner_id="laptop", retryable_interruption=True,
+                          input_tokens=1234, result_text="rate limit"))
+    conversation = store.put(AgentConversation(project_id="p", repo="r", backend="claude",
+                                               status=ConversationStatus.running, last_task_id=task.id))
+    store.update(Task, task.id, lambda t: setattr(t, "conversation_id", conversation.id))
+    store = FileStore(tmp_path / "store")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        retries = list(pool.map(lambda _: resume_interrupted_task(store, task), range(2)))
+    assert retries[0].id == retries[1].id
+    assert len(store.list(Task)) == 2
+    assert store.get(AgentConversation, conversation.id).last_task_id == retries[0].id
+    assert retries[0].input_tokens == 0 and store.get(Task, task.id).input_tokens == 1234
+    store.update(AgentConversation, conversation.id, lambda c: setattr(c, "status", ConversationStatus.open))
+    assert resume_interrupted_task(store, task) is None
+    assert store.get(AgentConversation, conversation.id).status == ConversationStatus.open

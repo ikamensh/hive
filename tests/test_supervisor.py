@@ -401,10 +401,12 @@ def test_orphaned_task_fails_when_runner_vanishes(caplog):
     with caplog.at_level(logging.WARNING, logger="hive._control.supervisor"):
         sup.fail_orphaned_tasks()
     assert store.get(Task, task.id).status == TaskStatus.failed
-    assert sup._events[project.id]  # orchestrator gets woken about it
+    assert not sup._events[project.id]  # deterministic retry needs no paid planner
+    (retry,) = store.list(Task, retry_of_task_id=task.id)
+    assert retry.status == TaskStatus.pending and retry.resume_runner_id == runner.id
     # The offline declaration is greppable in the chief log, not just a silent
     # Firestore mutation — this is the trail you follow to the runner's own logs.
-    assert runner.id in caplog.text and "silent" in caplog.text
+    assert runner.id in caplog.text and "offline" in caplog.text
 
 
 def test_orchestrator_failure_files_project_todo():

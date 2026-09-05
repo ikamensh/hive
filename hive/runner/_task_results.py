@@ -98,6 +98,7 @@ from hive.models import (
 )
 from hive._integrations.specrepo import SpecRepo
 from hive._workstreams import plans
+from hive._control.retries import resume_interrupted_task
 from hive._workstreams.testing import (
     close_issue as default_close_issue,
     file_or_update_finding_issue as default_file_or_update_finding_issue,
@@ -288,10 +289,7 @@ class TaskResultProcessor:
         if not existing or existing.workspace_id != workspace_id:
             raise LookupError(task_id)
 
-        plan_item = self.store.get(PlanItem, existing.work_item_id) if existing.work_item_id else None
         transient = self._should_requeue_transient(existing, body)
-        if transient and plan_item is None:
-            return self._requeue_transient(existing, body, workspace_id)
 
         finished_at = time.time()
         recorded: list[bool] = []
@@ -307,19 +305,17 @@ class TaskResultProcessor:
             task.result_text = body.text
             task.validation = body.validation
             task.session_handle = body.session_handle or task.session_handle
-            if plan_item is not None:
-                task.retryable_interruption = (
-                    body.is_error and not body.cancelled and not task.cancel_requested
-                    and not body.auth_blocked and (body.resource_exhausted or transient)
-                )
-                if transient:
-                    task.transient_retries += 1
+            task.retryable_interruption = (
+                body.is_error and not body.cancelled and not task.cancel_requested
+                and not body.auth_blocked
+                and (transient or (body.resource_exhausted and task.kind != TaskKind.probe))
+            )
+            if transient:
+                task.transient_retries += 1
             task.is_error = body.is_error
-            # += not =: a transient-requeued task carries the spend of its
-            # failed attempts, so budgets see the whole cost of the work.
-            task.cost_usd += body.cost_usd
-            task.input_tokens += body.input_tokens
-            task.output_tokens += body.output_tokens
+            task.cost_usd = body.cost_usd
+            task.input_tokens = body.input_tokens
+            task.output_tokens = body.output_tokens
             task.structured_result = body.structured_result
             task.structured_result_error = body.structured_result_error
             task.finished_at = finished_at
@@ -331,7 +327,21 @@ class TaskResultProcessor:
         if not recorded:
             return {"ok": True, "ignored": True, "status": task.status}
 
-        probe_resources = self._account_resources(workspace_id, task, body)
+        probe_resources = []
+        if transient:
+            self._account_attempt_spend(workspace_id, task, body)
+        else:
+            probe_resources = self._account_resources(workspace_id, task, body)
+        if task.retryable_interruption:
+            successor = resume_interrupted_task(self.store, task)
+            if successor is not None:
+                log.warning("%s task %s interrupted on %s; successor %s retains its checkout",
+                            task.kind, task.id, task.runner_id, successor.id)
+                if successor.status == TaskStatus.pending:
+                    self.supervisor.poke()
+                return {"ok": True, "requeued": True, "retry_task_id": successor.id,
+                        "transient_retries": task.transient_retries}
+            return {"ok": True, "retry_suppressed": True}  # owner is no longer in flight
         if task.kind == TaskKind.probe:
             self._handle_probe_result(task, body, probe_resources, workspace_id)
             return {"ok": True}
@@ -381,8 +391,8 @@ class TaskResultProcessor:
 
     def _should_requeue_transient(self, task: Task, body: TaskResult) -> bool:
         """A transient backend flake (dead stream, empty/malformed model
-        response, provider 5xx) is not a verdict on the work: requeue the same
-        task instead of failing it, up to TRANSIENT_RETRY_LIMIT attempts. This
+        response, provider 5xx) is not a verdict on the work: create a new
+        attempt instead of parking it, up to TRANSIENT_RETRY_LIMIT retries. This
         keeps an intake conversation alive across a flaky turn and saves a plan
         item from parking on an error no human needs to see. Auth blocks and
         quota exhaustion have their own paths; an operator cancel always wins.
@@ -397,50 +407,6 @@ class TaskResultProcessor:
             and task.transient_retries < TRANSIENT_RETRY_LIMIT
             and classify_failure(body.text, is_error=True) == "transient"
         )
-
-    def _requeue_transient(self, existing: Task, body: TaskResult, workspace_id: str) -> dict:
-        requeued: list[bool] = []
-
-        def requeue(task: Task) -> None:
-            if task.status != TaskStatus.running:
-                return
-            if task.kind == TaskKind.probe:
-                # Probes never ride the dispatcher — they are minted running and
-                # pinned to their runner, so redeliver on the next poll instead.
-                task.delivered = False
-            else:
-                task.status = TaskStatus.pending
-                task.runner_id = ""
-                task.delivered = False
-            task.transient_retries += 1
-            # Carry the failed attempt's spend on the task and keep its error
-            # text visible until the retry overwrites it.
-            task.cost_usd += body.cost_usd
-            task.input_tokens += body.input_tokens
-            task.output_tokens += body.output_tokens
-            task.result_text = body.text
-            requeued.append(True)
-
-        task = self.store.update(Task, existing.id, requeue)
-        if task is None:
-            raise LookupError(existing.id)
-        if not requeued:
-            return {"ok": True, "ignored": True, "status": task.status}
-        # `existing` still names the runner that burned the attempt; a
-        # non-probe requeue cleared it on the stored row.
-        self._account_attempt_spend(workspace_id, existing, body)
-        log.warning(
-            "%s task %s failed transiently on %s (attempt %d/%d) — requeued: %s",
-            task.kind,
-            task.id,
-            existing.runner_id,
-            task.transient_retries,
-            TRANSIENT_RETRY_LIMIT,
-            " ".join(body.text.split())[:300],
-        )
-        if task.status == TaskStatus.pending:
-            self.supervisor.poke()  # dispatch the retry now, not next tick
-        return {"ok": True, "requeued": True, "transient_retries": task.transient_retries}
 
     def _account_attempt_spend(self, workspace_id: str, task: Task, body: TaskResult) -> None:
         """Account a to-be-retried attempt's cost/usage on its resource. Unlike
@@ -1008,7 +974,7 @@ class TaskResultProcessor:
             )
             return
         if task.retryable_interruption:
-            plans.resume_interrupted_task(self.store, task)
+            resume_interrupted_task(self.store, task)
             return
         if task.kind == TaskKind.resolve:
             self._land_plan_resolve(project, plan, task, body, item)

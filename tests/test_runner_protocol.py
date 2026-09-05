@@ -5,6 +5,8 @@ import json
 import subprocess
 import time
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from hive.agents import PROBE_MARKER
@@ -69,9 +71,11 @@ def test_boot_requeues_inflight_tasks_heartbeat_does_not():
     # boot: task requeued
     client.post("/api/runners/register",
                 json={"name": "r", "backends": ["cursor"], "boot": True}, headers=H)
-    requeued = store.get(Task, task.id)
+    assert store.get(Task, task.id).status == TaskStatus.failed
+    (requeued,) = store.list(Task, retry_of_task_id=task.id)
     assert requeued.status == TaskStatus.pending
     assert requeued.runner_id == "" and not requeued.delivered
+    assert requeued.resume_runner_id == rid and requeued.preserve_checkout
 
 
 def test_register_auto_probes_new_resource_and_records_discovery():
@@ -359,7 +363,8 @@ def _git(args, cwd):
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
 
 
-def test_resumed_checkout_preserves_unpushed_commit_and_dirty_files(tmp_path, monkeypatch):
+@pytest.mark.parametrize("branch", ["hive/plan-test", ""])
+def test_resumed_checkout_preserves_unpushed_commit_and_dirty_files(tmp_path, monkeypatch, branch):
     """Interrupted work retains committed, staged, unstaged, and untracked progress."""
     origin = tmp_path / "origin"
     origin.mkdir()
@@ -368,7 +373,7 @@ def test_resumed_checkout_preserves_unpushed_commit_and_dirty_files(tmp_path, mo
     _git(["config", "user.name", "Test"], origin)
     _git(["commit", "--allow-empty", "-m", "seed"], origin)
     monkeypatch.setattr("hive.runner._daemon.WORKDIR", tmp_path / "work")
-    path = checkout(str(origin), "hive/plan-test", fresh_branch=True)
+    path = checkout(str(origin), branch, fresh_branch=True)
     _git(["config", "user.email", "test@example.invalid"], path)
     _git(["config", "user.name", "Test"], path)
     _git(["commit", "--allow-empty", "-m", "progress"], path)
@@ -378,7 +383,7 @@ def test_resumed_checkout_preserves_unpushed_commit_and_dirty_files(tmp_path, mo
     (path / "part.txt").write_text("unstaged")
     (path / "new.txt").write_text("untracked")
     before = _git(["status", "--porcelain"], path).stdout
-    assert checkout(str(origin), "hive/plan-test", preserve=True) == path
+    assert checkout(str(origin), branch, preserve=True) == path
     assert _git(["rev-parse", "HEAD"], path).stdout == sha
     assert _git(["status", "--porcelain"], path).stdout == before
     assert (path / "part.txt").read_text() == "unstaged"

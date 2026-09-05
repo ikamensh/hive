@@ -382,12 +382,18 @@ def checkout(repo_url: str, branch: str = "", fresh_branch: bool = False, *, pre
     slug = checkout_url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
     path = WORKDIR / slug
     if preserve and path.exists():
+        expected = branch
+        if not expected:
+            expected = _run_checkout_git(
+                ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], cwd=path,
+                timeout=60, env=env, repo_url=checkout_url, branch=branch,
+            ).stdout.strip().removeprefix("origin/")
         current = _run_checkout_git(
             ["branch", "--show-current"], cwd=path, timeout=60, env=env,
             repo_url=checkout_url, branch=branch,
         ).stdout.strip()
-        if current != branch:
-            raise CheckoutError(f"Cannot resume {branch}: checkout is on {current}; edits were preserved.")
+        if current != expected:
+            raise CheckoutError(f"Cannot resume {expected}: checkout is on {current}; edits were preserved.")
         return path
     if path.exists():
         _run_checkout_git(
