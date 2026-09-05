@@ -14,6 +14,12 @@ validation command runs on the runner after review and records evidence tied to
 the pushed commit; landing uses that SHA. Review or validation failures trigger
 two bounded repairs with preserved checkouts before parking. Quota/runner
 interruptions instead resume the same stage with a separate attempt record.
+Unfinished builds/reviews and invalid result reports get two bounded continuations
+of the current stage, retaining their checkout and compatible session. Persistent
+incompletion parks as rejected with execution evidence; a blocked build requires
+an explicit owner question. Manual retry retains partial work and starts a fresh
+session with the amended item document and prior report. The previous attempt's
+history and usage remain unchanged.
 See [local queue acceptance](../acceptance/local-queue.md) and the README for
 the runnable workflow; the original design below describes the plan model.
 

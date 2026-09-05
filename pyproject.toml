@@ -12,7 +12,7 @@ dependencies = [
     "google-genai>=1.0",
     "httpx>=0.27",
     # Preserve provider/quota errors until this fix is included in a PyPI release.
-    "kodo-agent @ git+https://github.com/ikamensh/kodo.git@40402842f25263c8e66c193100d1e21f0e030a5c",
+    "kodo-agent @ git+https://github.com/ikamensh/kodo.git@5ad352ae75ef0809695ca460cc9c4628b8506bc1",
     # Its bundled Claude Code must support the selected Fable/Opus models.
     "claude-agent-sdk>=0.2.152",
 ]
