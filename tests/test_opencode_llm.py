@@ -4,6 +4,7 @@ executed only after the complete model turn passes schema validation."""
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -134,7 +135,6 @@ sys.exit(1)
 def test_timeout_kills_the_process_group(tmp_path, monkeypatch):
     """A stalled CLI and its child are both terminated at the timeout, so a
     failed planner call leaves no running process or native tool behind."""
-    import subprocess
     from hive.llm import ProviderUnavailable
     from hive.llm._opencode import OpenCodeAdapter
 
@@ -199,3 +199,39 @@ print(json.dumps({"type": "step_finish", "part": {"tokens": {"input": 100, "outp
     run = store.list(OrchestratorRun, project_id=project.id)[0]
     assert run.input_tokens == 200 and run.output_tokens == 40
     assert run.model == "opencode/muse-spark-1.3-contributor-free"
+
+
+def test_live_smoke_exercises_actual_snapshot_and_local_git(tmp_path, monkeypatch):
+    """Keep the opt-in live scenario executable offline: the real caller
+    supplies project state, commits its goal to isolated Git, and drafts work."""
+    executable(tmp_path, '''
+import json, sys
+request = json.load(sys.stdin)
+initial = request["messages"][0]["content"]
+assert "STATE SNAPSHOT:\\nPROJECT smoke-arithmetic" in initial
+assert "SPEC:" in initial and "A tiny deterministic Python arithmetic package" in initial
+assert "Call propose_plan once" not in initial and "Do not ask questions" not in initial
+if request["messages"][-1]["role"] == "tool":
+    assert "committed " in request["messages"][-2]["content"]
+    assert "awaiting the human" in request["messages"][-1]["content"]
+    turn = {"text": "Draft ready for review.", "tool_calls": []}
+else:
+    turn = {"text": "", "tool_calls": [
+        {"name": "commit_to_spec", "arguments": {
+            "files_json": json.dumps({"iteration.md": "# Iteration\\nShip arithmetic package.\\n"}),
+            "message": "Set arithmetic iteration"}},
+        {"name": "propose_plan", "arguments": {
+            "goal": "Ship arithmetic package", "items_json": json.dumps([{"title": "Implement arithmetic"}])}}
+    ]}
+print(json.dumps({"type": "text", "part": {"text": json.dumps(turn)}}))
+''')
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    result = subprocess.run([sys.executable, "scripts/smoke_opencode_planner.py"],
+                            cwd=Path(__file__).resolve().parents[1], capture_output=True,
+                            text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    evidence = json.loads(result.stdout)
+    assert evidence["included_only"] and evidence["daily_budget_usd"] == 0
+    assert evidence["plans"][0]["status"] == "draft"
+    assert evidence["spec_commits"] == ["Set arithmetic iteration", "Initial arithmetic mission"]
+    assert evidence["execution_tasks"] == evidence["cost_usd"] == 0

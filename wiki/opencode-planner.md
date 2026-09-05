@@ -19,7 +19,9 @@ back to configured API credentials. Unpinned `auto` selection does not qualify.
 Each existing Hive tool-loop round launches a short-lived OpenCode process in
 an isolated temporary directory. A custom agent receives the planner prompt
 and conversation, with native tools denied, external plugins disabled, and
-personal/project configuration excluded. Explicit session titles and a
+personal/project configuration excluded. The CLI's explicit `--dir` and its
+`PWD` both name that directory; setting only subprocess `cwd` can still load
+the caller's repository context. Explicit session titles and a
 `small_model` matching the requested model prevent a separate paid title model.
 Timeout or cancellation kills the process group, including descendants.
 
@@ -41,12 +43,21 @@ and planner, including included-only/$0 API-to-scheduler draft persistence,
 paid-provider rejection, validation-before-side-effects, raw JSON triage,
 timeout cleanup, and provider errors without paid fallback. A live Muse smoke also
 completed a two-round tool/result exchange and a separate JSON triage call.
-`uv run python scripts/smoke_opencode_planner.py` exercises the actual seven-tool
-planner surface in an isolated in-memory project: it requires exactly one
-two-item draft, a final response within three rounds, and no execution tasks.
-This caught a temporal prompt bug: treating the initial snapshot as permanently
-authoritative made the planner repeat successful calls. Later tool results now
-explicitly update the snapshot's state; the same live case finishes in two rounds.
+`uv run python scripts/smoke_opencode_planner.py` exercises the real
+`Orchestrator.invoke`, initial state snapshot, and seven-tool planner surface
+with an ordinary arithmetic-package goal. It uses an included-only/$0 in-memory
+project and a throwaway local Git spec remote; any spec commits stay there.
+It requires one small draft, a final response within three rounds, and no
+execution tasks. The live check completed in two rounds and 16.1 seconds:
+Muse committed the iteration goal, proposed one item, and stopped for approval
+(7,441 input and 1,514 output tokens; $0 recorded cost).
+
+Earlier checks caught two integration problems: the initial snapshot was
+treated as permanently authoritative, causing repeated successful calls, and
+OpenCode could inherit the caller's repository context. Later tool results now
+explicitly update the invocation's state, and the CLI directory is pinned.
+Malformed JSON or wrong argument types still fail explicitly before dispatch;
+there is no automatic repair or provider fallback for invalid tool requests.
 These checks establish transport behavior, not general planning quality.
 
 The adapter uses OpenCode's documented [CLI](https://opencode.ai/docs/cli/)
