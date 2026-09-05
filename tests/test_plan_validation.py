@@ -57,7 +57,7 @@ def test_validation_rejects_test_side_effects_and_times_out(repo):
     assert timeout.exit_code != 0 and "timed out" in timeout.output
 
 
-@pytest.mark.parametrize("command", ["echo checks-passed", "echo checks-failed; exit 1", ""])
+@pytest.mark.parametrize("command", ["echo checks-passed", "sh check.sh", ""])
 def test_review_runner_evidence_gates_landing(repo, tmp_path, monkeypatch, command):
     """Real runner execution and result processing merge only the tested commit.
 
@@ -73,6 +73,11 @@ def test_review_runner_evidence_gates_landing(repo, tmp_path, monkeypatch, comma
     from test_plans import activated_plan, only_resolve_task, report, make_processor
 
     store = MemoryStore()
+    if command == "sh check.sh":
+        (repo / "check.sh").write_text("echo checks-failed; exit 1\n")
+        git(repo, "add", "check.sh")
+        git(repo, "commit", "-m", "Failing check")
+        git(repo, "push", "origin", "HEAD")
     project = store.put(Project(name="validated", spec_repo=str(repo),
                                 validation_command=command or "echo checks-passed"))
     plan = activated_plan(store, project)
@@ -88,10 +93,12 @@ def test_review_runner_evidence_gates_landing(repo, tmp_path, monkeypatch, comma
     monkeypatch.setattr(daemon, "_upload_artifacts", lambda *a: None)
     monkeypatch.setattr(daemon, "refresh_usage", lambda *a: None)
     monkeypatch.setenv("KODO_RUNS_DIR", str(tmp_path / "logs"))
-    monkeypatch.setattr(daemon, "run_agent", lambda *a, **kw: SimpleNamespace(
-        text="REVIEW: ACCEPT", is_error=False, cost_usd=0, input_tokens=0, output_tokens=0,
+    def agent_result(text):
+        return SimpleNamespace(
+        text=text, is_error=False, cost_usd=0, input_tokens=0, output_tokens=0,
         structured_result={}, structured_result_error="", session_handle="",
-    ))
+        )
+    monkeypatch.setattr(daemon, "run_agent", lambda *a, **kw: agent_result("REVIEW: ACCEPT"))
     payload = daemon.execute(review.model_dump(mode="json"), {}, None)
     if not command:
         payload.pop("validation", None)
@@ -104,4 +111,25 @@ def test_review_runner_evidence_gates_landing(repo, tmp_path, monkeypatch, comma
         assert store.get(Task, review.id).validation.commit_sha == merged[0]
     else:
         assert not merged and second.status == PlanItemStatus.queued
-        assert "validation" in first.parked_reason.lower()
+        repair = store.list(Task, status=TaskStatus.pending)[0]
+        assert "Validation failed" in repair.instructions
+        assert repair.branch == review.branch and not repair.fresh_branch
+        if command == "sh check.sh":
+            def fix(*a, **kw):
+                (repo / "check.sh").write_text("echo checks-passed\n")
+                git(repo, "commit", "-am", "Repair failing check")
+                git(repo, "push", "origin", "HEAD")
+                return agent_result("OUTCOME: FIXED")
+
+            monkeypatch.setattr(daemon, "run_agent", fix)
+            payload = daemon.execute(repair.model_dump(mode="json"), {}, None)
+            store.update(Task, repair.id, lambda t: setattr(t, "status", TaskStatus.running))
+            processor.handle(repair.id, TaskResult(**payload), repair.workspace_id)
+            review = store.list(Task, status=TaskStatus.pending)[0]
+            assert not review.session_handle
+            monkeypatch.setattr(daemon, "run_agent", lambda *a, **kw: agent_result("REVIEW: ACCEPT"))
+            payload = daemon.execute(review.model_dump(mode="json"), {}, None)
+            store.update(Task, review.id, lambda t: setattr(t, "status", TaskStatus.running))
+            processor.handle(review.id, TaskResult(**payload), review.workspace_id)
+            assert merged == [git(repo, "rev-parse", "HEAD")]
+            assert plans.plan_items(store, plan)[0].status == PlanItemStatus.done

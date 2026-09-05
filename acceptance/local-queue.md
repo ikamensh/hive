@@ -19,6 +19,10 @@ make reviewed progress across interruptions without configuring cloud storage.
   requires a zero exit code on a clean, pushed commit and merges that exact SHA.
   Missing evidence, failing checks, dirty files, and unpushed edits block landing.
   Command, bounded output, exit code, and the passing SHA persist on the task.
+- Review rejection or validation failure sends findings to the builder for up
+  to two repairs on the same checkout, each with a fresh review. Subsequent
+  items wait. Persistent failure parks with evidence; explicit retry resets the
+  repair allowance. Quota interruptions do not consume repair attempts.
 - Quota exhaustion waits for capacity and resumes the interrupted build or
   review. A returning runner resumes its interrupted stage, including after a
   chief restart. Each retry has its own task record; late results are ignored.

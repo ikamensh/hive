@@ -345,6 +345,7 @@ class PlanItem(BaseModel):
     story_keys: list[str] = []  # acceptance stories this claims to deliver
     status: PlanItemStatus = PlanItemStatus.proposed
     parked_reason: str = ""  # blocked/rejected: the agent's explanation
+    repair_attempts: int = 0  # bounded automatic build/review loops for this item
     authored_by: str = "agent"  # "agent" | "human"
     edited_by_human: bool = False
     created_at: float = Field(default_factory=now)

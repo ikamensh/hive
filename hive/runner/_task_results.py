@@ -1063,8 +1063,7 @@ class TaskResultProcessor:
             return
         if task.verdict != Verdict.accept:
             report = self._agent_report(body.text) or "the review rejected without a report"
-            plans.set_item_status(self.store, item.id, PlanItemStatus.rejected, report)
-            log.info("plan item '%s' rejected at review (task %s)", item.title, task.id)
+            plans.repair_after_review(self.store, project, plan, item, task, report)
             return
         branch = plans.plan_branch(item)
         validation = task.validation
@@ -1072,8 +1071,8 @@ class TaskResultProcessor:
         if command and (validation is None or validation.command != command
                         or validation.exit_code != 0 or not validation.commit_sha):
             report = validation.output if validation else "runner returned no executable validation evidence"
-            plans.set_item_status(self.store, item.id, PlanItemStatus.rejected,
-                                  f"Validation failed for `{command}`:\n\n{report}")
+            plans.repair_after_review(self.store, project, plan, item, task,
+                                      f"Validation failed for `{command}`:\n\n{report}")
             return
         try:
             # Strict sequencing makes landing conflicts rare (each item branches

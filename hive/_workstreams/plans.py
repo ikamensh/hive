@@ -47,6 +47,7 @@ PLAN_DOC_PATH = "iteration-plan.md"
 LANDING_FAILED_PREFIX = "accepted but landing failed"
 RESOLVE_BACKEND = "codex"  # same default agent as issue solving
 REASON_LIMIT = 4000
+REPAIR_LIMIT = 2
 
 
 def now_s() -> float:
@@ -274,6 +275,7 @@ def retry_item(store, project: Project, plan: Plan, item: PlanItem) -> PlanItem:
     def mutate(saved: PlanItem) -> None:
         saved.status = PlanItemStatus.queued
         saved.parked_reason = ""
+        saved.repair_attempts = 0
         saved.updated_at = now_s()
 
     updated = store.update(PlanItem, item.id, mutate) or item
@@ -427,6 +429,9 @@ def _make_plan_task(
     kind: TaskKind,
     backend: str,
     model: str = "",
+    *,
+    repair_of: Task | None = None,
+    feedback: str = "",
 ) -> Task:
     prompt_name = "plan_resolve" if kind == TaskKind.resolve else "plan_review"
     prompt, version = load_prompt(prompt_name)
@@ -437,6 +442,11 @@ def _make_plan_task(
         f"You are on git branch `{branch}` (already checked out).\n\n"
         f"--- ITEM DOCUMENT ---\n{build_work_doc(plan, item)}\n--- END ITEM DOCUMENT ---\n"
     )
+    if project.validation_command:
+        header += f"\nRequired validation command: `{project.validation_command}`.\n"
+    if repair_of is not None:
+        header += ("\nRepair the existing work on this branch using the review feedback below. "
+                   "Commit and push the corrected result.\n\n" + feedback[-REASON_LIMIT:] + "\n")
     role = "build" if kind == TaskKind.resolve else "review"
     selected = getattr(project, f"{role}_backend")
     if selected:
@@ -455,7 +465,9 @@ def _make_plan_task(
             run_id=plan.id,
             repo=item.repo or project.spec_repo,
             branch=branch,
-            fresh_branch=kind == TaskKind.resolve,
+            fresh_branch=kind == TaskKind.resolve and repair_of is None,
+            preserve_checkout=repair_of is not None,
+            resume_runner_id=repair_of.runner_id if repair_of else "",
             kind=kind,
             validation_command=project.validation_command if kind == TaskKind.review else "",
             instructions=f"{header}\n{prompt}",
@@ -471,6 +483,26 @@ def create_review_task(
 ) -> Task:
     """Queue the independent fresh-agent review for a built item."""
     return _make_plan_task(store, project, plan, item, TaskKind.review, backend, model=model)
+
+
+def repair_after_review(
+    store, project: Project, plan: Plan, item: PlanItem, task: Task, report: str,
+) -> None:
+    """Keep the reviewed checkout for two repair attempts, then park with evidence."""
+    if item.repair_attempts >= REPAIR_LIMIT:
+        set_item_status(store, item.id, PlanItemStatus.rejected,
+                        f"Still failing after {REPAIR_LIMIT} repair attempts:\n\n{report}")
+        return
+
+    def repair(saved: PlanItem) -> None:
+        saved.status = PlanItemStatus.resolving
+        saved.repair_attempts += 1
+        saved.parked_reason = ""
+        saved.updated_at = now_s()
+
+    item = store.update(PlanItem, item.id, repair) or item
+    _make_plan_task(store, project, plan, item, TaskKind.resolve, task.backend,
+                    repair_of=task, feedback=report)
 
 
 def advance_plan(

@@ -400,19 +400,32 @@ def test_review_accept_merges_lands_and_advances(tmp_path):
     assert nxt.work_item_id == second.id
 
 
-def test_review_reject_parks_with_report(tmp_path):
+def test_review_reject_repairs_twice_then_parks_with_report(tmp_path):
+    """Review failures get bounded repairs; later items wait throughout."""
     store = MemoryStore()
     project = make_project(store)
     plan = activated_plan(store, project)
     processor, _ = make_processor(store, tmp_path)
 
-    report(store, processor, only_resolve_task(store, project), "done\nOUTCOME: FIXED")
-    review = next(t for t in store.list(Task, project_id=project.id) if t.kind == TaskKind.review)
-    report(store, processor, review, "Breaks the desktop layout badly.\nREVIEW: REJECT")
+    for attempt in range(3):
+        builder = only_resolve_task(store, project)
+        if attempt:
+            assert not builder.fresh_branch
+            assert builder.preserve_checkout and builder.resume_runner_id == "laptop"
+            assert "desktop layout" in builder.instructions
+        report(store, processor, builder, "done\nOUTCOME: FIXED")
+        review = store.list(Task, status=TaskStatus.pending)[0]
+        store.update(Task, review.id, lambda t: setattr(t, "runner_id", "laptop"))
+        report(store, processor, review, "Breaks the desktop layout badly.\nREVIEW: REJECT")
+        assert plans.plan_items(store, plan)[1].status == PlanItemStatus.queued
 
     first = plans.plan_items(store, plan)[0]
     assert first.status == PlanItemStatus.rejected
     assert "desktop layout" in first.parked_reason
+    assert first.repair_attempts == 2
+    assert not store.list(Task, status=TaskStatus.pending)
+    plans.retry_item(store, project, plan, first)
+    assert store.get(PlanItem, first.id).repair_attempts == 0
 
 
 def test_landing_failure_escalates_todo_that_self_closes(tmp_path):

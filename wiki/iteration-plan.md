@@ -6,6 +6,16 @@ durable, human-visible **plan**: an ordered list of plan items the AI proposes
 executed through the proven resolve → review → merge pipeline, fed directly
 from the plan. Done = the item's work merged on the remote default branch.
 
+Local execution now has a direct Markdown entrypoint (`hive --local plan-import`)
+and independent build/review backend settings. Included-only projects use their
+CLI session grants at a zero dollar budget and skip API planning. A configured
+validation command runs on the runner after review and records evidence tied to
+the pushed commit; landing uses that SHA. Review or validation failures trigger
+two bounded repairs with preserved checkouts before parking. Quota/runner
+interruptions instead resume the same stage with a separate attempt record.
+See [local queue acceptance](../acceptance/local-queue.md) and the README for
+the runnable workflow; the original design below describes the plan model.
+
 No GitHub issues or PRs are in the loop. The principle: **GitHub is a source
 of work in (humans filing issues on an adopted repo), never hive's internal
 work ledger.** The external-issues workstream is unchanged; the plan does not

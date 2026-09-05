@@ -47,6 +47,13 @@ The command, exit status, output tail, and commit are recorded on the review tas
 (`hive --local task <id>`). Change it with `hive --local set <project> --validate
 'command'`. Without a command, landing relies on the independent agent review.
 
+Rejected reviews and failed validation return their findings to the builder for
+up to two repairs on the same branch and checkout, each followed by a fresh
+review. Later tasks wait until this item lands. Persistent failure stops the
+queue with an explanation; edit the item or fix the cause, then use
+`hive --local plan-retry <item-id>`. Quota limits and interrupted runners resume
+their current stage when capacity returns and do not consume repair attempts.
+
 For an existing plan project, select included capacity and separate roles:
 
 ```bash
