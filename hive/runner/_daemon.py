@@ -809,8 +809,14 @@ def execute(task: dict, headers: dict, auth) -> dict:
             backend=task.get("backend", ""),
         )
     failure = classify_failure(text, is_error=is_error)
+    validation = None
+    if task["kind"] == "review" and task.get("validation_command") and not is_error:
+        from hive.runner._validation import validate_checkout
+        with _git_auth_environment(task["repo"]):
+            validation = validate_checkout(project_dir, task["validation_command"], task["branch"])
     return {
         "text": text,
+        "validation": validation.model_dump() if validation else None,
         "is_error": is_error,
         "cost_usd": result.cost_usd,
         "input_tokens": result.input_tokens,

@@ -28,7 +28,8 @@ Write `tasks.md` with a `# Goal` and one `## Task title` per task. Put instructi
 under each task; their order is the execution order. Then, in another terminal:
 
 ```bash
-uv run hive --local plan-import my-project tasks.md --repo https://github.com/you/repo.git
+uv run hive --local plan-import my-project tasks.md --repo https://github.com/you/repo.git \
+  --validate 'uv run pytest tests/'
 uv run hive --local plan my-project
 uv run hive --local plan-approve my-project
 ```
@@ -38,6 +39,13 @@ sessions/day), and no paid planner. Importing into an existing project preserves
 its settings. `--start` approves immediately; `--append` adds proposals to a live
 plan (use the same goal). Use `hive --local …` to target this install even when
 you have saved a remote chief. To use a custom port, set `HIVE_URL` instead.
+
+Choose a validation command for your repo (for example `npm test` or `make check`).
+The runner executes it after review, with a ten-minute timeout. It must pass on
+a clean, committed, pushed checkout; Hive then merges that exact tested commit.
+The command, exit status, output tail, and commit are recorded on the review task
+(`hive --local task <id>`). Change it with `hive --local set <project> --validate
+'command'`. Without a command, landing relies on the independent agent review.
 
 For an existing plan project, select included capacity and separate roles:
 

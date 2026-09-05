@@ -51,6 +51,7 @@ from hive._workstreams.issues import (
     sync_directive_for_item,
 )
 from hive.models import (
+    ValidationResult,
     AgentConversation,
     ConversationStatus,
     Finding,
@@ -143,6 +144,7 @@ TRANSIENT_RETRY_LIMIT = 2
 
 class TaskResult(BaseModel):
     text: str
+    validation: ValidationResult | None = None
     is_error: bool = False
     cost_usd: float = 0.0
     input_tokens: int = 0
@@ -302,6 +304,7 @@ class TaskResultProcessor:
                 task.status = TaskStatus.failed if body.is_error else TaskStatus.done
             self._record_verdict(task, body)
             task.result_text = body.text
+            task.validation = body.validation
             task.session_handle = body.session_handle or task.session_handle
             if plan_item is not None:
                 task.retryable_interruption = (
@@ -1064,12 +1067,20 @@ class TaskResultProcessor:
             log.info("plan item '%s' rejected at review (task %s)", item.title, task.id)
             return
         branch = plans.plan_branch(item)
+        validation = task.validation
+        command = task.validation_command or project.validation_command
+        if command and (validation is None or validation.command != command
+                        or validation.exit_code != 0 or not validation.commit_sha):
+            report = validation.output if validation else "runner returned no executable validation evidence"
+            plans.set_item_status(self.store, item.id, PlanItemStatus.rejected,
+                                  f"Validation failed for `{command}`:\n\n{report}")
+            return
         try:
             # Strict sequencing makes landing conflicts rare (each item branches
             # after the prior merge), so there is no auto-integration chain here:
             # any landing failure parks the item and files the todo.
             self.merge_branch(
-                task.repo, branch, self.config.gh_token,
+                task.repo, validation.commit_sha if command else branch, self.config.gh_token,
                 message=f"Land plan item '{item.title}' via Hive",
             )
         except Exception as exc:

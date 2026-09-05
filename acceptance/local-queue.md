@@ -15,6 +15,10 @@ make reviewed progress across interruptions without configuring cloud storage.
   project if missing, and does not run intake or an API planner. Approval starts
   the queue; `--start` approves on import. `--append` adds amendable proposals.
 - `hive --local` commands never fall through to a configured remote chief.
+- A configured `--validate` command is run by the runner after review. Landing
+  requires a zero exit code on a clean, pushed commit and merges that exact SHA.
+  Missing evidence, failing checks, dirty files, and unpushed edits block landing.
+  Command, bounded output, exit code, and the passing SHA persist on the task.
 - Quota exhaustion waits for capacity and resumes the interrupted build or
   review. A returning runner resumes its interrupted stage, including after a
   chief restart. Each retry has its own task record; late results are ignored.

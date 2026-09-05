@@ -123,6 +123,7 @@ def resume_interrupted_task(store, task: Task) -> Task | None:
         resume_runner_id=task.runner_id or task.resume_runner_id, preserve_checkout=True,
         required_capabilities=task.required_capabilities, prompt_versions=task.prompt_versions,
         transient_retries=task.transient_retries,
+        validation_command=task.validation_command,
         status=TaskStatus.pending,
     ))
 
@@ -456,6 +457,7 @@ def _make_plan_task(
             branch=branch,
             fresh_branch=kind == TaskKind.resolve,
             kind=kind,
+            validation_command=project.validation_command if kind == TaskKind.review else "",
             instructions=f"{header}\n{prompt}",
             backend=backend,
             model=model,

@@ -24,13 +24,17 @@ def test_markdown_import_creates_included_project_and_can_start(app, tmp_path, m
     monkeypatch.setattr("hive.api.SpecRepo", FakeSpecRepo)
     source = tmp_path / "tasks.md"
     source.write_text("# Improve the tool\n\nKeep changes small.\n\n## First\nDo A.\n\n```md\n## not a task\n```\n\n## Second\nDepends on A.\n")
-    imported = cli(client, "plan-import", "demo", str(source), "--repo", "https://github.com/o/r.git")
+    imported = cli(client, "plan-import", "demo", str(source), "--repo", "https://github.com/o/r.git",
+                   "--validate", "uv run pytest tests/")
     assert [i["title"] for i in imported["items"]] == ["First", "Second"]
     assert "## not a task" in imported["items"][0]["notes"]
     assert "Keep changes small." in imported["plan"]["goal"]
     assert not store.list(Task) and not store.list(AgentConversation)
     project = store.list(Project)[0]
     assert project.included_only and project.daily_budget_usd == 0
+    assert project.validation_command == "uv run pytest tests/"
+    cli(client, "set", "demo", "--validate", "make check")
+    assert store.get(Project, project.id).validation_command == "make check"
     cli(client, "plan-approve", "demo")
     assert len(store.list(Task, status=TaskStatus.pending)) == 1
 

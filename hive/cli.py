@@ -242,6 +242,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="raw payload instead of the readable summary")
 
     p = sub.add_parser("set", help="patch project settings")
+    p.add_argument("--validate", help="shell command that must pass before plan changes land")
     p.add_argument("--builder", help="plan builder: backend[=model], e.g. opencode=opencode/muse-spark-1.3-contributor-free")
     p.add_argument("--reviewer", help="independent reviewer: backend[=model], e.g. codex")
     p.add_argument("--included-only", choices=["true", "false"], help="use subscription CLIs/free models and disable paid planner calls")
@@ -364,6 +365,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("items", help="JSON list of {title,story,constraints,notes,repo}; '-' = stdin")
 
     p = sub.add_parser("plan-import", help="import a Markdown plan (# goal, ## tasks), without intake")
+    p.add_argument("--validate", help="set the project's required validation command")
     p.add_argument("project", help="project name or id; --repo creates it if missing")
     p.add_argument("file", help="Markdown file, or '-' for stdin")
     p.add_argument("--repo", help="GitHub repo for a new project")
@@ -1430,6 +1432,8 @@ def _import_plan(args, client) -> dict:
         pid = matches[0]["id"]
         if args.repo and args.repo != matches[0].get("spec_repo"):
             raise SystemExit("This project already exists; change its repo with `hive set` first")
+    if args.validate is not None:
+        client.patch(f"/api/projects/{pid}", json={"validation_command": args.validate}).raise_for_status()
     if args.append:
         detail = client.get(f"/api/projects/{pid}").raise_for_status().json()
         payload = detail.get("plan")
@@ -1579,6 +1583,8 @@ def run(args: argparse.Namespace, client) -> dict | list:
         return data[args.part] if args.part else data
     elif c == "set":
         body = {}
+        if args.validate is not None:
+            body["validation_command"] = args.validate
         for flag, role in (("builder", "build"), ("reviewer", "review")):
             if (choice := getattr(args, flag)) is not None:
                 backend, _, model = choice.partition("=")

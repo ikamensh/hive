@@ -164,6 +164,7 @@ class Project(BaseModel):
     review_backend: str = ""  # empty uses a fresh session on the builder's backend
     review_model: str = ""
     included_only: bool = False  # subscription CLIs/free OpenCode models; no paid planner calls
+    validation_command: str = ""  # shell command run by the runner before plan landing
     # Machine environments every task of this project needs (e.g. ["android"]):
     # dispatch only sends the project's work to runners advertising them all.
     required_capabilities: list[str] = []
@@ -487,6 +488,15 @@ def parse_testability_probe(text: str) -> Verdict:
     return _last_marker(text, "TESTABILITY_PROBE", {"OK": Verdict.accept, "FAIL": Verdict.reject}, Verdict.none)
 
 
+class ValidationResult(BaseModel):
+    """Runner-executed checks; commit_sha is present only for a clean, pushed pass."""
+
+    command: str
+    exit_code: int
+    output: str = ""
+    commit_sha: str = Field(default="", pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})?$")
+
+
 class Task(BaseModel):
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
@@ -505,6 +515,8 @@ class Task(BaseModel):
     resume_runner_id: str = ""  # interrupted work stays with its checkout and session
     preserve_checkout: bool = False  # do not reset edits left by an interrupted attempt
     retryable_interruption: bool = False  # failed attempt whose successor can be recovered after a crash
+    validation_command: str = ""
+    validation: ValidationResult | None = None
     issue_number: int = 0  # issue solving: the issue this task resolves/reviews
     issue_doc: str = ""  # issue solving: full issue markdown (title+body+comments) -> .hive ISSUE.md
     issue_attachments: list[str] = []  # issue solving: image filenames the runner fetches from the chief

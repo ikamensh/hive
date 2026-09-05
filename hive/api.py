@@ -183,6 +183,7 @@ class ProjectCreate(BaseModel):
 
 
 class ProjectPatch(BaseModel):
+    validation_command: str | None = None
     build_backend: str | None = None
     build_model: str | None = None
     review_backend: str | None = None
