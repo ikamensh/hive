@@ -22,7 +22,7 @@ from test_llm import _config
 from test_opencode_llm import executable
 
 
-def chief(tmp_path, monkeypatch, **config_overrides):
+def chief(tmp_path, monkeypatch, *, store=None, **config_overrides):
     class Spec:
         def __init__(self, *args):
             pass
@@ -35,7 +35,7 @@ def chief(tmp_path, monkeypatch, **config_overrides):
 
     monkeypatch.setattr("hive._control.orchestrator.SpecRepo", Spec)
     config = _config(data_dir=tmp_path, **config_overrides)
-    store = MemoryStore()
+    store = store if store is not None else MemoryStore()
     project = store.put(Project(name="simulator", spec_repo="https://example.com/sim.git",
                                 included_only=True, daily_budget_usd=0))
     conversation = store.put(AgentConversation(project_id=project.id, repo=project.spec_repo,
@@ -266,3 +266,103 @@ def test_fleet_pause_reason_reaches_project_and_plan_views(tmp_path, monkeypatch
             assert store.list(Task, project_id=project.id)[0].status == "running"
 
     asyncio.run(exercise())
+
+
+def test_human_next_goal_survives_restart_and_opens_exactly_one_draft(tmp_path, monkeypatch):
+    """The real next-goal API opens the planning gate durably. A restarted
+    chief recovers the human's note, invokes its free planner, and does not
+    mistake the previous completed plan for the new goal's completion."""
+    from hive._control.orchestrator import Tools
+    from hive.persistence.store import FileStore
+
+    executable(tmp_path, '''
+import json, sys
+request = json.load(sys.stdin)
+if request["messages"][-1]["role"] == "tool":
+    assert "awaiting the human" in request["messages"][-1]["content"]
+    turn = {"text": "The requested next draft is ready.", "tool_calls": []}
+else:
+    assert "Add multiplication" in request["messages"][-1]["content"]
+    turn = {"text": "", "tool_calls": [{"name": "propose_plan", "arguments": {
+        "goal": "Add multiplication", "items_json": json.dumps([{"title": "Multiply finite numbers"}])}}]}
+print(json.dumps({"type": "text", "part": {"text": json.dumps(turn)}}))
+''')
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    app, store, project, _, _, config = chief(
+        tmp_path, monkeypatch, store=FileStore(tmp_path / "state"), orch_provider="opencode",
+    )
+    previous = store.put(Plan(project_id=project.id, goal="Add numbers", status="complete"))
+    tools = Tools(store, project, spec=None)
+    assert tools.mark_goal_complete("Addition shipped. Try it: python -m unittest") == "goal marked complete"
+
+    async def request_goal():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.patch(f"/api/projects/{project.id}", json={"new_iteration_note": "Add multiplication"})
+            assert response.status_code == 200, response.text
+
+    asyncio.run(request_goal())
+    # Recreate the store and chief: the old process's queued event is gone.
+    store = FileStore(tmp_path / "state")
+    project = store.get(Project, project.id)
+    assert "awaits a plan" in Tools(store, project, spec=None).mark_goal_complete("Repeat previous verdict")
+    planner = Orchestrator(store, LocalBlobStore(tmp_path / "restart-blobs"), config)
+    supervisor = Supervisor(store, planner.invoke)
+    create_app(store, supervisor, config)
+
+    async def tick():
+        await supervisor._step()
+        callbacks = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
+        await asyncio.gather(*callbacks)
+
+    asyncio.run(tick())
+    drafts = [plan for plan in store.list(Plan, project_id=project.id) if plan.status == "draft"]
+    assert len(drafts) == 1
+    assert drafts[0].goal == "Add multiplication"
+    assert store.get(Plan, previous.id).status == "complete"
+    assert store.get(Project, project.id).pending_iteration_goal == ""
+    assert not store.get(Project, project.id).goal_complete
+    assert store.list(Task, project_id=project.id) == []
+    asyncio.run(tick())
+    assert len(store.list(OrchestratorRun, project_id=project.id)) == 1
+
+
+def test_empty_next_goal_does_not_reset_completed_iteration(tmp_path, monkeypatch):
+    """A blank request cannot clear the previous completion or create a
+    planning wake-up with no human-selected goal."""
+    app, store, project, _, _, _ = chief(tmp_path, monkeypatch, orch_provider="opencode")
+    project.goal_complete = True
+    project.goal_complete_note = "Shipped addition."
+    store.put(project)
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.patch(f"/api/projects/{project.id}", json={"new_iteration_note": "  "})
+            assert response.status_code == 400
+
+    asyncio.run(exercise())
+    assert store.get(Project, project.id) == project
+
+
+def test_human_written_next_plan_clears_the_previous_completion(tmp_path, monkeypatch):
+    """Writing the next plan directly is also an explicit human goal choice;
+    its draft must not retain the previous iteration's completed verdict."""
+    app, store, project, _, _, _ = chief(tmp_path, monkeypatch, orch_provider="opencode")
+    project.goal_complete = True
+    project.goal_complete_note = "Addition shipped."
+    store.put(project)
+    previous = store.put(Plan(project_id=project.id, goal="Addition", status="complete"))
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(f"/api/projects/{project.id}/plan", json={
+                "goal": "Multiplication", "items": [{"title": "Multiply finite numbers"}],
+            })
+            assert response.status_code == 200, response.text
+            assert response.json()["plan"]["status"] == "draft"
+
+    asyncio.run(exercise())
+    current = store.get(Project, project.id)
+    assert not current.goal_complete and current.goal_complete_note == ""
+    assert current.pending_iteration_goal == ""
+    assert store.get(Plan, previous.id).status == "complete"
+    assert store.list(OrchestratorRun) == []

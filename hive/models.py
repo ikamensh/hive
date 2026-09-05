@@ -154,7 +154,7 @@ class Project(BaseModel):
     ci_autofix: bool = False  # poll each repo's default-branch CI; file+fix an issue when red
     # Autonomous testing: Hive keeps the story backlog aligned (auto refresh when
     # missing/weak) and sweeps unproven stories (auto episodes) on its own. Only
-    # acts inside an explicit budget envelope (daily_budget_usd > 0).
+    # acts with included capacity or an explicit positive daily budget.
     testing_auto: bool = True
     paused: bool = False
     archived: bool = False  # hidden from the default list; data retained
@@ -178,6 +178,7 @@ class Project(BaseModel):
     required_capabilities: list[str] = []
     goal_complete: bool = False
     goal_complete_note: str = ""
+    pending_iteration_goal: str = ""  # human-selected goal awaiting its draft plan
     intake_conversation_id: str = ""
     state: ProjectState = ProjectState.idle  # cached by supervisor
     created_at: float = Field(default_factory=now)

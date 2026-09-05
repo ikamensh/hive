@@ -100,8 +100,8 @@ def test_ask_user_requires_options_and_recommendation():
 def test_propose_plan_refused_while_completed_plan_awaits_goal_verdict():
     """Live-run regression: after the plan completed, the planner drafted a
     self-invented next iteration instead of declaring the goal. The next
-    iteration is the human's verdict — propose_plan must refuse until
-    mark_goal_complete (or a human-set goal) resolves the completed plan."""
+    iteration is the human's decision — completing one goal does not grant
+    the planner permission to invent another."""
     from hive._workstreams import plans
 
     store = MemoryStore()
@@ -137,10 +137,7 @@ def test_propose_plan_refused_while_completed_plan_awaits_goal_verdict():
     verdict = tools.mark_goal_complete("Shipped. Try it: python3 tally.py report")
     assert verdict == "goal marked complete"
 
-    # After the goal verdict, planning for a human-set goal reopens.
-    project = store.get(Project, project.id)
-    project.goal_complete = True
-    store.put(project)
-    tools = Tools(store, project, spec=None)
-    answer = tools.propose_plan("next goal from the human", '[{"title": "next"}]')
-    assert "drafted" in answer
+    # Neither the same invocation nor a new one may invent the next goal.
+    assert "wait for the human" in tools.propose_plan("invent another goal", '[{"title": "next"}]')
+    tools = Tools(store, store.get(Project, project.id), spec=None)
+    assert "wait for the human" in tools.propose_plan("invent another goal", '[{"title": "next"}]')

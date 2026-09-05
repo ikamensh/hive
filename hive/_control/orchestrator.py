@@ -121,7 +121,10 @@ class Tools:
         # of declaring the built iteration done — the second time hiding behind
         # an abandoned draft, hence the abandoned-plans filter).
         latest = self._latest_meaningful_plan()
-        if latest is not None and latest.status == PlanStatus.complete and not self.project.goal_complete:
+        if (latest is not None and latest.status == PlanStatus.complete
+                and not self.project.pending_iteration_goal):
+            if self.project.goal_complete:
+                return "rejected: the iteration is complete; wait for the human to set the next goal."
             return (
                 "rejected: the completed plan awaits the goal verdict. Call "
                 "mark_goal_complete with the Try-it evidence, or ask_user if the "
@@ -277,6 +280,8 @@ class Tools:
         (e.g. `git clone … && cargo run`), plus the verification evidence
         (review verdicts, test counts) — a claim without a way to check it is
         not a completion note."""
+        if self.project.pending_iteration_goal:
+            return "rejected: a new human iteration goal awaits a plan; propose_plan for it first."
         # The quality gate is structural: every plan item landed only through
         # an accepted fresh-agent review, so a complete plan IS the evidence.
         # Abandoned drafts don't count — they must not block the verdict.
@@ -399,6 +404,8 @@ class Tools:
         return "\n".join(
             [
                 f"PROJECT {p.name} | autonomy={p.autonomy} goal_complete={p.goal_complete}",
+                *([f"PENDING ITERATION GOAL (human-selected): {p.pending_iteration_goal}"]
+                  if p.pending_iteration_goal else []),
                 f"member repos: {', '.join(p.member_repos) or '(none)'}",
                 f"spec repo: {p.spec_repo}",
                 "AGENT ALLOWANCE (sessions/day; disallowed tasks cannot dispatch): "

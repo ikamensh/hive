@@ -1678,6 +1678,8 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                     raise HTTPException(400, f"unknown preferred backend: {choice.backend}")
             project.agent_preferences = body.agent_preferences
         note = updates.pop("new_iteration_note", None)
+        if note is not None and not note.strip():
+            raise HTTPException(400, "the next iteration goal cannot be empty")
         if updates.pop("agent_grants", None) is not None:
             problem = allowances.grant_problems(body.agent_grants, BACKEND_NAMES)
             if problem:
@@ -1695,13 +1697,11 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if note is not None:
             project.goal_complete = False
             project.goal_complete_note = ""
+            project.pending_iteration_goal = note.strip()
             store.put(project)
             supervisor.wake(
                 project_id,
-                f"New iteration goal set by the user (authoritative): {note}\n"
-                "Your FIRST action must be commit_to_spec: archive the prior iteration.md to "
-                "iterations/ with a one-line outcome, then write this goal into iteration.md. "
-                "Only then plan workstreams.",
+                f"New iteration goal set by the user (authoritative): {project.pending_iteration_goal}",
             )
         store.put(project)
         return project.model_dump()

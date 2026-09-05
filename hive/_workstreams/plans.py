@@ -126,6 +126,19 @@ def create_draft(
     )
     for position, item in enumerate(items):
         _put_item(store, project, plan, item, order=position, authored_by=proposed_by)
+    if project.pending_iteration_goal or project.goal_complete:
+        requested_goal = project.pending_iteration_goal
+
+        def consume_goal(saved: Project) -> None:
+            if saved.pending_iteration_goal == requested_goal:
+                saved.pending_iteration_goal = ""
+            saved.goal_complete = False
+            saved.goal_complete_note = ""
+
+        store.update(Project, project.id, consume_goal)
+        project.pending_iteration_goal = ""
+        project.goal_complete = False
+        project.goal_complete_note = ""
     return plan
 
 

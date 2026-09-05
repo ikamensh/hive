@@ -1096,9 +1096,12 @@ class Supervisor:
                 and heartbeat_due
                 and self._goal_verdict_pending(project)
             )
-            if events or needs_decision or verdict_due:
+            goal_due = bool(project.pending_iteration_goal) and state == ProjectState.idle and heartbeat_due
+            if events or needs_decision or verdict_due or goal_due:
                 if not events:
-                    if verdict_due:
+                    if goal_due:
+                        events = [f"New iteration goal set by the user (authoritative): {project.pending_iteration_goal}"]
+                    elif verdict_due:
                         events = [self._verdict_note()]
                     else:
                         events = [self._heartbeat_note()]
@@ -1110,7 +1113,7 @@ class Supervisor:
         """A completed (non-abandoned) plan exists but the goal verdict never
         landed — the project looks idle while actually owing the human a
         completion note."""
-        if project.goal_complete:
+        if project.goal_complete or project.pending_iteration_goal:
             return False
         plans_ = [
             p

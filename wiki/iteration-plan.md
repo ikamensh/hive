@@ -8,7 +8,8 @@ from the plan. Done = the item's work merged on the remote default branch.
 
 Local execution now has a direct Markdown entrypoint (`hive --local plan-import`)
 and independent build/review backend settings. Included-only projects use their
-CLI session grants at a zero dollar budget and skip API planning. A configured
+CLI session grants at a zero dollar budget. Planning can use explicitly free
+OpenCode models; paid API planning remains disabled. A configured
 validation command runs on the runner after review and records evidence tied to
 the pushed commit; landing uses that SHA. Review or validation failures trigger
 two bounded repairs with preserved checkouts before parking. Quota/runner
@@ -65,10 +66,10 @@ model is `PlanItem`. In UI copy "item" is unambiguous inside a plan view.
 
 ## Lifecycle
 
-1. **Propose.** The AI drafts a plan when an iteration goal is set or changed,
-   when the previous plan completes (proposing the *next* iteration with it),
-   or on request. The human can also start from an empty plan and write items
-   by hand.
+1. **Propose.** The AI drafts a plan for the human's iteration goal, or the
+   human writes the plan directly. A next-goal request is durable while its
+   draft is pending, so restarting Hive cannot lose it. Drafting consumes that
+   request; completion of the previous goal alone never authorizes another.
 2. **Review.** At chosen depth: approve all, or flip items one at a time.
    Edit, add, remove, reorder, split freely. Editing does not auto-approve —
    approval is always the explicit flip (approve-all being the shortcut), so
@@ -92,9 +93,9 @@ model is `PlanItem`. In UI copy "item" is unambiguous inside a plan view.
    human amends directly, self-approved. Amendments are store flips — no
    external churn — and are diffs against what was approved: the honest
    answer to "what changed since I signed off".
-6. **Complete.** All items done → plan complete → the AI drafts the next
-   iteration's goal and plan → back to review. "Set the next iteration" stays
-   one verdict.
+6. **Complete.** All items done → plan complete → the AI records the outcome
+   and marks the goal complete with commands and verification evidence. The
+   human sets the next iteration's goal; Hive drafts it for review.
 
 ## Data model
 

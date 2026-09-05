@@ -42,10 +42,6 @@ _Avoid_: License, tier
 An agent acting in the intake role — aligning a project's mission, next iteration, and assumptions before planning begins. "Scout" names what the agent is doing, not a separate kind of agent; the same machine-bound agent that does project work can serve as a scout.
 _Avoid_: intake bot, planner
 
-**Trusted scout**:
-A backend+model combination Hive permits to run intake. Intake is high-leverage, so only a curated set qualifies, not every available agent. "Trusted" qualifies the backend (e.g. codex gpt-5.5, claude opus), never a specific machine's install — so trust is a single yes/no policy, not a per-machine status.
-_Avoid_: verified agent, approved runner
-
 ## Checkouts & sync
 
 **Checkout**:
@@ -61,6 +57,14 @@ An agent [[Job]] that resolves a checkout's [[drift]], not a mechanical `git pus
 _Avoid_: push, pull, backup
 
 ## Launchpad
+
+**Iteration goal**:
+The outcome the human wants the next iteration to deliver. Completing one goal does not authorize the planner to invent another.
+_Avoid_: task, directive, planner suggestion
+
+**Pending iteration goal**:
+A human-selected [[Iteration goal]] still awaiting its draft plan. It remains pending until a plan is drafted, even if Hive stops and restarts.
+_Avoid_: unfinished goal, completion verdict
 
 **Launchpad**:
 What a project page is for: a place to *start work*, not a card of settings. It offers the [[Job]]s available on this project and shows live state (running jobs, [[Checkout]]s, attention queue, activity) around them.
