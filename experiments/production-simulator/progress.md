@@ -2,9 +2,10 @@
 
 The acceptance criteria in `metrics.md` remain the completion contract. Seven of
 ten items have landed, including the independently verified quality/checkpoint
-repair. Free Muse is building the dashboard under a second labeled synthetic
-capacity drill. Duplicate action-request keys remain an explicit dashboard/API
-amendment; scaling, packaging and the contract challenge are still queued.
+repair. Muse completed only the dashboard amendment; its fresh Muse reviewer
+correctly rejected the missing frontend. Hive automatically returned to Astra
+after the synthetic cooldown expired and is repairing the full dashboard while
+preserving the API fix. Scaling, packaging and the contract challenge remain queued.
 
 ## Install and evidence
 
@@ -364,6 +365,37 @@ amendment; scaling, packaging and the contract challenge are still queued.
     Manifest `bc331a30cb86` expires at `1788651372.1330812` without a manual reset.
     Evidence: `evidence/capacity-h8h9-dashboard/` and
     `evidence/dashboard-drill-pause.json`.
+
+40. Muse task `f8defcefdf25` finished in 158.49 seconds, but implemented only
+    the strict action-JSON amendment at `ffae33967a0d95ad352771514749b8538ed2acc7`.
+    No frontend, browser tests, or frontend gate existed; the builder incorrectly
+    reported the whole item fixed. Fresh Muse review `b5057b683158` correctly
+    rejected the missing scope after 81.35 seconds despite 425 passing Python
+    tests, with a concrete correction brief. The rejected dashboard head did
+    not land. The action fix independently passes all raw duplicate-key and
+    continuation checks, but remains provisional until an accepted descendant
+    lands. Hive automatically created repair `ca9a2cb0d328` and selected Astra at
+    `1788651372.583348`, 0.45 seconds after the synthetic deadline. It retained
+    the branch and exact committed Muse head, used `preserve_checkout=True`,
+    and started fresh native Astra session `01a073ee-0344-71a0-a726-85477de86b3a`.
+    No operator retry or scope amendment was needed for this correction. This
+    proves the substantive review gate and automatic return to preferred
+    capacity; full dashboard completion still awaits the repair. Evidence:
+    `evidence/dashboard-rejection-and-repair.json`,
+    `evidence/capacity-h8h9-dashboard/automatic-astra-{repair-checkout,session-start}.json`,
+    `evidence/ui-independent/runs/ffae33967a0d95ad352771514749b8538ed2acc7/`,
+    and `evidence/dashboard-automatic-repair-cli.txt`.
+
+41. The live rejected dashboard exposed a CLI ambiguity: a green validation
+    result appeared beside a truncated review summary without an explicit
+    verdict. Hive `5008032` now renders the latest finished review decision
+    independently from the validation result. Rejected/failed/incomplete
+    reviews cannot read as accepted; an accepted structured report remains
+    authoritative over a retained earlier transport warning. All 101 relevant
+    CLI/plan tests, lint and a wheel build pass. A read-only live render confirms
+    `last review: REJECT` and `last validation: PASS` appear together. This
+    client-only change requires no chief interruption. Evidence:
+    `evidence/plan-review-visibility/`.
 
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
 for all seven landed increments and must continue to hold for every later item. H7
