@@ -1,8 +1,8 @@
 # Live experiment progress
 
-The acceptance criteria in `metrics.md` remain the completion contract. Three of
-nine items have landed; orders, stochastic behavior, replay, and the dashboard
-are still pending.
+The acceptance criteria in `metrics.md` remain the completion contract. Four of
+nine items have landed; stochastic behavior, replay, and the dashboard are still
+pending. Item five is configured for a free Muse build and fresh Muse review.
 
 ## Install and evidence
 
@@ -213,12 +213,41 @@ are still pending.
     Evidence: `evidence/incomplete-rollout-{before,after}.json`,
     `evidence/muse-item4-retry-paused.json`, and
     `evidence/manual-retry-review/`.
+26. The recovered Astra build pushed `763aba3`, with 223 tests and a clean setup
+    check. Opus review `4462b503679f` independently exercised 400 randomized
+    multi-press/tool/material scenarios, verified FIFO/EDD tardiness of 40 s
+    versus 15 s, and documented the dispatcher's same-part recipe fallback.
+    Hive validated reviewed SHA `99d8addba63535b1f89397135952510003bae572`
+    with all 223 tests passing and landed item four in `c27d564`. An independent
+    clean checkout of the reviewed SHA passes the 223-test gate and 37 external
+    engine groups: 14 order/edit cases, six resource/atomicity regressions, and
+    17 prior conservation/horizon/pacing cases. Real HTTP and ten CLI rejection
+    probes pass on the identical builder implementation. The review changed
+    only README; main contains the reviewed SHA with an identical tree. No
+    observer implementation edits were made. Evidence: `evidence/item4-build.json`,
+    `evidence/fourth-landing.json`, and `evidence/item4-independent/`.
+27. During the running Opus review, explicitly selected free Muse for subsequent
+    builds and reviews, aiming to exercise item five entirely on Muse. This is
+    a role-selection trial, with existing subscription fallback capacity still
+    available; no synthetic limits were applied. Task `5870f8bdb1b9` began item
+    five on Muse at `1788647146.181066`. The planner remains free Muse. Restore
+    the preferred Astra builder and Opus reviewer after item five's fresh Muse
+    review starts. Evidence: `evidence/all-muse-increment-{before,after}.json`.
+28. Found and fixed one default-selection inconsistency in Hive `b2983d0`:
+    intake hardcoded an older Codex model while workers defaulted to Astra.
+    Intake, dispatch, and the worker factory now share the same current default
+    and `HIVE_CODEX_MODEL` override. Blank model preferences previously matched
+    unrelated model cooldowns conservatively; resolving the concrete model
+    avoids that overblocking. Explicit model preferences and grants remain
+    effective. All 121 relevant API/worker/capacity/isolation tests pass, and the
+    commit is pushed. The running install has not been restarted for this fix;
+    its experiment tasks already use explicit models.
 
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
-for items one through three and must continue to hold for every later item. H7
+for items one through four and must continue to hold for every later item. H7
 has substantive Astra, Fable, and Opus work. H8–H9 now have a labeled live fallback
 dispatch, natural expiry, and return to preferred capacity with preserved partial
-work; the recovered increment still needs to land. Full-simulator product criteria
+work and the recovered increment's reviewed landing. Full-simulator product criteria
 remain open. No spontaneous
 subscription exhaustion has been observed or claimed.
 
