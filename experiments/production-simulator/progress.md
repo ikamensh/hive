@@ -1,8 +1,9 @@
 # Live experiment progress
 
-The acceptance criteria in `metrics.md` remain the completion contract. Four of
-nine items have landed; stochastic behavior, replay, and the dashboard are still
-pending. Item five is configured for a free Muse build and fresh Muse review.
+The acceptance criteria in `metrics.md` remain the completion contract. Five of
+ten items have landed. Free Muse built and freshly reviewed item five; independent
+checks found a rejection-cause reporting defect, now queued as an explicit repair
+before the dashboard. Astra is building save/replay, with Opus selected for review.
 
 ## Install and evidence
 
@@ -243,8 +244,32 @@ pending. Item five is configured for a free Muse build and fresh Muse review.
     commit is pushed. The running install has not been restarted for this fix;
     its experiment tasks already use explicit models.
 
+29. Free Muse completed item five as task `5870f8bdb1b9` in 812.81 seconds,
+    pushing `8f3d174b905a1835c238c1a3882879586eadbd48`. A distinct fresh Muse
+    session (`bb52a7061b16`) accepted the same SHA in 74.15 seconds. Hive ran
+    `make check` successfully with 232 tests and landed the item. The builder
+    session was `ses_f8c527099ffe4pGcqNfvBM2qeB`; the reviewer session was
+    `ses_f8c45d5b0ffeHLfnzpUCzxRaiq`. This proves a substantial all-Muse build,
+    fresh review, and gated landing, not independent product correctness.
+    Restored Astra/Opus after the Muse review was delivered; Astra task
+    `8d2591c67f77` started save/replay at `1788648061.718871`.
+    Evidence: `evidence/item5-{build,review-start,review-result}.json` and
+    `evidence/all-muse-increment-restored.json`.
+30. Independent acceptance of the exact item-five SHA passed the 6-kWh energy,
+    cost, and public-engine 0.675-OEE references, but found a concrete review
+    miss: at saturated rejection probability, rounding residuals are assigned
+    to holding pressure even when its contribution is zero. Mass and counts
+    conserve; the cause diagnosis is wrong. Added and approved repair item
+    `4d94b15be719` through the CLI, placed after the active save/replay item and
+    before the dashboard. The queue now contains ten items. The immutable
+    accepted build/review remains unchanged; no simulator implementation was
+    edited by the observer. The repair brief requires zero-weight exclusion,
+    per-batch/aggregate cause agreement, and pacing/save reproducibility.
+    Evidence: `evidence/item5-independent/` and
+    `evidence/item5-cause-repair-amendment.json`.
+
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
-for items one through four and must continue to hold for every later item. H7
+for items one through five and must continue to hold for every later item. H7
 has substantive Astra, Fable, and Opus work. H8–H9 now have a labeled live fallback
 dispatch, natural expiry, and return to preferred capacity with preserved partial
 work and the recovered increment's reviewed landing. Full-simulator product criteria
