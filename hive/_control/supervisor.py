@@ -161,6 +161,11 @@ def state_reason(
     The user never has to translate internal state names: every badge ships
     with why-and-what-to-do. Reads the same store facts the state came from,
     so it can only drift from the badge by one refresh cycle."""
+    if pause.fleet_paused(store, project.workspace_id):
+        running = store.list(Task, project_id=project.id, status=TaskStatus.running)
+        if running:
+            return f"fleet paused — draining {len(running)} running task(s); queued work waits until you resume Hive"
+        return "fleet paused — resume Hive to continue queued work"
     if project.paused:
         return "paused by you — resume it to continue"
     state = project.state
@@ -1040,7 +1045,6 @@ class Supervisor:
             self._last_todo_triage = time.time()
             self._triage_busy = True
             asyncio.get_running_loop().create_task(self._run_todo_triage())
-        avail = self.available_backends()
         for project in self.store.list(Project, workspace_id=self.workspace_id):
             if project.archived or project.paused or not project.spec_repo.strip():
                 continue
@@ -1083,10 +1087,6 @@ class Supervisor:
                 and not self.store.list(Task, project_id=project.id, status=TaskStatus.pending)
                 and heartbeat_due
             )
-            # Pending work is stuck on a backend no online runner offers, but
-            # capacity exists elsewhere: nudge the orchestrator to replan onto
-            # an available backend instead of waiting forever.
-            replan = state == ProjectState.blocked_resources and bool(avail) and heartbeat_due
             # A quiet project whose completed plan still awaits the goal
             # verdict must not pend silently (observed live: the verdict was
             # blocked by draining tasks once, and nothing ever woke the
@@ -1096,11 +1096,9 @@ class Supervisor:
                 and heartbeat_due
                 and self._goal_verdict_pending(project)
             )
-            if events or needs_decision or replan or verdict_due:
+            if events or needs_decision or verdict_due:
                 if not events:
-                    if replan:
-                        events = [self._replan_note(avail)]
-                    elif verdict_due:
+                    if verdict_due:
                         events = [self._verdict_note()]
                     else:
                         events = [self._heartbeat_note()]
@@ -1132,16 +1130,9 @@ class Supervisor:
     @staticmethod
     def _heartbeat_note() -> str:
         return (
-            "Heartbeat: workstreams are active but nothing is queued or running. "
-            "Queue the next task, or park workstreams that are genuinely waiting."
-        )
-
-    @staticmethod
-    def _replan_note(avail: set[str]) -> str:
-        return (
-            "Pending tasks cannot dispatch: no online runner offers their backend. "
-            f"Available backends right now: {sorted(avail)}. Re-queue the next task on an "
-            "available backend, or file a human task to bring the needed runner online."
+            "Heartbeat: nothing is queued or running. Review the current goal and plan "
+            "for an outstanding planning decision. Approved work and capacity waiting "
+            "are handled by the deterministic pipeline."
         )
 
     async def _orchestrate(self, project_id: str, events: list[str]) -> None:

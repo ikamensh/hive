@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import time
 
 import httpx
 import pytest
@@ -11,8 +12,10 @@ from hive._control.supervisor import Supervisor
 from hive.api import create_app, make_todo_triage
 from hive._control.escalation import escalate
 from hive.models import (
-    AgentConversation, ConversationStatus, HumanTask, OrchestratorRun, Plan, PlanItem, Project, Task,
+    AgentConversation, AgentPreference, ConversationStatus, HumanTask, OrchestratorRun, Plan,
+    PlanItem, Project, Resource, ResourceUsability, Runner, Task,
 )
+from hive._workstreams import plans
 from hive.persistence.blobstore import LocalBlobStore
 from hive.persistence.store import MemoryStore
 from test_llm import _config
@@ -179,3 +182,87 @@ sys.exit(1)
         make_todo_triage(store, config)()
     assert store.get(HumanTask, todo.id).status == "open"
     assert store.list(Plan) == store.list(OrchestratorRun) == []
+
+
+def test_restart_waits_for_plan_capacity_without_replanning(tmp_path, monkeypatch):
+    """A free-enabled chief restart preserves an approved plan through scoped
+    quota exhaustion. Restored Muse capacity runs the same queued task, while
+    an explicit human event still reaches the planner during execution."""
+    _, store, project, supervisor, _, _ = chief(tmp_path, monkeypatch, orch_provider="opencode")
+    project.agent_preferences = [
+        AgentPreference(backend="claude", model="claude-fable-5-1"),
+        AgentPreference(backend="claude", model="claude-opus-5"),
+        AgentPreference(backend="opencode", model="opencode/muse-spark-1.3-contributor-free"),
+    ]
+    store.put(project)
+    runner = store.put(Runner(name="laptop", backends=["claude", "opencode"]))
+    later = time.time() + 3600
+    store.put(Resource(runner_id=runner.id, backend="claude", usability_status=ResourceUsability.usable,
+                       model_cooldowns={"fable": later, "opus": later}))
+    muse = store.put(Resource(runner_id=runner.id, backend="opencode",
+                              usability_status=ResourceUsability.usable, cooldown_until=later))
+    plan = plans.create_draft(store, project, "Arithmetic package", [
+        {"title": "Addition"}, {"title": "Multiplication"},
+    ])
+    plans.approve_all(store, plan)
+    plans.activate(store, project, plan)
+    original = store.list(Task, project_id=project.id)[0]
+    original_items = [item.model_dump() for item in plans.plan_items(store, plan)]
+    calls = []
+    supervisor.orchestrate = lambda pid, events: calls.append((pid, events))
+
+    async def tick():
+        await supervisor._step()
+        callbacks = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
+        await asyncio.gather(*callbacks)
+
+    asyncio.run(tick())
+    assert store.get(Project, project.id).state == "blocked_resources"
+    assert not calls, "quota waiting must not ask the planner to replace or amend approved work"
+    assert [item.model_dump() for item in plans.plan_items(store, plan)] == original_items
+    assert [task.id for task in store.list(Task, project_id=project.id)] == [original.id]
+
+    store.update(Resource, muse.id, lambda resource: setattr(resource, "cooldown_until", 0))
+    asyncio.run(tick())
+    current = store.get(Task, original.id)
+    assert current.status == "running" and current.backend == "opencode"
+    assert current.work_item_id == original.work_item_id and not calls
+
+    supervisor.wake(project.id, "The human requests a progress explanation.")
+    asyncio.run(tick())
+    assert calls == [(project.id, ["The human requests a progress explanation."])]
+
+
+def test_fleet_pause_reason_reaches_project_and_plan_views(tmp_path, monkeypatch):
+    """Fleet pause explains queued work consistently in project and CLI plan
+    views; pausing after dispatch describes draining without stopping work."""
+    from hive.cli import format_plan
+
+    app, store, project, supervisor, _, _ = chief(tmp_path, monkeypatch, orch_provider="opencode")
+    project.build_backend = "opencode"
+    store.put(project)
+    runner = store.put(Runner(name="laptop", backends=["opencode"]))
+    store.put(Resource(runner_id=runner.id, backend="opencode", usability_status=ResourceUsability.usable))
+    plan = plans.create_draft(store, project, "Arithmetic", [{"title": "Addition"}])
+    plans.approve_all(store, plan)
+    plans.activate(store, project, plan)
+    supervisor.refresh_state(project)
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            assert (await client.patch("/api/workspace", json={"paused": True})).status_code == 200
+            assert supervisor.dispatch(project) == 0
+            detail = (await client.get(f"/api/projects/{project.id}")).json()
+            assert "fleet paused" in detail["state_reason"]
+            assert "resume" in detail["state_reason"]
+            assert detail["plan"]["state_reason"] == detail["state_reason"]
+            assert detail["state_reason"] in format_plan(detail["plan"])
+            assert (await client.patch("/api/workspace", json={"paused": False})).status_code == 200
+            assert supervisor.dispatch(project) == 1
+            assert (await client.patch("/api/workspace", json={"paused": True})).status_code == 200
+            detail = (await client.get(f"/api/projects/{project.id}")).json()
+            assert "draining 1" in detail["state_reason"]
+            assert detail["plan"]["state_reason"] == detail["state_reason"]
+            assert store.list(Task, project_id=project.id)[0].status == "running"
+
+    asyncio.run(exercise())

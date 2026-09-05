@@ -474,7 +474,9 @@ def test_landing_failure_escalates_todo_that_self_closes(tmp_path):
     assert any("plan item" in t.resolved_reason for t in closed)
 
 
-def test_plan_completion_wakes_planner_for_next_iteration(tmp_path):
+def test_plan_completion_wakes_planner_for_goal_verdict(tmp_path):
+    """Landing the last reviewed item requests completion evidence; setting
+    another iteration goal remains the human's decision."""
     store = MemoryStore()
     project = make_project(store)
     plan = activated_plan(store, project, items=ITEMS[:1])
@@ -485,7 +487,8 @@ def test_plan_completion_wakes_planner_for_next_iteration(tmp_path):
     report(store, processor, review, "good\nREVIEW: ACCEPT")
 
     assert store.get(Plan, plan.id).status == PlanStatus.complete
-    assert any("propose the next iteration" in e.lower() for _, e in supervisor.events)
+    assert any("mark_goal_complete" in event and "Try it:" in event for _, event in supervisor.events)
+    assert not any("propose the next iteration" in event.lower() for _, event in supervisor.events)
 
 
 def test_edit_then_retry_parked_item(tmp_path):

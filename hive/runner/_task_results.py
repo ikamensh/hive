@@ -993,7 +993,8 @@ class TaskResultProcessor:
                 project.id,
                 "Iteration plan complete: every item is merged on the default branch. "
                 f"The goal was: {plan.goal[:500]}\n"
-                "Summarize the outcome and propose the next iteration's goal and plan.",
+                "Record the outcome in the spec, then call mark_goal_complete with the "
+                "Try it: commands and verification evidence. The human sets the next iteration goal.",
             )
 
     def _land_plan_resolve(
