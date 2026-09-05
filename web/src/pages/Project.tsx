@@ -70,11 +70,10 @@ export default function ProjectPage() {
     testingNeeds,
     inboxCount,
     needsSetup,
-    availableScoutBackends,
+    availableScouts,
   } = projectViewModel(data, {
     issueStreamId: selectedIssueStreamId,
     testingStreamId: selectedTestingStreamId,
-    resources,
   });
 
   const patch = async (p: ProjectPatch) => {
@@ -330,7 +329,7 @@ export default function ProjectPage() {
         <ProjectSetup
           project={project}
           conversation={intakeConversation}
-          availableScoutBackends={availableScoutBackends}
+          availableScouts={availableScouts}
           onSave={saveSetup}
           onCreateRepo={createRepo}
           onStartIntake={startIntake}

@@ -1,4 +1,4 @@
-import type { ProjectDetail, ResourcesPayload } from "../../types";
+import type { ProjectDetail } from "../../types";
 
 const TEST_TASK_KINDS = new Set(["test_refresh", "test_sweep", "test_reproduce", "test_judge"]);
 
@@ -7,7 +7,6 @@ export function projectViewModel(
   selections: {
     issueStreamId: string;
     testingStreamId: string;
-    resources?: ResourcesPayload | null;
   },
 ) {
   const { project, workstreams, work_items, tasks, questions, conversations, stories, findings, test_episodes, issue_runs } = data;
@@ -55,14 +54,10 @@ export function projectViewModel(
   const intakeDone = intakeConversation?.status === "done";
   const hasProjectWork = issueWorkItems.length > 0 || testingStories.length > 0 || nonIntakeTasks.length > 0;
   const needsSetup = !configured || (!hasProjectWork && !intakeDone);
-  // Backends Hive trusts to run intake, in auto-pick preference order (mirror of
-  // the chief's TRUSTED_SCOUTS). Setup only needs a yes/no readiness
-  // signal per backend; per-machine agent state lives on the machines page.
-  const SCOUT_PREFERENCE = ["codex", "claude"];
-  const availableScoutBackends = SCOUT_PREFERENCE.filter((backend) =>
-    (selections.resources?.resources ?? []).some(
-      (resource) => resource.backend === backend && resource.available,
-    ),
+  // The chief owns model scopes, grants, and ordering. A retry selects a backend;
+  // show its first eligible model, matching the chief's choice for that backend.
+  const availableScouts = data.intake_scouts.filter((scout, index, scouts) =>
+    scouts.findIndex((candidate) => candidate.backend === scout.backend) === index,
   );
 
   return {
@@ -89,6 +84,6 @@ export function projectViewModel(
     testingNeeds,
     inboxCount,
     needsSetup,
-    availableScoutBackends,
+    availableScouts,
   };
 }

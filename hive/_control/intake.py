@@ -36,9 +36,7 @@ from hive.models import (
 DEFAULT_SCOUT_MODELS = {"codex": "gpt-5.5", "claude": "opus", "gemini-cli": "gemini-3.1-pro-preview"}
 
 
-def scout_capacity(store, project: Project, prefer_backend: str = "") -> tuple[str, str, str]:
-    """Choose a usable scout within project preferences, grants, and included-only policy."""
-    online = {r.id: r for r in store.list(Runner, workspace_id=project.workspace_id) if r.online()}
+def _scout_pairs(project: Project) -> list[tuple[str, str]]:
     candidates = list(project.agent_preferences)
     if not candidates:
         for backend in dict.fromkeys((*DEFAULT_SCOUT_MODELS, *BACKEND_NAMES)):
@@ -55,25 +53,42 @@ def scout_capacity(store, project: Project, prefer_backend: str = "") -> tuple[s
         if (permitted(project.agent_grants, *pair)
                 and (not project.included_only or included_model(*pair)) and pair not in scouts):
             scouts.append(pair)
+    return scouts
+
+
+def scout_options(store, project: Project) -> list[tuple[str, str, str]]:
+    """Available (backend, model, runner) choices in the project's preferred order."""
+    online = {r.id: r for r in store.list(Runner, workspace_id=project.workspace_id) if r.online()}
+    resources = store.list(Resource, workspace_id=project.workspace_id)
+    options = []
+    for backend, model in _scout_pairs(project):
+        for resource in resources:
+            runner = online.get(resource.runner_id)
+            if (resource.backend == backend and runner and backend in runner.backends
+                    and resource.available(model) and resource.supports(project.required_capabilities)):
+                options.append((backend, model, runner.id))
+                break
+    return options
+
+
+def scout_capacity(store, project: Project, prefer_backend: str = "") -> tuple[str, str, str]:
+    """Choose a usable scout within project preferences, grants, and included-only policy."""
+    scouts = _scout_pairs(project)
     if not scouts:
         raise HTTPException(
             409,
             "no intake scout is permitted by this project's agent preferences, "
             "allowance, and included-only policy; configure an allowed backend/model",
         )
-    ordered = sorted(scouts, key=lambda bm: bm[0] != prefer_backend)
     if prefer_backend and prefer_backend not in dict(scouts):
         raise HTTPException(
             400,
             f"unknown or disallowed intake scout {prefer_backend!r}; choose one of "
             f"{', '.join(b for b, _ in scouts)}",
         )
-    for backend, model in ordered:
-        for resource in store.list(Resource, workspace_id=project.workspace_id, backend=backend):
-            runner = online.get(resource.runner_id)
-            if (runner and backend in runner.backends and resource.available(model)
-                    and resource.supports(project.required_capabilities)):
-                return backend, model, runner.id
+    options = sorted(scout_options(store, project), key=lambda option: option[0] != prefer_backend)
+    if options:
+        return options[0]
     raise HTTPException(
         409,
         "intake requires usable capacity matching its allowance and capabilities "

@@ -1507,6 +1507,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
         return {
             "project": project.model_dump(),
+            "intake_scouts": [
+                {"backend": backend, "model": model}
+                for backend, model, _runner_id in intake.scout_options(store, project)
+            ],
             "state_reason": state_reason(
                 store, project, supervisor.available_backends(), supervisor.spend_today(project_id)
             ),

@@ -254,7 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--testing-auto",
         choices=["true", "false"],
-        help="autonomously draft/repair stories and sweep unproven ones (needs a daily budget)",
+        help="autonomously draft/repair stories and sweep unproven ones (included-only or daily budget)",
     )
     p.add_argument("--paused", choices=["true", "false"])
     p.add_argument("--daily-budget", type=float, help="daily cap on all paid work in USD (0 pauses it; new projects default to 10)")

@@ -44,6 +44,8 @@ export interface Project {
   archived: boolean;
   daily_budget_usd: number;
   agent_grants?: AgentGrant[];
+  agent_preferences?: { backend: string; model: string }[];
+  included_only?: boolean;
   required_capabilities?: string[];
   goal_complete: boolean;
   goal_complete_note: string;
@@ -286,6 +288,7 @@ export interface PlanItemPatch {
 
 export interface ProjectDetail {
   project: Project;
+  intake_scouts: { backend: string; model: string }[];
   /** One human sentence: why the state, and the fix. */
   state_reason?: string;
   testing_health?: Record<string, TestingHealth>;

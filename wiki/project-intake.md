@@ -179,13 +179,16 @@ depend on intake. Review remains independent and fresh.
 
 ## Backend Policy
 
-Intake is high leverage and should use only trusted scout models for now:
+Every registered coding-agent backend can run intake, including OpenCode.
+Project `agent_preferences` supplies the ordered backend/model choices;
+agent grants and included-only policy constrain that list. Without explicit
+preferences, existing default models are tried before other registered agents
+and models named in grants. Readiness checks the requested model's quota scope
+and project capabilities on an online runner.
 
-- Codex with `gpt-5.5`
-- Claude with Opus
-
-If neither is usable on an online runner, intake blocks on resources. There is
-no weak-model fallback in the MVP.
+The project payload's `intake_scouts` lists eligible backend/model pairs in that
+same order. The setup screen consumes this list rather than maintaining a second
+provider allowlist. The chosen conversation records its actual backend/model.
 
 ## Readiness
 
@@ -247,7 +250,7 @@ chooses resources, queues implementation tasks, and owns the build loop.
 Before active work, the project page is an intake workspace:
 
 - repo picker or "create private repo"
-- runner/backend availability for trusted scout models
+- runner/backend availability for the project's configured scout models
 - latest scout brief
 - material questions
 - answer/correction composer

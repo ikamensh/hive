@@ -195,7 +195,7 @@ set in scope so the run is auditable even if the spec changes afterward. Phases:
 
 1. **Trigger.** Human clicks "Run testing episode" on the testing workstream —
    or the **autonomous tick** does it: for a `testing_auto` project with a
-   positive daily budget, the supervisor polls `auto_testing_action` (
+   positive daily budget or included-only capacity, the supervisor polls `auto_testing_action` (
    `TESTING_CHECK_INTERVAL_S`), which acts on the story-health verdict —
    missing/weak backlog → queue a story refresh, unproven stories → start a
    priority episode — with a per-kind daily cooldown (`AUTO_TESTING_INTERVAL_S`)

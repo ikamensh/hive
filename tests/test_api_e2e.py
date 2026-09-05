@@ -1487,6 +1487,8 @@ def test_opencode_only_project_can_start_and_continue_intake(harness, configured
     _configure_project(client, pid, **patch)
     rid = _register_usable_runner(client, backend="opencode")
     _register_usable_runner(client, name="other-coder", backend="codex")
+    detail = client.get(f"/api/projects/{pid}").json()
+    assert detail["intake_scouts"] == [{"backend": "opencode", "model": model}]
     response = client.post(f"/api/projects/{pid}/intake/start")
     assert response.status_code == 200, response.json()
     conversation = response.json()
@@ -1520,6 +1522,8 @@ def test_intake_chooses_the_next_project_model_when_only_one_scope_is_exhausted(
     store.update(Resource, resource.id, lambda saved: saved.usage_windows.append(
         UsageWindow(kind="weekly_fable", model_scope="fable", used_percent=100,
                     resets_at=time.time() + 3600)))
+    assert client.get(f"/api/projects/{pid}").json()["intake_scouts"] == [
+        {"backend": "claude", "model": "claude-opus-5"}]
     response = client.post(f"/api/projects/{pid}/intake/start")
     assert response.status_code == 200, response.json()
     assert response.json()["model"] == "claude-opus-5"

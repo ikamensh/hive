@@ -191,6 +191,14 @@ function planPayload(projectId: string): PlanPayload | null {
 
 const projects: Project[] = [
   {
+    id: "p-muse", name: "molding-foundry", spec_repo: "git@github.com:acme/molding-foundry.git",
+    member_repos: [], autonomy: "direct_push", ci_autofix: false, testing_auto: true,
+    paused: false, archived: false, goal_complete: false, goal_complete_note: "",
+    daily_budget_usd: 0, included_only: true,
+    agent_preferences: [{ backend: "opencode", model: "opencode/muse-spark-1.3-contributor-free" }],
+    intake_conversation_id: "", state: "intake", created_at: now - 60,
+  },
+  {
     id: "p-atlas",
     name: "atlas",
     spec_repo: "git@github.com:acme/atlas-spec.git",
@@ -1325,13 +1333,16 @@ export const api = {
       (c) => c.id === project.intake_conversation_id && active.includes(c.status),
     );
     if (existing) return structuredClone(existing);
+    const scouts = project.agent_preferences?.length
+      ? project.agent_preferences : [{ backend: "claude", model: "opus" }];
+    const scout = scouts.find((candidate) => candidate.backend === backend) ?? scouts[0];
     const conversation: AgentConversation = {
       id: `conv-${Math.random().toString(36).slice(2, 8)}`,
       project_id: id,
       role: "intake",
       repo: project.spec_repo,
-      backend: backend || "claude",
-      model: backend === "codex" ? "gpt-5.5" : "opus",
+      backend: scout.backend,
+      model: scout.model,
       status: "running",
       session_handle: "",
       latest_brief: "",
@@ -1478,6 +1489,8 @@ export const api = {
         : {};
     return structuredClone({
       project,
+      intake_scouts: project.agent_preferences?.length
+        ? project.agent_preferences : [{ backend: "claude", model: "opus" }],
       testing_health: testingHealth,
       testability,
       workstreams: projectWorkstreams.filter((w) => w.project_id === id),

@@ -30,7 +30,7 @@ function intakeTranscript(conversation: AgentConversation) {
 export function ProjectSetup({
   project,
   conversation,
-  availableScoutBackends,
+  availableScouts,
   onSave,
   onCreateRepo,
   onStartIntake,
@@ -39,7 +39,7 @@ export function ProjectSetup({
 }: {
   project: Project;
   conversation: AgentConversation | null;
-  availableScoutBackends: string[];
+  availableScouts: { backend: string; model: string }[];
   onSave: (patch: ProjectPatch) => Promise<void>;
   onCreateRepo: (repoName: string) => Promise<void>;
   onStartIntake: (patch: ProjectPatch, backend?: string) => Promise<void>;
@@ -58,7 +58,8 @@ export function ProjectSetup({
   const intakeRunning = conversation?.status === "running" || conversation?.status === "finalizing";
   const intakeDone = conversation?.status === "done";
   const intakeFailed = conversation?.status === "failed";
-  const scoutLabel = (backend: string) => (backend === "codex" ? "codex" : "claude");
+  const scoutLabel = (scout: { backend: string; model: string }) =>
+    [scout.backend, scout.model].filter(Boolean).join(" · ");
   const transcript = conversation ? intakeTranscript(conversation) : [];
 
   const save = async () => {
@@ -169,13 +170,13 @@ export function ProjectSetup({
           </div>
         )}
         {!conversation && (
-          availableScoutBackends.length > 0 ? (
+          availableScouts.length > 0 ? (
             <p className="scout-status scout-ready">
-              scout ready — intake will run on {scoutLabel(availableScoutBackends[0])}
+              scout ready — intake will run on {scoutLabel(availableScouts[0])}
             </p>
           ) : (
             <p className="scout-status scout-blocked">
-              no trusted scout available — probe or fix an agent in <Link to="/machines">machines</Link>
+              no eligible scout available — check project agent settings or <Link to="/machines">machines</Link>
             </p>
           )
         )}
@@ -188,7 +189,7 @@ export function ProjectSetup({
             </header>
             {intakeFailed && (
               <p className="form-error">
-                Intake with {scoutLabel(conversation.backend)} could not complete. Retry below, or probe
+                Intake with {scoutLabel(conversation)} could not complete. Retry below, or probe
                 or fix an agent in <Link to="/machines">machines</Link>.
               </p>
             )}
@@ -207,17 +208,17 @@ export function ProjectSetup({
             {intakeFailed ? (
               <div className="intake-actions">
                 <div className="setup-actions">
-                  {availableScoutBackends.map((backend) => (
+                  {availableScouts.map((scout) => (
                     <button
                       type="button"
-                      key={backend}
-                      onClick={() => retryIntake(backend)}
+                      key={scout.backend}
+                      onClick={() => retryIntake(scout.backend)}
                       disabled={busy}
                     >
-                      retry with {scoutLabel(backend)}
+                      retry with {scoutLabel(scout)}
                     </button>
                   ))}
-                  {availableScoutBackends.length === 0 && (
+                  {availableScouts.length === 0 && (
                     <span className="chip chip-failed">
                       no usable scout — probe or fix an agent in <Link to="/machines">machines</Link>
                     </span>
