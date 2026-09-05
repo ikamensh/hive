@@ -1,7 +1,7 @@
 # Live experiment progress
 
 The acceptance criteria in `metrics.md` remain the completion contract. No
-simulator implementation or product-quality result is claimed yet.
+completed simulator increment or product-quality verdict is claimed yet.
 
 ## Install and evidence
 
@@ -53,6 +53,26 @@ simulator implementation or product-quality result is claimed yet.
    `3533073c86df` is queued ninth. `evidence/live-plan-amendment.json` records
    before/after state and CLI output. Dispatched use of the amendment is still
    to be checked when item two starts.
+7. Fixed upstream Kodo's Codex transport so structured quota/model errors survive
+   partial replies and unrelated stderr login warnings, including `turn.failed`
+   events. All 148 session tests passed. Hive pins commit `f7fe4d8` on Kodo's
+   `codex/hive-provider-errors` branch until a release includes it; no PyPI
+   publication was performed. Hive's real-process regression verifies quota
+   text and reset hints reach the capacity classifier unchanged.
+8. Stopped the CLI watch with SIGINT and verified the active build continued.
+   Then performed the planned interruption drill at the service level: stopped
+   chief 82735 while Astra had 22 files, including uncommitted application code.
+   Every recorded file hash and branch matched after shutdown; the entire old
+   process tree exited. On restart, Hive terminalized `4249fc9f39ee` as interrupted
+   and automatically dispatched successor `ba6b626145fe` on Astra with the same
+   branch/runner and `preserve_checkout=True`. No code recovery or manual task
+   retry was needed. Final landing after recovery remains to be verified.
+9. Added and tested OpenCode intake, automatic testing, planner/triage adapter,
+   and accurate setup choices. The real full-tool Muse planner smoke initially
+   repeated its draft: the prompt said unchanged initial state meant an action
+   had not happened. Clarified that later tool results supersede that snapshot;
+   the bounded live regression then produced one draft and stopped in round two.
+   Included-only/free-provider admission is being integration-tested separately.
 
 The three successful marker probes prove runtime access only. H7 still requires
 substantive simulator work by all three models. H4–H6, H8–H10, and the product
