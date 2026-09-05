@@ -36,6 +36,7 @@ from hive.models import (
     Project,
     Task,
     TaskKind,
+    TaskStatus,
 )
 from hive.llm.prompts import load as load_prompt
 
@@ -252,8 +253,7 @@ def cancel_item(store, item: PlanItem, reason: str = "") -> PlanItem:
 
 
 def retry_item(store, project: Project, plan: Plan, item: PlanItem) -> PlanItem:
-    """Re-queue a parked (blocked/rejected) item for another attempt — the
-    human's move after editing constraints or fixing the blocker."""
+    """Re-queue a parked item, retaining its checkout when execution resumes."""
     if item.status not in PLAN_ITEM_PARKED:
         raise ValueError(f"item is {item.status}; only blocked/rejected items can be retried")
 
@@ -415,7 +415,7 @@ def _make_plan_task(
     backend: str,
     model: str = "",
     *,
-    repair_of: Task | None = None,
+    continue_from: Task | None = None,
     feedback: str = "",
 ) -> Task:
     prompt_name = "plan_resolve" if kind == TaskKind.resolve else "plan_review"
@@ -429,9 +429,11 @@ def _make_plan_task(
     )
     if project.validation_command:
         header += f"\nRequired validation command: `{project.validation_command}`.\n"
-    if repair_of is not None:
-        header += ("\nRepair the existing work on this branch using the review feedback below. "
-                   "Commit and push the corrected result.\n\n" + feedback[-REASON_LIMIT:] + "\n")
+    if continue_from is not None:
+        header += ("\nContinue the existing work on this branch, including uncommitted edits. "
+                   "Use the current item document above and the previous attempt's report below. "
+                   "Complete, validate, commit and push the result.\n\n"
+                   + (feedback or continue_from.result_text)[-REASON_LIMIT:] + "\n")
     role = "build" if kind == TaskKind.resolve else "review"
     selected = getattr(project, f"{role}_backend")
     if selected:
@@ -452,9 +454,11 @@ def _make_plan_task(
             run_id=plan.id,
             repo=item.repo or project.spec_repo,
             branch=branch,
-            fresh_branch=kind == TaskKind.resolve and repair_of is None,
-            preserve_checkout=repair_of is not None,
-            resume_runner_id=repair_of.runner_id if repair_of else "",
+            fresh_branch=kind == TaskKind.resolve and continue_from is None,
+            preserve_checkout=continue_from is not None,
+            resume_runner_id=(continue_from.runner_id or continue_from.resume_runner_id)
+            if continue_from else "",
+            retry_of_task_id=continue_from.id if continue_from else "",
             kind=kind,
             validation_command=project.validation_command if kind == TaskKind.review else "",
             instructions=f"{header}\n{prompt}",
@@ -489,7 +493,7 @@ def repair_after_review(
 
     item = store.update(PlanItem, item.id, repair) or item
     _make_plan_task(store, project, plan, item, TaskKind.resolve, task.backend,
-                    repair_of=task, feedback=report)
+                    continue_from=task, feedback=report)
 
 
 def advance_plan(
@@ -517,7 +521,17 @@ def advance_plan(
         saved.updated_at = now_s()
 
     item = store.update(PlanItem, nxt.id, promote) or nxt
-    _make_plan_task(store, project, plan, item, TaskKind.resolve, backend or RESOLVE_BACKEND, model=model)
+    # A manual retry may wait behind another item. Derive its continuation from
+    # durable attempt history here, so a chief restart cannot lose the checkout.
+    previous = max(
+        (task for task in store.list(Task, workspace_id=project.workspace_id, work_item_id=item.id)
+         if task.run_id == plan.id and task.repo == (item.repo or project.spec_repo)
+         and task.branch == plan_branch(item)
+         and task.status in (TaskStatus.done, TaskStatus.failed, TaskStatus.cancelled)),
+        key=lambda task: task.created_at, default=None,
+    )
+    _make_plan_task(store, project, plan, item, TaskKind.resolve, backend or RESOLVE_BACKEND,
+                    model=model, continue_from=previous)
     log.info(
         "plan %s: item %d '%s' → resolving (%d still queued)",
         plan.id, item.order + 1, item.title, len(queued) - 1,
