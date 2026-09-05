@@ -190,12 +190,36 @@ are still pending.
     report. All 55 relevant plan/runner tests pass. Deployment and live recovery
     await the coordinated unfinished-result and OpenCode permission fixes; the
     partial simulator checkout has not been reset or edited by the observer.
+24. Completed the coordinated fixes in Hive `e280306`/`2cd3484` and Kodo
+    `5ad352a`. Unfinished builds and reviews now have an explicit result outcome,
+    remaining-work evidence, and at most two immutable continuations in the
+    same stage. Invalid reports cannot land through a legacy ACCEPT marker;
+    genuine blocked builds require a specific owner question. OpenCode now
+    records missing terminal completion, retains native refusal details, and
+    permits ordinary system temporary files for isolated workers. Planner
+    tools and unknown subagents remain restricted. The exact failed trace
+    replay passes, a real Muse temporary-file operation passed in 13.94 seconds,
+    and all 165 Kodo session tests passed. Hive passed 671 tests (one skipped),
+    lint, and wheel/source builds. These commits are pushed.
+25. Paused the idle install, stopped chief 33865, verified the runtime pin, and
+    started chief 53095 from `2cd3484`. Official CLI retry created
+    `67cf3ea20d57`. Before resuming, both partial Muse file hashes matched their
+    baseline; the successor retained the branch and original runner, with an
+    empty fresh session. All historical task fields remained unchanged. After
+    resume, the new task selected Astra at `1788645854.707626`, confirming return
+    to preferred subscription capacity after synthetic expiry. The provider
+    switch continues real partial code, but this was an operator retry after
+    an integration fix, not automatic recovery from genuine quota exhaustion.
+    Evidence: `evidence/incomplete-rollout-{before,after}.json`,
+    `evidence/muse-item4-retry-paused.json`, and
+    `evidence/manual-retry-review/`.
 
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
 for items one through three and must continue to hold for every later item. H7
 has substantive Astra, Fable, and Opus work. H8–H9 now have a labeled live fallback
-dispatch and natural expiry; continued work and return to preferred capacity
-still need observation. Full-simulator product criteria remain open. No spontaneous
+dispatch, natural expiry, and return to preferred capacity with preserved partial
+work; the recovered increment still needs to land. Full-simulator product criteria
+remain open. No spontaneous
 subscription exhaustion has been observed or claimed.
 
 ## User refinement: Muse in every role
