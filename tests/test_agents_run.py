@@ -36,6 +36,25 @@ print(json.dumps({"type":"item.completed", "item":{"type":"agent_message", "text
     assert result.text == expected
 
 
+def test_codex_partial_quota_failure_remains_actionable_for_hive(tmp_path, monkeypatch):
+    """The dependency must preserve quota/reset evidence past unrelated MCP warnings."""
+    from hive.agents.backends import classify_failure
+
+    cli = tmp_path / "codex"
+    cli.write_text(f"#!{sys.executable}\n" + '''import json, sys
+print('MCP OAuth authorization required', file=sys.stderr)
+print(json.dumps({"type":"item.completed", "item":{"type":"agent_message", "text":"Working on it."}}))
+print(json.dumps({"type":"turn.failed", "error":{"message":"Usage limit reached; resets in 2 hours."}}))
+sys.exit(1)
+''')
+    cli.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    result = run_agent("codex", "work", tmp_path, timeout_s=10)
+    assert result.is_error
+    assert result.text == "Usage limit reached; resets in 2 hours."
+    assert classify_failure(result.text, is_error=result.is_error) == "exhausted"
+
+
 def test_opencode_runs_through_the_agent_lifecycle(tmp_path, monkeypatch):
     """OpenCode's JSON events, selected model, and resumed session cross the real adapter."""
     cli = tmp_path / "opencode"
