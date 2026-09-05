@@ -1,11 +1,10 @@
 # Live experiment progress
 
-The acceptance criteria in `metrics.md` remain the completion contract. Six of
-ten items have landed. Free Muse built and freshly reviewed item five; Astra
-built save/replay and Opus accepted it. Independent checks found rejection-cause
-attribution and duplicate-JSON-key validation defects, now combined in a repair
-before the dashboard. The install has resumed on the tested Hive fixes; Astra is
-working on that combined repair.
+The acceptance criteria in `metrics.md` remain the completion contract. Seven of
+ten items have landed, including the independently verified quality/checkpoint
+repair. Free Muse is building the dashboard under a second labeled synthetic
+capacity drill. Duplicate action-request keys remain an explicit dashboard/API
+amendment; scaling, packaging and the contract challenge are still queued.
 
 ## Install and evidence
 
@@ -324,8 +323,50 @@ working on that combined repair.
     Evidence: `evidence/review-prompt-rollout-{before-stop,after-retry}.json`
     and `evidence/combined-repair-start.json`.
 
+36. Fixed a confirmed Codex quota-display bug in Hive `7784612`: window
+    kind now derives from actual duration rather than assuming the native
+    primary slot is a session window. Native-slot severity remains correct.
+    Four real-rollout→collector→runner-registration→CLI cases cover weekly-only,
+    swapped exhausted slots, and unknown/missing duration. All 84 relevant
+    tests, lint, and a wheel build pass. Evidence:
+    `evidence/codex-window-label-audit/`.
+37. Astra pushed combined repair `b8b461a700e7fd759ac4656560cfcd56fcc13378`
+    after 598.80 seconds. Fresh Opus review `c6af1cc847b6` received prompt
+    `8017335d`, including the new independent-probe obligation, and reported
+    explicit public-interface commands with expected/observed results. Hive
+    passed the 415-test gate and landed the unchanged SHA in
+    `61f3268b1a316c7e2c568d745873cca944d2d0d2`. Independent acceptance passes
+    33 cause boundary fixtures, 72 stochastic/pacing runs, and 57 pre/post
+    comparisons preserving every physical field and exact RNG state while
+    correcting cause labels. Checkpoint duplicate keys reject through 12 HTTP
+    and 12 CLI cases; the 32-process/429-request replay suite remains green.
+    Saves now identify engine contract 2; contract-1 checkpoints fail explicitly
+    because corrected cause histories differ. The original failing evidence
+    and both earlier accepted reviews remain unchanged. Evidence:
+    `evidence/combined-repair-{build,landing}.json`,
+    `evidence/cause-repair-independent/`, and `evidence/item6-independent/`.
+38. The independent raw-request matrix also found duplicate operation/nested
+    order/recipe keys accepted by the separate action endpoint. Added a queued
+    dashboard amendment through the CLI to use consistent strict JSON decoding
+    while preserving typed validation/OpenAPI, actionable errors and full
+    rejected-request atomicity. Its dispatched instructions include the clause.
+    This third finding remains open; it is separate from the now-verified
+    checkpoint repair. Evidence: `evidence/dashboard-action-validation-amendment.json`.
+39. Prepared a second controlled fallback drill, then paused during the running
+    repair review and waited for its landing. Stopped idle chief 89922, applied
+    **300-second synthetic** exact-model cooldowns for Astra/Fable/Opus, and
+    started chief 456 from `7784612`. Native provider snapshots and real quota
+    history were preserved. Resumed: dashboard task `f8defcefdf25` selected free
+    Muse at `1788651117.174665`, explicitly skipping the three cooled scopes.
+    The CLI now correctly displays Codex's seven-day window as weekly. The
+    drill tests full-task fallback after the native completion fixes; dashboard
+    completion, cooldown expiry and later preferred-model return remain pending.
+    Manifest `bc331a30cb86` expires at `1788651372.1330812` without a manual reset.
+    Evidence: `evidence/capacity-h8h9-dashboard/` and
+    `evidence/dashboard-drill-pause.json`.
+
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
-for items one through six and must continue to hold for every later item. H7
+for all seven landed increments and must continue to hold for every later item. H7
 has substantive Astra, Fable, and Opus work. H8–H9 now have a labeled live fallback
 dispatch, natural expiry, and return to preferred capacity with preserved partial
 work and the recovered increment's reviewed landing. Full-simulator product criteria
