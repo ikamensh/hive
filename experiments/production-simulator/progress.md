@@ -42,8 +42,8 @@ nine items has landed; the engineering simulation and dashboard are still pendin
    old for Astra. Upgraded the npm-installed CLI to 0.153.4 and made Hive's
    default/overridable Codex model explicit. The real Astra probe then returned
    `HIVE_ASTRA_OK`. Kodo's generic error classification hid the provider error
-   behind unrelated MCP authentication warnings; preserving that error remains
-   a separate issue to fix.
+   behind unrelated MCP authentication warnings; intervention seven fixed that
+   error transport.
 
 6. Restarted the idle local install after the runtime/retry fixes. Codex's real
    runner probe `fc3ddc687d5d` passed, and retried the first item through the CLI.
@@ -51,8 +51,8 @@ nine items has landed; the engineering simulation and dashboard are still pendin
    `3bc12caa169d` to require an explicit diffusivity-unit regression and appended
    the production-contract challenge from `game-challenge.md`. New item
    `3533073c86df` is queued ninth. `evidence/live-plan-amendment.json` records
-   before/after state and CLI output. Dispatched use of the amendment is still
-   to be checked when item two starts.
+   before/after state and CLI output. Intervention ten verified that item two
+   received the amendment, and intervention fourteen checks its behavior.
 7. Fixed upstream Kodo's Codex transport so structured quota/model errors survive
    partial replies and unrelated stderr login warnings, including `turn.failed`
    events. All 148 session tests passed. Hive pins commit `f7fe4d8` on Kodo's
@@ -66,13 +66,14 @@ nine items has landed; the engineering simulation and dashboard are still pendin
    process tree exited. On restart, Hive terminalized `4249fc9f39ee` as interrupted
    and automatically dispatched successor `ba6b626145fe` on Astra with the same
    branch/runner and `preserve_checkout=True`. No code recovery or manual task
-   retry was needed. Final landing after recovery remains to be verified.
+   retry was needed. Intervention ten verified the final reviewed landing.
 9. Added and tested OpenCode intake, automatic testing, planner/triage adapter,
    and accurate setup choices. The real full-tool Muse planner smoke initially
    repeated its draft: the prompt said unchanged initial state meant an action
    had not happened. Clarified that later tool results supersede that snapshot;
    the bounded live regression then produced one draft and stopped in round two.
-   Included-only/free-provider admission is being integration-tested separately.
+   Included-only/free-provider admission subsequently passed integration checks
+   through the API, scheduler, direct planner invocation, and todo triage.
 10. The resumed Astra build pushed `cc59891`. Fable independently reviewed it,
     reproduced the clean setup/check flow and six invalid-input CLI cases, and
     fixed a missing inventory count in the CLI summary. Hive ran `make check`
@@ -85,6 +86,29 @@ nine items has landed; the engineering simulation and dashboard are still pendin
     alternate port with a real `GET /scenario`. The temporary service was then
     stopped. The observer made no simulator code changes. This proves the first
     contract increment, not physical simulation or dashboard quality.
+12. Real Muse worker/reviewer tests exposed a second directory-selection bug:
+    setting subprocess `cwd` alone still let OpenCode use the caller's Hive
+    checkout. Preserved the stray smoke artifacts as evidence, then removed
+    only those files. Kodo now passes the explicit `--dir`; Hive pins `a62ee9b`.
+    Repeating the test produced code and 13 passing tests in the requested
+    throwaway repository, then a fresh Muse reviewer accepted it. An independent
+    exhaustive check covered 9,841 inputs and confirmed the caller was untouched.
+    The planner has the same directory pin and passed a normal goal invocation
+    with all seven tools, producing one draft in two rounds (16.1 seconds).
+13. Drained item two's Astra build and restarted the idle chief from `a04833f`
+    with the free Muse planner enabled. Resumed immediately and verified Opus
+    review task `b56a45769f83` started. Evidence is in
+    `evidence/maintenance-muse-runtime.json`. The startup banner incorrectly asked
+    for an API key despite the working CLI provider; fixed that wording with four
+    CLI launch regressions, and all 48 CLI tests passed.
+14. Astra pushed item two at `10c351e98eeb37a40930c42c70bd64f95c84b44a`.
+    A separate clean clone passed `make setup` and `make check` (133 tests).
+    Thirteen independent CLI scenarios and real HTTP inspection verified the
+    thermal, overlap, clamp, material-demand, and incompatible-resource cases.
+    The live amendment's 0.1 mm²/s and 1e-7 m²/s inputs produce equal predictions;
+    inspection displays both source units and SI values. No observer edits were
+    made to the simulator. These checks precede Opus's final review; the reviewed
+    SHA and landing still need confirmation. Evidence: `evidence/item2-independent/`.
 
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
 for item one and must continue to hold for every later item. H7 has substantive
@@ -94,10 +118,15 @@ open. No spontaneous subscription exhaustion has been observed or claimed.
 
 ## User refinement: Muse in every role
 
-Muse/OpenCode should be eligible for intake, planning, building, review, and
-automatic testing. Existing worker/reviewer configuration already admits it.
-Intake allow-lists and zero-dollar automatic-testing gates are being removed;
-the separate planner/triage path needs an OpenCode adapter. Fresh review sessions
-and executable validation remain required when the same model fills every role.
+Muse/OpenCode is eligible for intake, planning, building, review, triage, and
+automatic testing. The API and setup UI expose eligible backend/model pairs from
+the same selector. The planner/triage adapter confines native tools and validates
+Hive tool requests before executing them; included-only projects can use it at a
+zero-dollar daily budget without a paid API fallback. Live planner and worker/
+reviewer tests passed. Fresh review sessions and executable validation remain
+required when the same model fills every role. A further worker safeguard is
+being completed: personal OpenCode title/compaction agent settings must not cause
+auxiliary calls to a paid model. The controlled fallback drill waits for that fix.
 Free availability is temporary according to https://opencode.ai/docs/zen/;
-the selected model must remain configurable.
+the Contributor Free offering also allows model-training use of prompts and
+completions. The selected model remains configurable.
