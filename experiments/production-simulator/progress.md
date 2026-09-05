@@ -1,7 +1,7 @@
 # Live experiment progress
 
-The acceptance criteria in `metrics.md` remain the completion contract. One of
-nine items has landed; the engineering simulation and dashboard are still pending.
+The acceptance criteria in `metrics.md` remain the completion contract. Two of
+nine items have landed; the event simulation and dashboard are still pending.
 
 ## Install and evidence
 
@@ -109,10 +109,21 @@ nine items has landed; the engineering simulation and dashboard are still pendin
     inspection displays both source units and SI values. No observer edits were
     made to the simulator. These checks precede Opus's final review; the reviewed
     SHA and landing still need confirmation. Evidence: `evidence/item2-independent/`.
+15. Opus completed the second review, independently recomputed the physics and
+    checked invalid-domain boundaries, then removed an unreachable guard and
+    clarified a loop variable. Hive ran the 133-test gate against reviewed SHA
+    `880eef8944dd69a21106ed3cb66ea899f143acf2` and landed the increment. Item three
+    is pending as task `84da504ae40f`; workspace dispatch is paused intentionally
+    while the auxiliary-model safeguard and controlled fallback drill are
+    completed. Evidence: `evidence/second-landing.json` and
+    `evidence/sequence-through-item2.json`. The sequence audit verifies fresh
+    review sessions, successful checks at both reviewed SHAs, review after build,
+    the next item starting after the previous landing, and no overlapping work
+    on different plan items.
 
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
-for item one and must continue to hold for every later item. H7 has substantive
-Astra and Fable work; Opus has only a successful access probe so far. H8–H9 still
+for items one and two and must continue to hold for every later item. H7 has
+substantive Astra, Fable, and Opus work. H8–H9 still
 need the controlled capacity drill, and all full-simulator product criteria remain
 open. No spontaneous subscription exhaustion has been observed or claimed.
 
