@@ -1,6 +1,6 @@
 # 🐝 hive
 
-Continuous autonomous software development. You give hive a project — a mission and a concrete iteration goal — and it keeps AI coding agents (Claude Code, Cursor, Codex, Gemini CLI) productively working toward that goal: planning, building, and verifying each change with a second agent, **asking you when the spec is genuinely ambiguous**, and never making a mess.
+Continuous autonomous software development. You give hive a project — a mission and a concrete iteration goal — and it keeps AI coding agents (Claude Code, Cursor, Codex, Gemini CLI, OpenCode) productively working toward that goal: planning, building, and verifying each change with a second agent, **asking you when the spec is genuinely ambiguous**, and never making a mess.
 
 The point isn't just "an agent writes code." It's the loop around it: hive decomposes the goal into workstreams, runs at most one agent per repo so there are no merge conflicts, gates every change behind independent verification (with an anti-bloat check), and parks work to batch up questions for you instead of guessing on things that are expensive to get wrong. Your answers accumulate into an ever-sharper spec.
 
@@ -82,6 +82,20 @@ without falling back to paid APIs. A draft still needs approval before execution
 The builder and reviewer can both use the same free Muse model in separate
 sessions. See [OpenCode planning](wiki/opencode-planner.md) for isolation and limits.
 
+To use Muse for all coding roles too, configure the project before approving its
+plan:
+
+```bash
+uv run hive --local set <project> --included-only true --daily-budget 0 \
+  --builder opencode=opencode/muse-spark-1.3-contributor-free \
+  --reviewer opencode=opencode/muse-spark-1.3-contributor-free \
+  --grant 'opencode:unlimited'
+```
+
+This grant also makes OpenCode available to intake and automatic testing. Keep
+your validation command configured: a fresh review session still needs executable
+checks when the builder and reviewer use the same model.
+
 OpenCode must be installed and connected (`opencode`, then `/connect`). Its
 default is Muse Spark 1.3 Contributor Free; `HIVE_OPENCODE_MODEL` overrides the
 default for probes and unpinned work. Contributor Free permits using prompts
@@ -93,7 +107,7 @@ The remaining instructions describe the managed alternative: Firestore and GCS
 hold shared state. `hive run` without `--local` requires that configuration.
 
 - **[uv](https://docs.astral.sh/uv/)** (Python runner; everything below is `uv run …`).
-- **At least one agent CLI installed and logged in** — `claude`, `cursor`, `codex`, or `gemini-cli`. This is what actually writes the code.
+- **At least one agent CLI installed and logged in** — `claude`, `cursor`, `codex`, `gemini-cli`, or `opencode`. This is what actually writes the code.
 - **An orchestrator provider** — free OpenCode (`HIVE_ORCH_PROVIDER=opencode`), `OPENAI_API_KEY`, or `GEMINI_API_KEY`. This plans and decides separately from the coding sessions.
 - **`gh` logged in** (`gh auth login`) — hive pushes commits/PRs using your GitHub credentials.
 - **GCP application credentials** (`gcloud auth application-default login`) with access to the Firestore project and GCS bucket.
