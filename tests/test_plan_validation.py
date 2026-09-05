@@ -57,6 +57,58 @@ def test_validation_rejects_test_side_effects_and_times_out(repo):
     assert timeout.exit_code != 0 and "timed out" in timeout.output
 
 
+def test_stopping_runner_stops_its_validation_processes(repo, tmp_path):
+    """The real daemon entrypoint unwinds a running check on service shutdown."""
+    import os
+    import signal
+    import sys
+    import time
+
+    pid_file = tmp_path / "validation.pid"
+    script = """
+import shlex
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from hive.runner import _daemon as daemon
+from hive.runner._validation import validate_checkout
+command = 'echo $$ > ' + shlex.quote(sys.argv[2]) + '; sleep 30'
+daemon.WorkerLoop = lambda *a, **kw: SimpleNamespace(
+    run=lambda: validate_checkout(Path(sys.argv[1]), command, 'hive/plan-test'))
+daemon.main([])
+"""
+    env = dict(os.environ, HIVE_RUNNER_STATE_DIR=str(tmp_path / "runner"))
+    proc = subprocess.Popen([sys.executable, "-c", script, str(repo), str(pid_file)], env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    child = None
+    try:
+        deadline = time.monotonic() + 5
+        while not pid_file.exists():
+            assert proc.poll() is None, proc.communicate()[0].decode()
+            assert time.monotonic() < deadline, "validation never started"
+            time.sleep(0.02)
+        child = int(pid_file.read_text())
+        proc.terminate()
+        proc.wait(timeout=5)
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                os.killpg(child, 0)
+            except ProcessLookupError:
+                break
+            assert time.monotonic() < deadline, "validation outlived its runner"
+            time.sleep(0.02)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        if child:
+            try:
+                os.killpg(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
 @pytest.mark.parametrize("command", ["echo checks-passed", "sh check.sh", ""])
 def test_review_runner_evidence_gates_landing(repo, tmp_path, monkeypatch, command):
     """Real runner execution and result processing merge only the tested commit.

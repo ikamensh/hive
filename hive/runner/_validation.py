@@ -1,6 +1,7 @@
 """Run the operator's checks and certify exactly the clean commit they tested."""
 
 import os
+from contextlib import suppress
 from pathlib import Path
 import signal
 import subprocess
@@ -29,15 +30,22 @@ def validate_checkout(
     with tempfile.TemporaryFile() as output:
         process = subprocess.Popen(command, shell=True, cwd=path, stdout=output,
                                    stderr=subprocess.STDOUT, start_new_session=True)
+        timed_out = False
         try:
             exit_code = process.wait(timeout=timeout_s)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
+            timed_out, exit_code = True, -1
+        finally:
+            # Also unwinds on Ctrl-C/SIGTERM and kills background children of
+            # a shell that already exited. A finished group may already be gone.
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
             process.wait()
-            return fail(f"Validation timed out after {timeout_s:g}s: {command}")
         output.seek(0, os.SEEK_END)
         output.seek(max(0, output.tell() - OUTPUT_LIMIT))
         text = output.read().decode(errors="replace")
+    if timed_out:
+        return fail(text + f"\nValidation timed out after {timeout_s:g}s: {command}")
     if exit_code:
         return fail(text, exit_code)
     if (git("status", "--porcelain") or git("rev-parse", "HEAD") != sha

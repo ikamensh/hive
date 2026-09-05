@@ -15,6 +15,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -857,6 +858,11 @@ def main(argv: list[str] | None = None) -> None:
         )
         return
 
+    def terminate(signum, frame):
+        # Service shutdown must unwind validation's subprocess cleanup.
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, terminate)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     if control.is_paused():
         # The operator switched this runner off (menu bar / CLI). launchd's

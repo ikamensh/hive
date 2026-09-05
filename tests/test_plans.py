@@ -428,6 +428,23 @@ def test_review_reject_repairs_twice_then_parks_with_report(tmp_path):
     assert store.get(PlanItem, first.id).repair_attempts == 0
 
 
+def test_cancel_requested_during_review_checks_prevents_landing(tmp_path):
+    """Cancellation wins even if the runner finishes its checks before seeing it."""
+    store = MemoryStore()
+    project = make_project(store)
+    plan = activated_plan(store, project)
+    merged = []
+    processor, _ = make_processor(store, tmp_path, merge=lambda *a, **kw: merged.append(a))
+    report(store, processor, only_resolve_task(store, project), "OUTCOME: FIXED")
+    review = store.list(Task, status=TaskStatus.pending)[0]
+    store.update(Task, review.id, lambda t: setattr(t, "cancel_requested", True))
+    report(store, processor, review, "REVIEW: ACCEPT")
+    assert not merged
+    first, second, _ = plans.plan_items(store, plan)
+    assert first.status == PlanItemStatus.blocked_clarity
+    assert second.status == PlanItemStatus.queued
+
+
 def test_landing_failure_escalates_todo_that_self_closes(tmp_path):
     """A merge failure parks the item, files a repair todo, and the todo's
     plan_item_done predicate closes it once the human cancels the item."""

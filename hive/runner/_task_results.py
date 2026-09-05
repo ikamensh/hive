@@ -991,7 +991,7 @@ class TaskResultProcessor:
         plan = self.store.get(Plan, task.run_id) if task.run_id else None
         if not project or not plan:
             return
-        if body.cancelled:
+        if body.cancelled or task.cancel_requested:
             # No scan exists to resurrect plan work: an operator cancel parks
             # the item so the human's retry is the explicit way forward.
             plans.set_item_status(

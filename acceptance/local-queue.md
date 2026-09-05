@@ -8,6 +8,8 @@ make reviewed progress across interruptions without configuring cloud storage.
 - Local runner checkouts, logs, reconnect roster, and pause flag belong to this
   install. They do not reuse an installed fleet runner's state.
 - Stopping the chief stops its runner. Restarting reopens the same projects.
+- Stopping the runner terminates its validation subprocesses. Cancellation
+  received during review/checks prevents landing even if the runner reports success.
 - Only one chief may hold a local workspace's leader lease at a time.
 - GitHub remains the landing destination for this iteration.
 - `hive --local plan-import <project> <file> --repo <url>` accepts Markdown
