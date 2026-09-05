@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import re
 import os
+import importlib.util
 import shutil
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 PROBE_MARKER = "HIVE_AGENT_PROBE_OK"
@@ -164,7 +166,7 @@ class Backend:
 class BackendDiscovery:
     """Best-effort runner-local discovery for one backend.
 
-    `installed` means Hive found the CLI on PATH. `status`/`message` are
+    `installed` means Hive found the CLI used by its session. `status`/`message` are
     diagnostics only; a successful probe is what makes a resource dispatchable.
     """
 
@@ -277,6 +279,18 @@ def discover_backend(backend: Backend) -> BackendDiscovery:
     check.
     """
     path = shutil.which(backend.binary)
+    command = list(backend.preflight)
+    if backend.name == "claude":
+        # ClaudeSession uses the SDK's bundled CLI before looking on PATH.
+        # Inspect that same runtime, otherwise a healthy system install masks
+        # an SDK too old to serve the requested model.
+        sdk = importlib.util.find_spec("claude_agent_sdk")
+        if sdk and sdk.origin:
+            binary = "claude.exe" if os.name == "nt" else "claude"
+            bundled = Path(sdk.origin).parent / "_bundled" / binary
+            if bundled.is_file():
+                path = str(bundled)
+                command[0] = path
     if not path:
         return BackendDiscovery(
             name=backend.name,
@@ -287,7 +301,7 @@ def discover_backend(backend: Backend) -> BackendDiscovery:
 
     try:
         proc = subprocess.run(
-            list(backend.preflight),
+            command,
             capture_output=True,
             text=True,
             encoding="utf-8",

@@ -18,7 +18,6 @@ def _discovery(name, installed=True):
 @pytest.mark.parametrize(
     ("backend", "binary", "version"),
     [
-        ("claude", "claude", "2.1.145 (Claude Code)"),
         ("codex", "codex", "codex-cli 0.139.0"),
     ],
 )
@@ -48,6 +47,31 @@ def test_discover_backend_recognizes_realistic_claude_and_codex_versions(
     assert discovery.version == version
     assert discovery.message == ""
     assert calls[0][0] == list(REGISTRY[backend].preflight)
+
+
+def test_claude_discovery_reports_the_sdk_runtime_it_will_execute(tmp_path, monkeypatch):
+    """An old system CLI must not hide the SDK binary actually used by sessions."""
+    import importlib.util
+    import sys
+    from types import SimpleNamespace
+
+    package = tmp_path / "claude_agent_sdk"
+    bundled = package / "_bundled" / "claude"
+    bundled.parent.mkdir(parents=True)
+    bundled.write_text(f"#!{sys.executable}\nprint('2.1.259 (Claude Code)')\n")
+    bundled.chmod(0o755)
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: (
+        SimpleNamespace(origin=str(package / "__init__.py"))
+        if name == "claude_agent_sdk" else real_find_spec(name)
+    ))
+    monkeypatch.setattr(backends.shutil, "which", lambda name: "/old/system/claude")
+
+    discovery = discover_backend(REGISTRY["claude"])
+
+    assert discovery.installed and discovery.status == "ok"
+    assert discovery.path == str(bundled)
+    assert discovery.version == "2.1.259 (Claude Code)"
 
 
 def test_discovery_payload_can_limit_advertised_backends(monkeypatch):
