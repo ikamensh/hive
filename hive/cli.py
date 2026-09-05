@@ -129,6 +129,8 @@ def _gh_token(preferred_user: str = "") -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="hive", description=__doc__.split("\n")[0])
     parser.add_argument("--version", action="version", version=f"hive {get_version()}")
+    parser.add_argument("--local", dest="local_target", action="store_true",
+                        help="send commands only to localhost:8000, ignoring saved remote settings")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("run", help="launch the local chief (auto-detects tokens)")
@@ -360,6 +362,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("project_id")
     p.add_argument("goal")
     p.add_argument("items", help="JSON list of {title,story,constraints,notes,repo}; '-' = stdin")
+
+    p = sub.add_parser("plan-import", help="import a Markdown plan (# goal, ## tasks), without intake")
+    p.add_argument("project", help="project name or id; --repo creates it if missing")
+    p.add_argument("file", help="Markdown file, or '-' for stdin")
+    p.add_argument("--repo", help="GitHub repo for a new project")
+    p.add_argument("--append", action="store_true", help="append proposals to the live plan")
+    p.add_argument("--start", action="store_true", help="approve the imported tasks and start execution")
+    p.add_argument("--json", action="store_true", help="raw plan payload")
 
     p = sub.add_parser("plan-approve", help="approve all remaining items and start the plan")
     p.add_argument("project_id")
@@ -1396,10 +1406,57 @@ def resolve_project_id(client, token: str) -> str:
     )
 
 
+def _import_plan(args, client) -> dict:
+    from hive._workstreams.plan_document import parse_plan_document
+
+    text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text()
+    document = parse_plan_document(text)
+    projects = client.get("/api/projects").raise_for_status().json()
+    matches = [p for p in projects if args.project in (p["id"], p["name"])]
+    if len(matches) > 1:
+        raise SystemExit("Ambiguous project name; use the project id")
+    if not matches:
+        if not args.repo or args.append:
+            raise SystemExit("New plan projects need --repo <GitHub URL>; append requires an existing plan")
+        project = client.post("/api/projects", json={"name": args.project}).raise_for_status().json()
+        pid = project["id"]
+        client.patch(f"/api/projects/{pid}", json={
+            "spec_repo": args.repo, "member_repos": [args.repo], "included_only": True,
+            "daily_budget_usd": 0, "testing_auto": False,
+            "build_backend": "opencode", "review_backend": "codex",
+            "agent_grants": [{"backends": ["opencode"]}, {"backends": ["codex"], "sessions_per_day": 5}],
+        }).raise_for_status()
+    else:
+        pid = matches[0]["id"]
+        if args.repo and args.repo != matches[0].get("spec_repo"):
+            raise SystemExit("This project already exists; change its repo with `hive set` first")
+    if args.append:
+        detail = client.get(f"/api/projects/{pid}").raise_for_status().json()
+        payload = detail.get("plan")
+        if not payload or payload["plan"]["status"] not in ("draft", "approved"):
+            raise SystemExit("There is no live plan to append to")
+        if document["goal"] != payload["plan"]["goal"]:
+            raise SystemExit("An appended document must use the live plan's goal")
+        plan_id = payload["plan"]["id"]
+        for item in document["items"]:
+            added = client.post(f"/api/plans/{plan_id}/items", json=item).raise_for_status().json()
+            if args.start and payload["plan"]["status"] == "approved":
+                client.post(f"/api/plan-items/{added['id']}/approve").raise_for_status()
+        if args.start and payload["plan"]["status"] == "draft":
+            client.post(f"/api/plans/{plan_id}/approve").raise_for_status()
+    else:
+        payload = client.post(f"/api/projects/{pid}/plan", json=document).raise_for_status().json()
+        if args.start:
+            client.post(f"/api/plans/{payload['plan']['id']}/approve").raise_for_status()
+    return client.get(f"/api/projects/{pid}").raise_for_status().json()["plan"]
+
+
 def run(args: argparse.Namespace, client) -> dict | list:
     """Execute one command against an httpx-compatible client and return the
     response payload. Non-2xx responses raise (clear failure over silence)."""
     c = args.command
+    if c == "plan-import":
+        return _import_plan(args, client)
     if getattr(args, "project_id", None):
         args.project_id = resolve_project_id(client, args.project_id)
     if c in WS_KIND_BY_COMMAND:
@@ -1844,7 +1901,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "migrate-local-state":
         _run_migrate_local_state(args)
         return
-    targets = resolve_targets(os.environ, load_stored_config())
+    targets = ([Target(DEFAULT_HIVE_URL, None, "")] if args.local_target
+               else resolve_targets(os.environ, load_stored_config()))
     last_error: httpx.RequestError | None = None
     for i, target in enumerate(targets):
         client = httpx.Client(
@@ -1875,7 +1933,7 @@ def main(argv: list[str] | None = None) -> None:
                 print(format_project(payload))
             elif args.command == "inbox" and not args.json:
                 print(format_inbox(payload))
-            elif args.command == "plan" and not args.json:
+            elif args.command in ("plan", "plan-import") and not args.json:
                 print(format_plan(payload))
             elif args.command == "stories" and not args.json:
                 print(format_stories(payload))

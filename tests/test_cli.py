@@ -386,6 +386,12 @@ def test_main_targets_stored_remote(monkeypatch, capsys):
     assert captured["base_url"] == "https://hive.example"
     assert captured["headers"] == {"Authorization": "Bearer tok"}
 
+    # A local command must never fall through to the saved cloud installation.
+    main(["--local", "projects"])
+    assert captured["base_url"] == "http://localhost:8000"
+    assert captured["headers"] == {}
+    assert captured["auth"] is None
+
 
 def test_main_reports_auth_failure_cleanly(monkeypatch, capsys):
     import httpx

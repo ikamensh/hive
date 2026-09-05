@@ -24,14 +24,25 @@ fleet runner. GitHub is still used for pushing and landing changes. No GCP setup
 is required. Agent CLIs and `gh` should already be logged in; an orchestrator API
 key is needed for AI plan proposals, but not to start the local service.
 
-The instructions below describe the managed alternative: the chief runs on your
-laptop while Firestore and GCS hold shared state. `hive run` without `--local`
-continues to require that managed configuration.
+Write `tasks.md` with a `# Goal` and one `## Task title` per task. Put instructions
+under each task; their order is the execution order. Then, in another terminal:
+
+```bash
+uv run hive --local plan-import my-project tasks.md --repo https://github.com/you/repo.git
+uv run hive --local plan my-project
+uv run hive --local plan-approve my-project
+```
+
+New projects created this way use free OpenCode builds, Codex reviews (five
+sessions/day), and no paid planner. Importing into an existing project preserves
+its settings. `--start` approves immediately; `--append` adds proposals to a live
+plan (use the same goal). Use `hive --local …` to target this install even when
+you have saved a remote chief. To use a custom port, set `HIVE_URL` instead.
 
 For an existing plan project, select included capacity and separate roles:
 
 ```bash
-uv run hive set <project> --included-only true --daily-budget 0 \
+uv run hive --local set <project> --included-only true --daily-budget 0 \
   --builder opencode=opencode/muse-spark-1.3-contributor-free --reviewer codex \
   --grant 'opencode:unlimited' --grant 'codex:5/day'
 ```
@@ -49,6 +60,9 @@ default for probes and unpinned work. Contributor Free permits using prompts
 and completions for model training; see [OpenCode Zen](https://opencode.ai/docs/zen/).
 
 ### 0. Prerequisites
+
+The remaining instructions describe the managed alternative: Firestore and GCS
+hold shared state. `hive run` without `--local` requires that configuration.
 
 - **[uv](https://docs.astral.sh/uv/)** (Python runner; everything below is `uv run …`).
 - **At least one agent CLI installed and logged in** — `claude`, `cursor`, `codex`, or `gemini-cli`. This is what actually writes the code.

@@ -10,6 +10,11 @@ make reviewed progress across interruptions without configuring cloud storage.
 - Stopping the chief stops its runner. Restarting reopens the same projects.
 - Only one chief may hold a local workspace's leader lease at a time.
 - GitHub remains the landing destination for this iteration.
+- `hive --local plan-import <project> <file> --repo <url>` accepts Markdown
+  (`# goal`, ordered `## tasks`, bodies as instructions), creates an included-only
+  project if missing, and does not run intake or an API planner. Approval starts
+  the queue; `--start` approves on import. `--append` adds amendable proposals.
+- `hive --local` commands never fall through to a configured remote chief.
 - Quota exhaustion waits for capacity and resumes the interrupted build or
   review. A returning runner resumes its interrupted stage, including after a
   chief restart. Each retry has its own task record; late results are ignored.
