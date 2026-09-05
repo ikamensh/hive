@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -245,6 +246,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--validate", help="shell command that must pass before plan changes land")
     p.add_argument("--builder", help="plan builder: backend[=model], e.g. opencode=opencode/muse-spark-1.3-contributor-free")
     p.add_argument("--reviewer", help="independent reviewer: backend[=model], e.g. codex")
+    p.add_argument("--prefer", action="append", help="ordered capacity fallback: backend[=model], repeatable; 'clear' removes fallbacks")
     p.add_argument("--included-only", choices=["true", "false"], help="use subscription CLIs/free models and disable paid planner calls")
     p.add_argument("project_id")
     p.add_argument("--autonomy")
@@ -352,9 +354,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("project_id")
     p.add_argument("note")
 
-    p = sub.add_parser("plan", help="show the project's iteration plan (items + statuses)")
+    p = sub.add_parser("plan", help="show the project's queue, agent activity, and validation results")
     p.add_argument("project_id")
     p.add_argument("--json", action="store_true", help="raw payload instead of the readable summary")
+    p.add_argument("--watch", nargs="?", type=_watch_interval, const=5.0, metavar="SECONDS",
+                   help="refresh until complete/abandoned or Ctrl-C (default: 5s; --json emits JSON lines)")
 
     p = sub.add_parser("plan-propose", help="ask the planner to draft an iteration plan")
     p.add_argument("project_id")
@@ -366,6 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("plan-import", help="import a Markdown plan (# goal, ## tasks), without intake")
     p.add_argument("--validate", help="set the project's required validation command")
+    p.add_argument("--prefer", action="append", help="set ordered capacity fallbacks: backend[=model], repeatable")
     p.add_argument("project", help="project name or id; --repo creates it if missing")
     p.add_argument("file", help="Markdown file, or '-' for stdin")
     p.add_argument("--repo", help="GitHub repo for a new project")
@@ -777,6 +782,21 @@ def parse_grants(specs: list[str]) -> list[dict]:
     return grants
 
 
+def parse_agent_preferences(specs: list[str]) -> list[dict]:
+    """Ordered backend/model choices; validate before an import creates a project."""
+    from hive.agents import BACKEND_NAMES
+
+    if specs == ["clear"]:
+        return []
+    preferences = []
+    for spec in specs:
+        backend, _, model = spec.strip().partition("=")
+        if backend not in BACKEND_NAMES:
+            raise SystemExit(f"unknown preferred backend {backend!r}; choose from {', '.join(sorted(BACKEND_NAMES))}")
+        preferences.append({"backend": backend, "model": model})
+    return preferences
+
+
 def format_projects(projects: list[dict]) -> str:
     """Readable project list: name, badge, reason, money — the glance row."""
     if not projects:
@@ -875,18 +895,84 @@ STORY_GLYPHS = {
 }
 
 
-def format_plan(payload: dict) -> str:
-    """Readable plan rail: goal, then one glyphed line per item."""
+def _watch_interval(value: str) -> float:
+    seconds = float(value)
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError("watch interval must be a positive number of seconds")
+    return seconds
+
+
+def watch_plan(args, client) -> None:
+    """Read-only watch; leaving the view never interrupts Hive's work."""
+    try:
+        while True:
+            payload = run(args, client)
+            if args.json:
+                print(json.dumps(payload), flush=True)
+            else:
+                if sys.stdout.isatty():
+                    print("\033[2J\033[H", end="")
+                print(format_plan(payload, command_prefix="hive --local" if args.local_target else "hive"), flush=True)
+            if not payload.get("plan") or payload["plan"]["status"] in ("complete", "abandoned"):
+                return
+            time.sleep(args.watch)
+    except KeyboardInterrupt:
+        return
+
+
+def format_plan(payload: dict, *, command_prefix: str = "hive") -> str:
+    """Show queue progress and the recorded evidence behind each item."""
     if "note" in payload:
         return payload["note"]
     head = payload.get("plan") or {}
     lines = [f"PLAN [{head.get('status', '?')}] {head.get('goal', '')[:140]}"]
-    for item in payload.get("items", []):
+    items = payload.get("items", [])
+    statuses = [item["status"] for item in items]
+    counts = [
+        ("landed", {"done"}), ("active", {"resolving", "reviewing"}),
+        ("queued", {"queued", "approved"}), ("proposed", {"proposed"}),
+        ("parked", {"blocked_clarity", "rejected"}), ("cancelled", {"cancelled"}),
+    ]
+    lines.append("  " + " · ".join(f"{sum(s in group for s in statuses)} {label}" for label, group in counts))
+    if payload.get("state_reason"):
+        lines.append(f"  {payload['state_reason']}")
+    tasks_by_item: dict[str, list[dict]] = {}
+    for task in sorted(payload.get("tasks", []), key=lambda task: task.get("created_at", 0)):
+        tasks_by_item.setdefault(task.get("work_item_id") or task.get("workstream_id"), []).append(task)
+    for item in items:
         glyph = PLAN_GLYPHS.get(item["status"], "·")
-        line = f"  {glyph} {item['title'][:110]}  ({item['id']})"
+        lines.append(f"  {glyph} [{item['status']}] {item['title'][:110]}  ({item['id']})")
+        if item.get("repair_attempts"):
+            lines.append(f"      repairs: {item['repair_attempts']}")
         if item.get("parked_reason"):
-            line += f"\n      {item['parked_reason'][:140]}"
-        lines.append(line)
+            lines.append(f"      {item['parked_reason'][:240]}")
+        tasks = tasks_by_item.get(item["id"], [])
+        if not tasks:
+            continue
+        task = tasks[-1]
+        agent = task["backend"] + (f"={task['model']}" if task.get("model") else " (default model)")
+        start = task.get("started_at") or task.get("created_at", 0)
+        elapsed = _human_duration(max(0, (task.get("finished_at") or time.time()) - start))
+        clock_label = "waiting" if task["status"] == "pending" else "elapsed"
+        lines.append(f"      {task['kind']} [{task['status']}] {agent} · task {task['id']} · {clock_label} {elapsed}")
+        if task.get("runner_id") or task.get("resume_runner_id"):
+            lines.append(f"      runner: {task.get('runner_id') or task['resume_runner_id']}")
+        latest_result = next((t for t in reversed(tasks) if t.get("result_text")), None)
+        if latest_result:
+            summary = " ".join(latest_result["result_text"].split())
+            lines.append(f"      last result ({latest_result['id']}): {summary[:240]}")
+        validation = next((t["validation"] for t in reversed(tasks) if t.get("validation")), None)
+        if validation:
+            passed = validation["exit_code"] == 0 and bool(validation.get("commit_sha"))
+            verdict = "PASS" if passed else "FAIL"
+            lines.append(f"      last validation: {verdict} (exit {validation['exit_code']}) · {validation['command']}")
+            if validation.get("commit_sha"):
+                lines.append(f"      validated commit: {validation['commit_sha'][:12]}")
+            if validation.get("output"):
+                lines.append(f"      {' '.join(validation['output'].split())[-240:]}")
+    lines += ["", f"Edit queued work: {command_prefix} plan-item-edit <item-id> --notes '…'",
+              f"Append work: {command_prefix} plan-import <project> tasks.md --append --start",
+              f"Full task result: {command_prefix} task <task-id> · Capacity: {command_prefix} show limits"]
     return "\n".join(lines)
 
 
@@ -1413,6 +1499,7 @@ def _import_plan(args, client) -> dict:
 
     text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text()
     document = parse_plan_document(text)
+    preferences = parse_agent_preferences(args.prefer) if args.prefer is not None else None
     projects = client.get("/api/projects").raise_for_status().json()
     matches = [p for p in projects if args.project in (p["id"], p["name"])]
     if len(matches) > 1:
@@ -1434,6 +1521,8 @@ def _import_plan(args, client) -> dict:
             raise SystemExit("This project already exists; change its repo with `hive set` first")
     if args.validate is not None:
         client.patch(f"/api/projects/{pid}", json={"validation_command": args.validate}).raise_for_status()
+    if preferences is not None:
+        client.patch(f"/api/projects/{pid}", json={"agent_preferences": preferences}).raise_for_status()
     if args.append:
         detail = client.get(f"/api/projects/{pid}").raise_for_status().json()
         payload = detail.get("plan")
@@ -1583,6 +1672,8 @@ def run(args: argparse.Namespace, client) -> dict | list:
         return data[args.part] if args.part else data
     elif c == "set":
         body = {}
+        if args.prefer is not None:
+            body["agent_preferences"] = parse_agent_preferences(args.prefer)
         if args.validate is not None:
             body["validation_command"] = args.validate
         for flag, role in (("builder", "build"), ("reviewer", "review")):
@@ -1918,6 +2009,9 @@ def main(argv: list[str] | None = None) -> None:
             timeout=30.0,
         )
         try:
+            if args.command == "plan" and args.watch is not None:
+                watch_plan(args, client)
+                return
             if args.command == "trace":
                 # Raw JSONL, not JSON-wrapped, so it pipes into kodo's viewer / jq.
                 response = client.get(f"/api/tasks/{args.task_id}/trace")
@@ -1940,7 +2034,7 @@ def main(argv: list[str] | None = None) -> None:
             elif args.command == "inbox" and not args.json:
                 print(format_inbox(payload))
             elif args.command in ("plan", "plan-import") and not args.json:
-                print(format_plan(payload))
+                print(format_plan(payload, command_prefix="hive --local" if args.local_target else "hive"))
             elif args.command == "stories" and not args.json:
                 print(format_stories(payload))
             else:
