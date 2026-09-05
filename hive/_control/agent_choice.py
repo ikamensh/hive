@@ -13,11 +13,33 @@ the work. `build_agent` substitutes a live backend in that case; grants and
 from __future__ import annotations
 
 from hive._control.allowances import permitted, resolve_agent
-from hive.models import Project, Resource, Runner
+from hive.agents.backends import opencode_model
+from hive.models import AgentPreference, Project, Resource, Runner, Task, TaskKind
 
 # When a substitution is needed, prefer the strongest coder the fleet offers.
 # Backends outside this list fall back to a deterministic alphabetical pick.
 _BUILD_PRIORITY = ("codex", "claude", "cursor", "gemini-cli")
+
+
+def agent_candidates(project: Project, task: Task) -> list[AgentPreference]:
+    """Explicit role first, then the project's ordered alternatives.
+
+    Without an explicit fallback policy, preserve the task's selected agent.
+    Model IDs stay concrete so session handles and quota scopes cannot drift.
+    """
+    if not project.agent_preferences or task.kind in (TaskKind.probe, TaskKind.preflight):
+        return [AgentPreference(backend=task.backend, model=task.model)]
+    candidates = list(project.agent_preferences)
+    role = {TaskKind.review: "review", TaskKind.resolve: "build"}.get(task.kind, "")
+    if role and (backend := getattr(project, f"{role}_backend")):
+        candidates.insert(0, AgentPreference(backend=backend, model=getattr(project, f"{role}_model")))
+    resolved = []
+    for candidate in candidates:
+        if candidate.backend == "opencode" and not candidate.model:
+            candidate = AgentPreference(backend="opencode", model=opencode_model())
+        if candidate not in resolved:
+            resolved.append(candidate)
+    return resolved
 
 
 def available_backends(store, workspace_id: str) -> set[str]:

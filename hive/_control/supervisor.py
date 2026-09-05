@@ -20,12 +20,13 @@ from typing import Callable
 
 from hive._control import allowances, pause
 from hive.agents.backends import included_model
-from hive._control.agent_choice import available_backends
+from hive._control.agent_choice import agent_candidates, available_backends
 from hive._control.allowances import utc_day_start
 from hive._control.escalation import escalate, resolve_open_todos
 from hive.fleet import DEFAULT_LIVENESS, Liveness
 from hive.models import (
     AgentConversation,
+    AgentPreference,
     ConversationStatus,
     DEFAULT_WORKSPACE_ID,
     HumanTask,
@@ -62,6 +63,15 @@ def effective_capabilities(task: Task, project: Project) -> list[str]:
     """What the machine running this task must offer: the task's own needs
     plus the project-wide environment (e.g. ["android"] for a mobile app)."""
     return sorted(set(task.required_capabilities) | set(project.required_capabilities))
+
+
+def agent_admitted(project: Project, task: Task, agent: AgentPreference, left: list[int | None]) -> bool:
+    return (
+        (not project.included_only or included_model(agent.backend, agent.model))
+        and (allowances.exempt(task) or allowances.admits(
+            project.agent_grants, left, agent.backend, agent.model
+        ))
+    )
 
 
 def has_capacity(
@@ -431,11 +441,7 @@ class Supervisor:
             if p.status in (PlanStatus.draft, PlanStatus.approved)
         ]
         plan = live_plans[-1] if live_plans else None
-        online = {r.id for r in self.store.list(Runner, workspace_id=self.workspace_id) if r.online()}
-        ready_pairs = {
-            (r.runner_id, r.backend) for r in self.store.list(Resource, workspace_id=self.workspace_id)
-            if r.available() and r.runner_id in online
-        }
+        tasks, unavailable_tasks, grant_blocked = self._pending_capacity(project, tasks, all_tasks)
         state = compute_state(
             project,
             workstreams,
@@ -444,10 +450,9 @@ class Supervisor:
             self.available_backends(),
             self.over_budget(project),
             available_capacity,
-            self._grant_blocked(project, all_tasks),
+            grant_blocked,
             plan_status=plan.status if plan else None,
-            unavailable_tasks={t.id for t in tasks if t.resume_runner_id
-                               and (t.resume_runner_id, t.backend) not in ready_pairs},
+            unavailable_tasks=unavailable_tasks,
             plan_items=(
                 self.store.list(PlanItem, workspace_id=self.workspace_id, plan_id=plan.id)
                 if plan
@@ -699,20 +704,39 @@ class Supervisor:
         with self._dispatch_lock:
             return self._dispatch_unlocked(project)
 
-    def _grant_blocked(self, project: Project, all_tasks: list[Task]) -> set[str]:
-        """Pending task ids the project's agent allowance blocks right now."""
-        grants = project.agent_grants
+    def _pending_capacity(
+        self, project: Project, tasks: list[Task], all_tasks: list[Task],
+    ) -> tuple[list[Task], set[str], set[str]]:
+        """Preview dispatch without claiming: status uses the same model scopes and policy."""
         left = allowances.remaining(
-            grants, allowances.sessions_today(all_tasks, utc_day_start())
+            project.agent_grants, allowances.sessions_today(all_tasks, utc_day_start())
         )
-        return {
-            t.id
-            for t in all_tasks
-            if t.status == TaskStatus.pending
-            and not allowances.exempt(t)
-            and (not allowances.admits(grants, left, t.backend, t.model)
-                 or (project.included_only and not included_model(t.backend, t.model)))
+        online = {
+            r.id: r for r in self.store.list(Runner, workspace_id=self.workspace_id) if r.online()
         }
+        resources = self.store.list(Resource, workspace_id=self.workspace_id)
+        preview, unavailable, blocked = [], set(), set()
+        for task in tasks:
+            if task.status != TaskStatus.pending:
+                preview.append(task)
+                continue
+            ready = [agent for agent in agent_candidates(project, task) if any(
+                r.backend == agent.backend and r.runner_id in online
+                and agent.backend in online[r.runner_id].backends
+                and (not task.resume_runner_id or task.resume_runner_id == r.runner_id)
+                and r.available(agent.model) and r.supports(effective_capabilities(task, project))
+                for r in resources
+            )]
+            if not ready:
+                unavailable.add(task.id)
+                preview.append(task)
+                continue
+            permitted = [agent for agent in ready if agent_admitted(project, task, agent, left)]
+            if not permitted:
+                blocked.add(task.id)
+            agent = (permitted or ready)[0]
+            preview.append(task.model_copy(update={"backend": agent.backend, "model": agent.model}))
+        return preview, unavailable, blocked
 
     def _dispatch_unlocked(self, project: Project) -> int:
         if pause.fleet_paused(self.store, self.workspace_id):
@@ -745,7 +769,6 @@ class Supervisor:
         resources = {
             (r.runner_id, r.backend): r
             for r in self.store.list(Resource, workspace_id=self.workspace_id)
-            if r.available()
         }
         reserved_checkouts = {
             (t.resume_runner_id, t.repo): t.id
@@ -756,55 +779,87 @@ class Supervisor:
         for task in tasks:
             if task.status != TaskStatus.pending:
                 continue
-            if project.included_only and not included_model(task.backend, task.model):
-                continue
             if _serializes_repo(task) and task.repo in busy_repos:
                 continue
-            if (
-                grants
-                and not allowances.exempt(task)
-                and not allowances.admits(grants, grant_left, task.backend, task.model)
-            ):
-                continue  # session allowance spent for this pair; waits for UTC midnight
             required = effective_capabilities(task, project)
-            for runner in runners:
-                reserved = reserved_checkouts.get((runner.id, task.repo))
-                if reserved and reserved != task.id:
+            assigned = False
+            skipped: list[str] = []
+            for candidate in agent_candidates(project, task):
+                label = f"{candidate.backend}={candidate.model or 'default'}"
+                if not agent_admitted(project, task, candidate, grant_left):
+                    reason = ("excluded by included-only policy" if project.included_only
+                              and not included_model(candidate.backend, candidate.model)
+                              else "session allowance exhausted or not granted")
+                    skipped.append(f"{label}: {reason}")
                     continue
-                if task.resume_runner_id and runner.id != task.resume_runner_id:
-                    continue
-                if runner.id in busy_runners:
-                    continue
-                resource = resources.get((runner.id, task.backend))
-                if (
-                    task.backend in runner.backends
-                    and resource is not None
-                    and resource.supports(required)
-                ):
-                    if self._claim(task.id, runner):
-                        busy_runners.add(runner.id)
-                        if _serializes_repo(task):
-                            busy_repos.add(task.repo)
-                        if grants and not allowances.exempt(task):
-                            allowances.consume(grants, grant_left, task.backend, task.model)
-                        dispatched += 1
-                        log.info("dispatched task %s to runner %s", task.id, runner.name)
-                    break  # this task is decided (claimed, or taken by someone else)
+                problems: list[str] = []
+                for runner in runners:
+                    reserved = reserved_checkouts.get((runner.id, task.repo))
+                    if reserved and reserved != task.id:
+                        problems.append(f"{runner.name}: checkout reserved by {reserved}")
+                        continue
+                    if task.resume_runner_id and runner.id != task.resume_runner_id:
+                        problems.append(f"{runner.name}: unfinished checkout belongs to {task.resume_runner_id}")
+                        continue
+                    if runner.id in busy_runners:
+                        problems.append(f"{runner.name}: busy")
+                        continue
+                    resource = resources.get((runner.id, candidate.backend))
+                    if candidate.backend not in runner.backends or resource is None:
+                        problems.append(f"{runner.name}: backend unavailable")
+                    elif not resource.enabled:
+                        problems.append(f"{runner.name}: disabled")
+                    elif resource.usability_status != "usable":
+                        problems.append(f"{runner.name}: {resource.usability_status}")
+                    elif not resource.available(candidate.model):
+                        problems.append(f"{runner.name}: quota exhausted")
+                    elif not resource.supports(required):
+                        missing = sorted(set(required) - set(resource.capabilities))
+                        problems.append(f"{runner.name}: missing {', '.join(missing)}")
+                    else:
+                        reason = "; ".join([f"selected {label}", *skipped])
+                        if self._claim(task.id, runner, candidate, reason):
+                            busy_runners.add(runner.id)
+                            if _serializes_repo(task):
+                                busy_repos.add(task.repo)
+                            if grants and not allowances.exempt(task):
+                                allowances.consume(grants, grant_left, candidate.backend, candidate.model)
+                            dispatched += 1
+                            log.info("dispatched task %s to runner %s (%s=%s)",
+                                     task.id, runner.name, candidate.backend, candidate.model)
+                        assigned = True
+                        break
+                if assigned:
+                    break
+                skipped.append(f"{label}: {', '.join(problems) if problems else 'no online runner'}")
         return dispatched
 
-    def _claim(self, task_id: str, runner: Runner) -> bool:
+    def _claim(
+        self, task_id: str, runner: Runner, agent: AgentPreference | None = None,
+        dispatch_reason: str = "",
+    ) -> bool:
         """Atomically move a still-pending task to running on this runner. Loses
         the race gracefully if it was cancelled or claimed concurrently."""
         claimed: list[bool] = []
 
         def claim(task: Task) -> None:
             if task.status == TaskStatus.pending:
+                task.dispatch_reason = dispatch_reason
+                if agent and (task.backend, task.model) != (agent.backend, agent.model):
+                    task.session_handle = ""  # sessions belong to one provider/model
+                    task.backend, task.model = agent.backend, agent.model
                 task.status = TaskStatus.running
                 task.runner_id = runner.id
                 task.started_at = time.time()
                 claimed.append(True)
 
-        self.store.update(Task, task_id, claim)
+        updated = self.store.update(Task, task_id, claim)
+        if claimed and updated and updated.conversation_id:
+            def follow_agent(conversation: AgentConversation) -> None:
+                if (conversation.backend, conversation.model) != (updated.backend, updated.model):
+                    conversation.backend, conversation.model = updated.backend, updated.model
+                    conversation.session_handle = ""
+            self.store.update(AgentConversation, updated.conversation_id, follow_agent)
         return bool(claimed)
 
     def fail_orphaned_tasks(self) -> None:

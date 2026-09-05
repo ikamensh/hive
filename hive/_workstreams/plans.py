@@ -451,6 +451,8 @@ def _make_plan_task(
     selected = getattr(project, f"{role}_backend")
     if selected:
         backend, model = selected, getattr(project, f"{role}_model")
+    elif project.agent_preferences:
+        backend, model = project.agent_preferences[0].backend, project.agent_preferences[0].model
     else:
         backend, model = build_agent(store, project, backend, model)
     if backend == "opencode" and not model:

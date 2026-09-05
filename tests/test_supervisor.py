@@ -43,13 +43,13 @@ class SlowClaimSupervisor(Supervisor):
         self._active_claims = 0
         self.max_active_claims = 0
 
-    def _claim(self, task_id, runner):
+    def _claim(self, task_id, runner, agent=None, dispatch_reason=""):
         with self._claim_test_lock:
             self._active_claims += 1
             self.max_active_claims = max(self.max_active_claims, self._active_claims)
         try:
             time.sleep(0.05)
-            return super()._claim(task_id, runner)
+            return super()._claim(task_id, runner, agent, dispatch_reason)
         finally:
             with self._claim_test_lock:
                 self._active_claims -= 1

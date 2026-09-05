@@ -22,14 +22,15 @@ the chief-side consumer:
 from __future__ import annotations
 
 import time
+import re
 from statistics import median
 
 from pydantic import ValidationError
 
-from hive.models import LimitEvent, Resource, Task, UsageWindow
+from hive.models import LimitEvent, Resource, Task, UsageWindow, model_in_scope
+from hive.models import USAGE_EXHAUSTED_PERCENT as EXHAUSTED_PERCENT
 
 # A window the provider reports ≥ this used-percent is treated as spent.
-EXHAUSTED_PERCENT = 98.0
 # Fallback cooldown when nothing tells us when the limit resets.
 RATE_LIMIT_COOLDOWN_S = 3600.0
 # A reset further out than a weekly window is a parse error, not a real reset.
@@ -87,6 +88,7 @@ def _material_change(old: list[UsageWindow], new: list[UsageWindow]) -> bool:
         prev = old_by_kind.get(window.kind)
         if (
             prev is None
+            or prev.model_scope != window.model_scope
             or abs(prev.used_percent - window.used_percent) >= MATERIAL_PERCENT_DELTA
             or abs(prev.resets_at - window.resets_at) > 60
         ):
@@ -100,7 +102,9 @@ def _blocking(windows: list[UsageWindow], now: float) -> list[UsageWindow]:
 
 def _sync_cooldown(resource: Resource, windows: list[UsageWindow], *, now: float | None) -> None:
     now = time.time() if now is None else now
-    blocking = _blocking(windows, now)
+    # Model-specific windows are evaluated for the requested model at dispatch.
+    # Exhausting Fable cannot consume the remaining Opus capacity.
+    blocking = _blocking([w for w in windows if not w.model_scope], now)
     if blocking:
         # Usable again only when every spent window has rolled over.
         worst = max(blocking, key=lambda w: w.resets_at)
@@ -122,6 +126,7 @@ def cooldown_after_exhaustion(
     reset_at_hint: float,
     snapshot: dict,
     now: float | None = None,
+    model: str = "",
 ) -> float:
     """When a task hit a rate limit: the moment it makes sense to retry.
 
@@ -133,12 +138,33 @@ def cooldown_after_exhaustion(
     if now < reset_at_hint <= now + RESET_HINT_MAX_S:
         return reset_at_hint
     parsed = parse_snapshot(snapshot)
-    windows = parsed[3] if parsed else resource.usage_windows
+    windows = [w for w in (parsed[3] if parsed else resource.usage_windows) if w.applies_to(model)]
     if blocking := _blocking(windows, now):
         return max(w.resets_at for w in blocking)
     if upcoming := [w.resets_at for w in windows if w.resets_at > now]:
         return min(upcoming)
     return now + RATE_LIMIT_COOLDOWN_S
+
+
+def exhaustion_scope(resource: Resource, model: str, text: str, *, now: float | None = None) -> str:
+    """Name only a model cap the provider identifies; ambiguous failures remain shared."""
+    if re.search(r"\b(?:\d[ -]hour|session|all[- ]models?)\s+(?:usage\s+)?limit", text, re.I):
+        return ""  # the failure's explicit shared window beats a lagging scoped gauge
+    moment = time.time() if now is None else now
+    blocking = _blocking([w for w in resource.usage_windows if w.applies_to(model)], moment)
+    if any(not w.model_scope for w in blocking):
+        return ""
+    if blocking:
+        # The longest binding window sets the retry time and its scope.
+        return max(blocking, key=lambda w: w.resets_at).model_scope
+    if resource.backend == "claude":
+        match = re.search(
+            r"\b(fable|opus|sonnet|haiku)(?:[ -]\d+(?:[.-]\d+)*)?\s+"
+            r"(?:weekly\s+|usage\s+|model\s+)?limit", text, re.I,
+        )
+        if match and model_in_scope(model, match.group(1)):
+            return match.group(1).lower()
+    return ""
 
 
 def record_snapshot(store, resource: Resource, raw: dict, *, task_id: str = "") -> None:
@@ -163,7 +189,8 @@ def record_snapshot(store, resource: Resource, raw: dict, *, task_id: str = "") 
 
 
 def record_exhaustion(
-    store, resource: Resource, *, at: float, text: str, reset_at_hint: float, task_id: str
+    store, resource: Resource, *, at: float, text: str, reset_at_hint: float, task_id: str,
+    model: str = "", model_scope: str = "",
 ) -> None:
     store.put(
         LimitEvent(
@@ -171,6 +198,8 @@ def record_exhaustion(
             machine_id=resource.machine_id,
             runner_id=resource.runner_id,
             backend=resource.backend,
+            model=model,
+            model_scope=model_scope,
             kind="exhausted",
             at=at,
             source="error_text",
@@ -195,9 +224,10 @@ def _finished_tasks(store, resource: Resource) -> list[Task]:
     return [t for t in tasks if t.finished_at > 0]
 
 
-def _tokens_between(tasks: list[Task], start: float, end: float) -> int:
+def _tokens_between(tasks: list[Task], start: float, end: float, model_scope: str = "") -> int:
     return sum(
         t.input_tokens + t.output_tokens for t in tasks if start < t.finished_at <= end
+        and (not model_scope or (t.model and model_in_scope(t.model, model_scope)))
     )
 
 
@@ -213,11 +243,11 @@ def estimate_window_budgets(events: list[LimitEvent], tasks: list[Task]) -> dict
     snapshots = sorted((e for e in events if e.kind == "snapshot"), key=lambda e: e.at)
     samples: dict[str, list[float]] = {}
     for previous, current in zip(snapshots, snapshots[1:]):
-        tokens = _tokens_between(tasks, previous.at, current.at)
-        if tokens <= 0:
-            continue
         prev_by_kind = {w.kind: w for w in previous.windows}
         for window in current.windows:
+            tokens = _tokens_between(tasks, previous.at, current.at, window.model_scope)
+            if tokens <= 0:
+                continue
             prev = prev_by_kind.get(window.kind)
             if prev is None or abs(prev.resets_at - window.resets_at) > 120:
                 continue  # the window rolled over between the two snapshots
@@ -244,7 +274,7 @@ def resource_limits(store, resource: Resource, *, now: float | None = None) -> d
         window_start = (
             window.resets_at - window.window_minutes * 60 if window.window_minutes else 0.0
         )
-        hive_tokens = _tokens_between(tasks, window_start, now) if window_start else 0
+        hive_tokens = _tokens_between(tasks, window_start, now, window.model_scope) if window_start else 0
         row = {
             **window.model_dump(),
             "hive_tokens_in_window": hive_tokens,
@@ -269,11 +299,14 @@ def resource_limits(store, resource: Resource, *, now: float | None = None) -> d
         else 0.0,
         "windows": windows,
         "cooldown_until": resource.cooldown_until if resource.cooldown_until > now else 0.0,
+        "model_cooldowns": {scope: until for scope, until in resource.model_cooldowns.items() if until > now},
         "exhaustions_seen": len(exhaustions),
         "last_exhaustion": {
             "at": last.at,
             "text": last.text.splitlines()[0][:200] if last.text else "",
             "reset_at_hint": last.reset_at_hint,
+            "model": last.model,
+            "model_scope": last.model_scope,
         }
         if last
         else None,

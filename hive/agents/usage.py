@@ -204,13 +204,15 @@ def _claude_windows(payload: dict) -> list[dict]:
     kind_minutes = {"session": 300, "weekly": 10080}
     windows = []
     for entry in payload.get("limits") or []:
+        scoped_model = (entry.get("scope") or {}).get("model") or {}
+        scope = scoped_model.get("id") or scoped_model.get("display_name") or ""
         kind = {"session": "session", "weekly_all": "weekly"}.get(entry.get("kind", ""))
         if kind is None:  # scoped: name the scope so windows stay distinguishable
-            scope = ((entry.get("scope") or {}).get("model") or {}).get("display_name", "")
             kind = f"weekly_{scope.lower()}" if scope else entry.get("kind", "other")
         windows.append(
             {
                 "kind": kind,
+                "model_scope": scope.lower().replace(" ", "-"),
                 "used_percent": float(entry.get("percent") or 0.0),
                 "window_minutes": kind_minutes.get(entry.get("group", ""), 0)
                 or kind_minutes.get(kind, 0),
@@ -219,15 +221,20 @@ def _claude_windows(payload: dict) -> list[dict]:
             }
         )
     if not windows:
-        for key, kind in (("five_hour", "session"), ("seven_day", "weekly")):
+        for key, kind, scope in (
+            ("five_hour", "session", ""), ("seven_day", "weekly", ""),
+            *((f"seven_day_{family}", f"weekly_{family}", family)
+              for family in ("fable", "opus", "sonnet", "haiku")),
+        ):
             block = payload.get(key) or {}
             if not block:
                 continue
             windows.append(
                 {
                     "kind": kind,
+                    "model_scope": scope,
                     "used_percent": float(block.get("utilization") or 0.0),
-                    "window_minutes": kind_minutes[kind],
+                    "window_minutes": kind_minutes["weekly" if scope else kind],
                     "resets_at": _iso_epoch(block.get("resets_at")),
                     "severity": "",
                 }

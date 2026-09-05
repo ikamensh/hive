@@ -32,7 +32,8 @@ SUBSCRIPTION_WARNING_PATTERNS = re.compile(
 # A spent rate-limit/quota window: the credential works, the backend is just
 # throttled for a while. Hive cools the resource down and retries later.
 EXHAUSTION_PATTERNS = re.compile(
-    r"rate.?limit|quota|usage.?limit|plan.?limit|too many requests|429\b|credits?",
+    r"rate.?limit|quota|usage.?limit|plan.?limit|too many requests|429\b|credits?|"
+    r"(?:weekly|session|\d[ -]hour)\s+limit",
     re.IGNORECASE,
 )
 # A login/policy/billing block: the credential is rejected or the account cannot

@@ -427,3 +427,54 @@ def test_snapshots_and_exhaustion_flow_through_the_api(tmp_path):
     assert row["cooldown_until"] == hint
     assert row["exhaustions_seen"] == 1
     assert row["windows"][0]["used_percent"] == 100.0
+
+
+def test_scoped_claude_window_preserves_other_models_capacity():
+    """A provider Fable-only cap blocks Fable while Opus can use shared headroom."""
+    from hive.models import ResourceUsability
+
+    moment = time.time()
+    resource = Resource(runner_id="r", backend="claude", usability_status=ResourceUsability.usable)
+    payload = {**CLAUDE_OAUTH_USAGE, "limits": [
+        {**entry, "percent": 100 if entry["kind"] == "weekly_scoped" else 20,
+         "resets_at": "2099-01-01T00:00:00Z"}
+        for entry in CLAUDE_OAUTH_USAGE["limits"]
+    ]}
+    windows = _claude_windows(payload)
+    apply_snapshot(resource, {"captured_at": moment, "windows": windows})
+    assert not resource.available("claude-fable-5-1")
+    assert resource.available("claude-opus-5")
+    assert resource.cooldown_until == 0
+    assert next(w for w in resource.usage_windows if w.kind == "weekly_fable").model_scope == "fable"
+
+
+def test_scoped_errors_and_token_reporting_do_not_invent_shared_capacity():
+    """Scope requires provider evidence, and per-model token estimates use only matching attempts."""
+    from hive._control.limits import exhaustion_scope, resource_limits
+    from hive.models import ResourceUsability
+    from hive.persistence.store import MemoryStore
+
+    moment = time.time()
+    store = MemoryStore()
+    resource = store.put(Resource(runner_id="r", backend="claude", usability_status=ResourceUsability.usable,
+                                  usage_windows=[UsageWindow(kind="weekly_fable", model_scope="fable",
+                                                             used_percent=100, resets_at=moment+3600,
+                                                             window_minutes=10080)]))
+    assert exhaustion_scope(resource, "claude-fable-5-1", "5-hour limit reached") == ""
+    assert exhaustion_scope(resource, "claude-fable-5-1", "rate limit") == "fable"
+    resource.usage_windows.clear()
+    assert exhaustion_scope(resource, "claude-fable-5-1", "rate limit") == ""
+    assert exhaustion_scope(resource, "claude-fable-5-1", "Fable weekly limit reached") == "fable"
+    resource = store.get(Resource, resource.id)
+    for model, tokens in (("claude-fable-5-1", 1000), ("claude-opus-5", 9000)):
+        store.put(Task(project_id="p", workstream_id="w", repo="r", instructions="x", runner_id="r",
+                       backend="claude", model=model, input_tokens=tokens, finished_at=moment-10))
+    assert resource_limits(store, resource)["windows"][0]["hive_tokens_in_window"] == 1000
+
+
+def test_legacy_claude_usage_keeps_model_scopes():
+    """Older provider payloads also expose independent model windows alongside shared caps."""
+    windows = _claude_windows({"five_hour": {"utilization": 12, "resets_at": "2099-01-01T00:00:00Z"},
+                              "seven_day_fable": {"utilization": 100, "resets_at": "2099-01-01T00:00:00Z"},
+                              "seven_day_opus": {"utilization": 30, "resets_at": "2099-01-01T00:00:00Z"}})
+    assert {w["model_scope"]: w["used_percent"] for w in windows} == {"": 12, "fable": 100, "opus": 30}

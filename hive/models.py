@@ -134,6 +134,13 @@ class ProjectState(StrEnum):
     idle = "idle"
 
 
+class AgentPreference(BaseModel):
+    """One agent/model in the project's ordered capacity preference."""
+
+    backend: str
+    model: str = ""
+
+
 class Project(BaseModel):
     id: str = Field(default_factory=new_id)
     workspace_id: str = DEFAULT_WORKSPACE_ID
@@ -159,6 +166,7 @@ class Project(BaseModel):
     # usage (subscription CLIs report ~zero cost), so sessions/day is the cap
     # that actually meters it. Empty = anything allowed.
     agent_grants: list[AgentGrant] = []
+    agent_preferences: list[AgentPreference] = []  # first available pair wins; empty preserves role pins
     build_backend: str = ""  # explicit plan role; empty uses automatic selection
     build_model: str = ""
     review_backend: str = ""  # empty uses a fresh session on the builder's backend
@@ -524,6 +532,7 @@ class Task(BaseModel):
     required_capabilities: list[str] = []  # testing: runner capabilities such as browser/docker
     backend: str = "cursor"  # kodo backend name: claude | cursor | codex | gemini-cli
     model: str = ""  # backend default when empty
+    dispatch_reason: str = ""  # selected pair and concrete reasons earlier preferences could not run
     status: TaskStatus = TaskStatus.pending
     runner_id: str = ""
     delivered: bool = False  # runner has picked the assignment up via poll
@@ -585,6 +594,9 @@ class ResourceUsability(StrEnum):
     failed = "failed"
 
 
+USAGE_EXHAUSTED_PERCENT = 98.0
+
+
 class UsageWindow(BaseModel):
     """One rate-limit window of a subscription as the provider reports it.
 
@@ -594,10 +606,23 @@ class UsageWindow(BaseModel):
     outside Hive (the human coding by hand on the same login)."""
 
     kind: str  # "session" | "weekly" | "weekly_<model>" (provider-scoped)
+    model_scope: str = ""  # empty = shared; provider family/id, e.g. fable or opus-5
     used_percent: float = 0.0
     window_minutes: int = 0  # 0 = provider did not say
     resets_at: float = 0.0  # epoch seconds; 0 = unknown
     severity: str = ""  # provider's own alarm level, when reported
+
+    def applies_to(self, model: str) -> bool:
+        return not self.model_scope or model_in_scope(model, self.model_scope)
+
+
+def model_in_scope(model: str, scope: str) -> bool:
+    """Match provider family labels to explicit model IDs; unknown defaults are conservative."""
+    if not model:
+        return True
+    model = model.lower().replace(" ", "-").removeprefix("claude-")
+    scope = scope.lower().replace(" ", "-").removeprefix("claude-")
+    return model == scope or model.startswith(scope + "-")
 
 
 class LimitEvent(BaseModel):
@@ -610,6 +635,8 @@ class LimitEvent(BaseModel):
     machine_id: str = ""
     runner_id: str = ""
     backend: str = ""
+    model: str = ""  # attempted model on exhaustion events
+    model_scope: str = ""  # empty = shared cooldown; named scope requires provider evidence
     kind: str = "snapshot"  # "snapshot" | "exhausted"
     at: float = Field(default_factory=now)  # when the observation was true
     plan: str = ""
@@ -643,6 +670,7 @@ class Resource(BaseModel):
     # re-detects on every heartbeat, so this reflects the machine now.
     capabilities: list[str] = []
     cooldown_until: float = 0.0  # epoch; >now means exhausted
+    model_cooldowns: dict[str, float] = {}  # error-based scoped cooldowns; snapshots remain in usage_windows
     last_exhaustion_at: float = 0.0
     last_exhaustion_text: str = ""  # runner-reported quota/rate-limit message
     last_exhaustion_task_id: str = ""
@@ -657,11 +685,20 @@ class Resource(BaseModel):
     enabled: bool = True
     disabled_reason: str = ""
 
-    def available(self) -> bool:
-        return (
-            self.enabled
-            and self.usability_status == ResourceUsability.usable
-            and now() >= self.cooldown_until
+    def available(self, model: str | None = None) -> bool:
+        """Check a specific model; None asks only whether shared capacity is usable."""
+        moment = now()
+        if not self.enabled or self.usability_status != ResourceUsability.usable or moment < self.cooldown_until:
+            return False
+        if model is None:
+            return True
+        return not any(
+            until > moment and model_in_scope(model, scope)
+            for scope, until in self.model_cooldowns.items()
+        ) and not any(
+            window.used_percent >= USAGE_EXHAUSTED_PERCENT and window.resets_at > moment
+            and window.applies_to(model)
+            for window in self.usage_windows
         )
 
     def supports(self, capabilities: list[str]) -> bool:

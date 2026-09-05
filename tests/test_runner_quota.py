@@ -136,3 +136,9 @@ def test_transient_never_outranks_auth_or_exhaustion():
 
 def test_transient_requires_an_error():
     assert classify_failure(GEMINI_INVALID_STREAM, is_error=False) == ""
+
+
+def test_model_and_session_limit_messages_classify_as_exhaustion():
+    """The provider can name a window without using the words quota or rate limit."""
+    for text in ("Fable weekly limit reached", "Opus weekly limit reached", "5-hour limit reached"):
+        assert classify_failure(text, is_error=True) == "exhausted"

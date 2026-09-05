@@ -32,6 +32,7 @@ from hive._control.escalation import (
 from hive._control.limits import (
     apply_snapshot,
     cooldown_after_exhaustion,
+    exhaustion_scope,
     record_exhaustion,
     record_snapshot,
 )
@@ -554,16 +555,16 @@ class TaskResultProcessor:
                 resource.last_probe_at = task.finished_at
                 resource.last_probe_text = body.text[:2000]
             if body.resource_exhausted:
-                resource.mark_exhausted(
-                    until=cooldown_after_exhaustion(
-                        resource,
-                        reset_at_hint=body.reset_at_hint,
-                        snapshot=body.usage_snapshot,
-                    ),
-                    at=task.finished_at,
-                    text=body.text,
-                    task_id=task.id,
+                until = cooldown_after_exhaustion(
+                    resource, reset_at_hint=body.reset_at_hint,
+                    snapshot=body.usage_snapshot, model=task.model,
                 )
+                scope = exhaustion_scope(resource, task.model, body.text)
+                if scope:
+                    resource.model_cooldowns[scope] = until
+                else:
+                    resource.mark_exhausted(until=until, at=task.finished_at,
+                                            text=body.text, task_id=task.id)
 
         for resource in self.store.list(
             Resource,
@@ -586,6 +587,8 @@ class TaskResultProcessor:
                     text=body.text,
                     reset_at_hint=body.reset_at_hint,
                     task_id=task.id,
+                    model=task.model,
+                    model_scope=exhaustion_scope(updated, task.model, body.text),
                 )
             if task.kind == TaskKind.probe and updated.last_probe_task_id == task.id:
                 probe_resources.append(updated)
@@ -667,6 +670,9 @@ class TaskResultProcessor:
     def _handle_intake_result(self, task: Task, body: TaskResult) -> None:
         def update_conversation(conversation: AgentConversation) -> None:
             conversation.updated_at = task.finished_at
+            if (conversation.backend, conversation.model) != (task.backend, task.model):
+                conversation.backend, conversation.model = task.backend, task.model
+                conversation.session_handle = ""
             if body.session_handle.strip():
                 conversation.session_handle = body.session_handle.strip()
             if body.cancelled:
