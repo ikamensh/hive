@@ -969,6 +969,18 @@ def format_plan(payload: dict, *, command_prefix: str = "hive") -> str:
         if latest_result:
             summary = " ".join(latest_result["result_text"].split())
             lines.append(f"      last result ({latest_result['id']}): {summary[:240]}")
+        review = max(
+            (t for t in tasks if t["kind"] == "review" and t["status"] in {"done", "failed", "cancelled"}),
+            key=lambda t: t.get("finished_at") or t.get("created_at", 0), default=None,
+        )
+        if review:
+            if review["status"] == "failed" and review.get("incomplete_reason"):
+                decision = "INCOMPLETE"
+            elif review["status"] != "done":
+                decision = review["status"].upper()
+            else:
+                decision = review.get("verdict", "none").upper()
+            lines.append(f"      last review: {decision} [{review['status']}] · task {review['id']}")
         validation = next((t["validation"] for t in reversed(tasks) if t.get("validation")), None)
         if validation:
             passed = validation["exit_code"] == 0 and bool(validation.get("commit_sha"))

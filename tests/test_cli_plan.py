@@ -1,5 +1,7 @@
 """Plan CLI interaction and progress against the real chief/runner protocol."""
 
+import pytest
+
 from test_api_e2e import _pump, _register_usable_runner
 from test_cli import RUNNER_HEADERS, cli
 from test_plans import FakeSpecRepo, app as app
@@ -7,7 +9,8 @@ from test_plans import FakeSpecRepo, app as app
 from hive.cli import format_plan
 
 
-def test_live_plan_view_and_amendments(app, tmp_path, monkeypatch):
+@pytest.mark.parametrize("repaired_report", [False, True], ids=["legacy-review", "repaired-structured-review"])
+def test_live_plan_view_and_amendments(app, tmp_path, monkeypatch, repaired_report):
     """Queued edits and approved appends reach subsequent agents; progress shows
     the actual task, repair feedback, validation, and landed work throughout."""
     client, store = app
@@ -31,8 +34,8 @@ def test_live_plan_view_and_amendments(app, tmp_path, monkeypatch):
         _pump(client, store)
         return client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).raise_for_status().json()["task"]
 
-    def finish(task, text, validation=None):
-        body = {"text": text}
+    def finish(task, text, validation=None, **result_fields):
+        body = {"text": text, "session_handle": f"session-{task['id']}", **result_fields}
         if validation is not None:
             body["validation"] = validation
         client.post(f"/api/tasks/{task['id']}/result", json=body,
@@ -53,23 +56,76 @@ def test_live_plan_view_and_amendments(app, tmp_path, monkeypatch):
 
     finish(build, "Core implemented.\nOUTCOME: FIXED")
     review = next_task()
-    finish(review, "Incorrect bottleneck calculation.\nREVIEW: REJECT", {
-        "command": "make check", "exit_code": 1, "output": "bottleneck assertion failed",
+    assert review["kind"] == "review" and not review["session_handle"]
+    finish(review, "Incorrect bottleneck calculation. " + "Independent probe details. " * 20 + "\nREVIEW: REJECT", {
+        "command": "make check", "exit_code": 0, "output": "available checks passed", "commit_sha": "b" * 40,
     })
     repair = next_task()
     rendered = format_plan(cli(client, "plan", "simulator"))
     assert "repairs: 1" in rendered
     assert "Incorrect bottleneck calculation" in rendered
-    assert "validation: FAIL" in rendered and "bottleneck assertion failed" in rendered
+    assert f"last review: REJECT [done] · task {review['id']}" in rendered
+    assert "last validation: PASS" in rendered and "bbbbbbbbbbbb" in rendered
     finish(repair, "Corrected bottleneck calculation.\nOUTCOME: FIXED")
-    finish(next_task(), "Reviewed the correction.\nREVIEW: ACCEPT", {
+    accepted_review = next_task()
+    # Report repair can retain an earlier transport warning; the completed,
+    # validated structured report remains authoritative.
+    report = {
+        "incomplete_reason": "Earlier transport ended without terminal completion",
+        "structured_result": {"task_id": accepted_review["id"], "outcome": "accept", "summary": "Reviewed correction"},
+    } if repaired_report else {}
+    finish(accepted_review, "Reviewed the correction.\nREVIEW: ACCEPT", {
         "command": "make check", "exit_code": 0, "output": "all checks passed", "commit_sha": "a" * 40,
-    })
+    }, **report)
     charts = next_task()
     assert "Show production throughput and bottlenecks." in charts["instructions"]
     rendered = format_plan(cli(client, "plan", "simulator"))
     assert "1 landed" in rendered and "1 queued" in rendered
     assert "validation: PASS" in rendered and "aaaaaaaaaaaa" in rendered
+    assert "last review: ACCEPT [done]" in rendered
+    assert "last review: REJECT" not in rendered
+
+
+@pytest.mark.parametrize(("failure", "label"), [
+    pytest.param({"is_error": True}, "FAILED", id="failed"),
+    pytest.param({"incomplete_reason": "Provider ended without terminal completion"}, "INCOMPLETE", id="incomplete"),
+])
+def test_plan_review_failure_does_not_show_partial_acceptance(app, tmp_path, monkeypatch, failure, label):
+    """A passing gate and partial ACCEPT text cannot turn an unsuccessful review
+    into approval, including while its fresh successor is already running."""
+    client, store = app
+    monkeypatch.setattr("hive.api.SpecRepo", FakeSpecRepo)
+    source = tmp_path / "tasks.md"
+    source.write_text("# Goal\n\n## Core\nBuild the core.\n")
+    cli(client, "plan-import", "demo", str(source), "--repo", "https://github.com/o/r.git")
+    cli(client, "set", "demo", "--builder", "opencode=opencode/test-free",
+        "--reviewer", "opencode=opencode/test-free", "--validate", "make check")
+    cli(client, "plan-approve", "demo")
+    rid = _register_usable_runner(client, backend="opencode")
+
+    def next_task():
+        _pump(client, store)
+        return client.post(f"/api/runners/{rid}/poll", headers=RUNNER_HEADERS).raise_for_status().json()["task"]
+
+    build = next_task()
+    client.post(f"/api/tasks/{build['id']}/result", headers=RUNNER_HEADERS, json={
+        "text": "Core implemented.\nOUTCOME: FIXED", "session_handle": "builder-session",
+    }).raise_for_status()
+    review = next_task()
+    assert review["kind"] == "review" and not review["session_handle"]
+    client.post(f"/api/tasks/{review['id']}/result", headers=RUNNER_HEADERS, json={
+        "text": "Partial review output.\nREVIEW: ACCEPT", **failure,
+        "validation": {"command": "make check", "exit_code": 0, "commit_sha": "c" * 40},
+    }).raise_for_status()
+    if "incomplete_reason" in failure:
+        successor = next_task()
+        assert successor["id"] != review["id"] and successor["kind"] == "review"
+    payload = cli(client, "plan", "demo")
+    rendered = format_plan(payload)
+    assert f"last review: {label} [failed] · task {review['id']}" in rendered
+    assert "last review: ACCEPT" not in rendered
+    assert "last validation: PASS" in rendered
+    assert payload["items"][0]["status"] != "done"
 
 
 def test_plan_watch_emits_json_updates_and_stops_on_abandon(app, tmp_path, monkeypatch, capsys):
@@ -128,7 +184,6 @@ def test_agent_preferences_round_trip_through_import_and_set(app, tmp_path):
     cli(client, "set", "demo", "--prefer", "clear")
     assert cli(client, "project", "demo")["project"]["agent_preferences"] == []
 
-    import pytest
     with pytest.raises(SystemExit, match="unknown preferred backend"):
         cli(client, "plan-import", "bad-choice", str(source), "--repo", "https://github.com/o/r.git",
             "--prefer", "typo")
