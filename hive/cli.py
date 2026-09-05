@@ -132,6 +132,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("run", help="launch the local chief (auto-detects tokens)")
+    p.add_argument("--local", action="store_true", help="local state and an automatic local runner; no GCP")
+    p.add_argument("--data-dir", help="directory for durable local state and runner checkouts")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--reload", action="store_true", help="auto-reload on code changes")
@@ -1019,14 +1021,20 @@ def prepare_run_env(env: dict[str, str], stored: dict[str, str]) -> list[str]:
     else:
         notes.append("orchestrator: NO API key — `hive config set OPENAI_API_KEY …` or export it")
 
-    if env.get("HIVE_GCP_PROJECT"):
+    local = env.get("HIVE_STORAGE_MODE") == "local"
+    if local:
+        data_dir = Path(env.get("HIVE_DATA_DIR", "~/.local/share/hive")).expanduser().resolve()
+        notes.append(f"store: local ({data_dir / 'store'})")
+    elif env.get("HIVE_GCP_PROJECT"):
         notes.append(
             f"store: Firestore ({env['HIVE_GCP_PROJECT']}, from {src('HIVE_GCP_PROJECT')})"
         )
     else:
         notes.append("store: MISSING HIVE_GCP_PROJECT (Firestore is required)")
 
-    if env.get("HIVE_GCS_BUCKET"):
+    if local:
+        notes.append(f"blobs: local ({data_dir / 'blobs'})")
+    elif env.get("HIVE_GCS_BUCKET"):
         notes.append(f"blobs: GCS ({env['HIVE_GCS_BUCKET']}, from {src('HIVE_GCS_BUCKET')})")
     else:
         notes.append("blobs: MISSING HIVE_GCS_BUCKET (GCS is required)")
@@ -1047,7 +1055,7 @@ def prepare_run_env(env: dict[str, str], stored: dict[str, str]) -> list[str]:
 
     runner_mode = (
         "enabled"
-        if env.get("HIVE_AUTOSTART_RUNNER", "").lower() in {"1", "true", "yes", "on"}
+        if env.get("HIVE_AUTOSTART_RUNNER", "true" if local else "false").lower() in {"1", "true", "yes", "on"}
         else "disabled"
     )
     notes.append(f"local runner autostart: {runner_mode}")
@@ -1193,9 +1201,21 @@ def _run_chief(args: argparse.Namespace) -> None:
     from hive.runner._local import local_chief_url
 
     os.environ.setdefault("HIVE_PUBLIC_URL", local_chief_url(args.host, args.port))
-    for line in prepare_run_env(os.environ, load_stored_config()):
+    stored = load_stored_config()
+    if args.local:
+        stored.update({
+            "HIVE_STORAGE_MODE": "local",
+            "HIVE_DATA_DIR": args.data_dir or os.environ.get("HIVE_DATA_DIR", "~/.local/share/hive"),
+            "HIVE_PUBLIC_URL": local_chief_url(args.host, args.port),
+            "HIVE_ADVERTISED_URLS": local_chief_url(args.host, args.port),
+            "HIVE_AUTOSTART_RUNNER": "true",
+            "HIVE_AUTH_MODE": "dev",
+        })
+    elif args.data_dir:
+        stored["HIVE_DATA_DIR"] = args.data_dir
+    for line in prepare_run_env(os.environ, stored):
         print(f"  {line}")
-    if missing := _managed_state_missing(os.environ):
+    if os.environ.get("HIVE_STORAGE_MODE") != "local" and (missing := _managed_state_missing(os.environ)):
         print(
             "\nHive requires managed state.\n"
             f"Missing: {', '.join(missing)}\n\n"

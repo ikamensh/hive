@@ -49,6 +49,8 @@ def managed_state_error(config: Config) -> ManagedStateConfigError:
 
 
 def make_store(config: Config) -> StoreBase:
+    if config.storage_mode == "local":
+        return FileStore(config.data_dir / "store")
     if not config.gcp_project.strip():
         raise managed_state_error(config)
     # The chief is the single writer (leader lease), so it reads from memory
@@ -57,6 +59,8 @@ def make_store(config: Config) -> StoreBase:
 
 
 def make_blob_store(config: Config):
+    if config.storage_mode == "local":
+        return LocalBlobStore(config.data_dir / "blobs")
     if not config.gcs_bucket.strip():
         raise managed_state_error(config)
     return GcsBlobStore(config.gcs_bucket.strip())

@@ -23,6 +23,7 @@ everything defaults to the ``"default"`` scope.
 from __future__ import annotations
 
 import json
+import fcntl
 import logging
 import os
 import re
@@ -31,6 +32,7 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, TypeVar
 
@@ -358,31 +360,31 @@ class FileStore(MemoryStore):
                 self._org_contexts[workspace_id] = text
             self._persist_org_context(workspace_id, text)
 
+    @contextmanager
+    def _lease_lock(self, workspace_id: str):
+        """Serialize lease reads and writes across chief processes."""
+        path = self._settings_path("leader.lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock, path.open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                name = "leader_lease.json" if workspace_id == DEFAULT_SCOPE else f"leader_lease_{workspace_id}.json"
+                lease_path = self._settings_path(name)
+                yield _read_json_file(lease_path, strict=True) if lease_path.exists() else None
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
     def claim_leader(self, holder: str, ttl_s: float, workspace_id: str = DEFAULT_SCOPE) -> str:
-        with self._lock:
-            lease = self._lease if workspace_id == DEFAULT_SCOPE else self._leases.get(workspace_id)
+        with self._lease_lock(workspace_id) as lease:
             if lease and lease["holder"] != holder and lease["expires"] > time.time():
                 return lease["holder"]
-            lease = {"holder": holder, "expires": time.time() + ttl_s}
-            if workspace_id == DEFAULT_SCOPE:
-                self._lease = lease
-            else:
-                self._leases[workspace_id] = lease
-            self._persist_lease(workspace_id, lease)
+            self._persist_lease(workspace_id, {"holder": holder, "expires": time.time() + ttl_s})
             return holder
 
     def release_leader(self, holder: str, workspace_id: str = DEFAULT_SCOPE) -> bool:
-        with self._lock:
-            if workspace_id == DEFAULT_SCOPE:
-                lease = self._lease
-                if not lease or lease["holder"] != holder:
-                    return False
-                self._lease = None
-            else:
-                lease = self._leases.get(workspace_id)
-                if not lease or lease["holder"] != holder:
-                    return False
-                self._leases.pop(workspace_id)
+        with self._lease_lock(workspace_id) as lease:
+            if not lease or lease["holder"] != holder:
+                return False
             self._delete_lease(workspace_id)
             return True
 

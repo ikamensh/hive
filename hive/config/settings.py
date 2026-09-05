@@ -13,13 +13,14 @@ from hive.models import DEFAULT_WORKSPACE_ID
 
 @dataclass
 class Config:
-    gcp_project: str  # empty = FileStore under data_dir; set for Firestore
-    gcs_bucket: str  # empty = local blob store under data_dir
+    gcp_project: str  # required in managed mode
+    gcs_bucket: str  # required in managed mode
     gh_token: str
     gemini_api_key: str
     orch_model: str
     runner_token: str
     data_dir: Path
+    storage_mode: str = "managed"  # managed | local (explicitly isolated from cloud state)
     orch_provider: str = "auto"  # auto | openai | gemini
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
@@ -54,7 +55,11 @@ class Config:
 
     @classmethod
     def from_env(cls) -> "Config":
-        data_dir = Path(os.environ.get("HIVE_DATA_DIR", "/tmp/hive-data"))
+        storage_mode = os.environ.get("HIVE_STORAGE_MODE", "managed")
+        if storage_mode not in {"local", "managed"}:
+            raise ValueError("HIVE_STORAGE_MODE must be local or managed")
+        default_dir = "~/.local/share/hive" if storage_mode == "local" else "/tmp/hive-data"
+        data_dir = Path(os.environ.get("HIVE_DATA_DIR", default_dir)).expanduser().resolve()
         data_dir.mkdir(parents=True, exist_ok=True)
         machine = machine_metadata()
         return cls(
@@ -65,6 +70,7 @@ class Config:
             orch_model=os.environ.get("HIVE_ORCH_MODEL", ""),
             runner_token=os.environ.get("HIVE_RUNNER_TOKEN", "dev-token"),
             data_dir=data_dir,
+            storage_mode=storage_mode,
             orch_provider=os.environ.get("HIVE_ORCH_PROVIDER", "auto"),
             openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
             openai_base_url=os.environ.get(
@@ -97,6 +103,8 @@ class Config:
             machine_os=machine["machine_os"],
             machine_arch=machine["machine_arch"],
             machine_kind=machine["machine_kind"],
-            autostart_runner=os.environ.get("HIVE_AUTOSTART_RUNNER", "").lower()
+            autostart_runner=os.environ.get(
+                "HIVE_AUTOSTART_RUNNER", "true" if storage_mode == "local" else "false"
+            ).lower()
             in {"1", "true", "yes", "on"},
         )

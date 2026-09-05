@@ -39,6 +39,7 @@ For what each module does and how the pipelines wire together, see `wiki/code-ma
 
 ```bash
 uv run pytest tests/                  # unit + mocked e2e
+uv run hive run --local              # local state + automatically managed local runner
 uvicorn --factory hive.api:production_app   # chief (env: HIVE_GCP_PROJECT etc.)
 python -m hive.runner                 # runner (env: HIVE_URL, HIVE_RUNNER_TOKEN)
 bash deploy/install_mac_runner.sh     # install a Mac as a launchd runner (once); serves Claude Max/Cursor

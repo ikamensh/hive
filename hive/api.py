@@ -534,24 +534,28 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     @contextlib.asynccontextmanager
     async def lifespan(_app):
         supervisor.acquire_leadership()  # raises if another chief is live
-        if config.autostart_runner and local_runner is not None:
-            status = local_runner.start()
-            log.info(
-                "%s as %s (log: %s)",
-                status["message"],
-                status["runner_name"],
-                status["log_path"],
-            )
-        loop_task = asyncio.create_task(supervisor.run_forever())
+        loop_task = None
         try:
+            if config.autostart_runner and local_runner is not None:
+                status = local_runner.start()
+                log.info(
+                    "%s as %s (log: %s)",
+                    status["message"],
+                    status["runner_name"],
+                    status["log_path"],
+                )
+            loop_task = asyncio.create_task(supervisor.run_forever())
             yield
         finally:
-            loop_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await loop_task
-            if local_runner is not None:
-                local_runner.stop()
-            supervisor.release_leadership()
+            try:
+                if loop_task is not None:
+                    loop_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await loop_task
+                if local_runner is not None:
+                    local_runner.stop()
+            finally:
+                supervisor.release_leadership()
 
     app.router.lifespan_context = lifespan
     app.state.supervisor = supervisor
@@ -2474,7 +2478,7 @@ def production_app() -> FastAPI:
         testing_check=make_testing_check(store, config),
         issue_scan=make_issue_scan(store, config, blobs=blobs),
         todo_triage=make_todo_triage(store, config),
-        substrate=substrate_from_env(),
+        substrate=substrate_from_env() if config.storage_mode == "managed" else None,
     )
     from hive.runner._local import LocalRunnerManager
 

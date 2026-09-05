@@ -13,6 +13,8 @@ from pathlib import Path
 # Keys hive will store for itself and apply when launching the chief.
 # Restricting the set keeps `config set` self-documenting and the file tidy.
 CONFIG_KEYS: dict[str, str] = {
+    "HIVE_STORAGE_MODE": "runtime state: managed | local",
+    "HIVE_DATA_DIR": "durable state and local runner directory",
     "HIVE_GH_TOKEN": "GitHub token for clone/push (auto-detected from `gh auth token`)",
     "OPENAI_API_KEY": "OpenAI API key for the orchestrator",
     "GEMINI_API_KEY": "Gemini API key for the orchestrator",

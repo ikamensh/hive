@@ -538,6 +538,29 @@ def test_run_chief_requires_managed_state(monkeypatch, tmp_path, capsys):
     assert "HIVE_GCS_BUCKET" in err
 
 
+def test_local_launch_overrides_saved_cloud_target(monkeypatch, tmp_path, capsys):
+    """An explicit local launch uses its own state and loopback runner address."""
+    import uvicorn
+    from hive.cli import main
+    from hive.config.settings import Config
+
+    monkeypatch.setattr(os, "environ", os.environ.copy())
+
+    _fake_gh(monkeypatch, "")
+    monkeypatch.setattr("hive.cli.load_stored_config", lambda: {
+        "HIVE_GCP_PROJECT": "production", "HIVE_GCS_BUCKET": "production",
+        "HIVE_PUBLIC_URL": "https://production.example", "HIVE_AUTOSTART_RUNNER": "false",
+    })
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
+    main(["run", "--local", "--data-dir", str(tmp_path), "--port", "8765", "--no-web-build"])
+    cfg = Config.from_env()
+    assert cfg.storage_mode == "local"
+    assert cfg.data_dir == tmp_path.resolve()
+    assert cfg.public_url == "http://127.0.0.1:8765"
+    assert cfg.autostart_runner
+    assert "store: local" in capsys.readouterr().out
+
+
 def test_run_chief_caps_graceful_shutdown(monkeypatch, tmp_path, capsys):
     import uvicorn
 

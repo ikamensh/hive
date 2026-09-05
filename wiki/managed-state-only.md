@@ -1,5 +1,9 @@
 # Proposal: Managed State Only
 
+Superseded for explicit local installs (2026-09-05): `hive run --local` supports
+FileStore and LocalBlobStore with a managed local runner. The default runtime
+still requires Firestore/GCS. See `acceptance/local-queue.md` and the README.
+
 ## Decision
 
 Hive runtime state should live in managed services by default and by requirement:

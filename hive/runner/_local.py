@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -65,8 +66,11 @@ class LocalRunnerManager:
         env.update(
             {
                 "HIVE_URL": self.config.public_url,
+                "HIVE_BASIC_AUTH": "",
                 "HIVE_RUNNER_TOKEN": self.config.runner_token,
                 "HIVE_WORKSPACE_ID": self.config.workspace_id,
+                "HIVE_RUNNER_STATE_DIR": str(self.config.data_dir / "runner-state"),
+                "HIVE_RUNNER_SELF_UPDATE": "0",
                 "HIVE_MACHINE_ID": self.config.machine_id,
                 "HIVE_MACHINE_NAME": self.config.machine_name or self.runner_name,
                 "HIVE_MACHINE_TYPE": self.config.machine_type,
@@ -87,6 +91,7 @@ class LocalRunnerManager:
                 env=env,
                 stdout=self._log,
                 stderr=subprocess.STDOUT,
+                start_new_session=True,
             )
         except Exception:
             self._log.close()
@@ -96,7 +101,13 @@ class LocalRunnerManager:
 
     def stop(self) -> None:
         if self._proc is not None and self._proc.poll() is None:
-            self._proc.terminate()
+            os.killpg(self._proc.pid, signal.SIGTERM)
+            try:
+                self._proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(self._proc.pid, signal.SIGKILL)
+                self._proc.wait()
+        self._proc = None
         if self._log is not None:
             self._log.close()
             self._log = None

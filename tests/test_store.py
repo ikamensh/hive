@@ -10,6 +10,16 @@ import pytest
 
 from hive.models import Question, QuestionStatus, Project, Resource, Task, TaskStatus, User
 from hive.persistence.store import FileStore, MemoryStore
+
+
+def test_local_leadership_is_shared_between_independent_stores(tmp_path):
+    """Two chiefs opened before either claims a lease cannot both lead."""
+    a, b = FileStore(tmp_path), FileStore(tmp_path)
+    assert a.claim_leader("a", 60) == "a"
+    assert b.claim_leader("b", 60) == "a"
+    assert not b.release_leader("b")
+    assert a.release_leader("a")
+    assert b.claim_leader("b", 60) == "b"
 from hive.config.storage import copy_store
 
 

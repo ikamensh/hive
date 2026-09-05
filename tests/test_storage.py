@@ -85,6 +85,24 @@ def test_runtime_storage_uses_managed_backends(tmp_path, monkeypatch):
     assert blobs.bucket_name == "bucket"
 
 
+def test_local_runtime_persists_across_app_restarts(monkeypatch, tmp_path):
+    """The supported launcher can reopen local project state without cloud credentials."""
+    from fastapi.testclient import TestClient
+    from hive.api import production_app
+
+    monkeypatch.setenv("HIVE_STORAGE_MODE", "local")
+    monkeypatch.setenv("HIVE_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("HIVE_AUTOSTART_RUNNER", "false")
+    monkeypatch.setenv("HIVE_AUTH_MODE", "dev")
+    for key in ("HIVE_GCP_PROJECT", "HIVE_GCS_BUCKET"):
+        monkeypatch.delenv(key, raising=False)
+    with TestClient(production_app()) as client:
+        project = client.post("/api/projects", json={"name": "local"}).json()
+    with TestClient(production_app()) as client:
+        projects = client.get("/api/projects").json()
+        assert [p["id"] for p in projects] == [project["id"]]
+
+
 def test_storage_info_for_direct_file_store(tmp_path):
     cfg = config(tmp_path)
     store = FileStore(tmp_path / "store")

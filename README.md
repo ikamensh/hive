@@ -10,7 +10,23 @@ The point isn't just "an agent writes code." It's the loop around it: hive decom
 
 ## Quickstart: run hive on your laptop
 
-This runs the chief process and a runner on one machine, but runtime state still lives in managed services: Firestore for documents and GCS for blobs. Local file persistence is only for tests and one-time migration of old data.
+For a self-contained local install:
+
+```bash
+uv run hive run --local
+```
+
+This starts the chief and its runner, with durable state, logs, and checkouts
+under `~/.local/share/hive`. Use `--data-dir <path>` to choose another directory.
+Stop with Ctrl-C and run the same command to reopen the same projects. The local
+runner has its own reconnect roster and pause flag, separate from any installed
+fleet runner. GitHub is still used for pushing and landing changes. No GCP setup
+is required. Agent CLIs and `gh` should already be logged in; an orchestrator API
+key is needed for AI plan proposals, but not to start the local service.
+
+The instructions below describe the managed alternative: the chief runs on your
+laptop while Firestore and GCS hold shared state. `hive run` without `--local`
+continues to require that managed configuration.
 
 ### 0. Prerequisites
 
