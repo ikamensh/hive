@@ -160,6 +160,11 @@ class TaskResult(BaseModel):
     reset_at_hint: float = 0.0  # limit-reset epoch the runner parsed from the error message
     usage_snapshot: dict = Field(default_factory=dict)  # provider usage windows after the task
 
+    @property
+    def runtime_blocked(self) -> bool:
+        return (not self.cancelled and not self.auth_blocked and not self.resource_exhausted
+                and classify_failure(self.text, is_error=self.is_error) == "runtime")
+
 
 def _structured_or_legacy_verdict(
     kind: TaskKind,
@@ -308,7 +313,7 @@ class TaskResultProcessor:
             task.retryable_interruption = (
                 body.is_error and not body.cancelled and not task.cancel_requested
                 and not body.auth_blocked
-                and (transient or (body.resource_exhausted and task.kind != TaskKind.probe))
+                and (transient or ((body.resource_exhausted or body.runtime_blocked) and task.kind != TaskKind.probe))
             )
             if transient:
                 task.transient_retries += 1
@@ -332,6 +337,8 @@ class TaskResultProcessor:
             self._account_attempt_spend(workspace_id, task, body)
         else:
             probe_resources = self._account_resources(workspace_id, task, body)
+        if body.runtime_blocked:
+            self._escalate_backend_runtime(task, body.text, workspace_id)
         if task.retryable_interruption:
             successor = resume_interrupted_task(self.store, task)
             if successor is not None:
@@ -494,7 +501,17 @@ class TaskResultProcessor:
             resource.total_tasks += 1
             resource.total_cost_usd += body.cost_usd
             snapshot_moved = apply_snapshot(resource, body.usage_snapshot)
-            if task.kind == TaskKind.probe and resource.last_probe_task_id == task.id:
+            if body.runtime_blocked:
+                # Conservatively hold this CLI until the exact failed model
+                # probes successfully. Other configured providers may continue.
+                resource.usability_status = ResourceUsability.failed
+                resource.runtime_blocked_model = task.model
+                resource.last_probe_at = task.finished_at
+                resource.last_probe_text = body.text
+            elif task.kind == TaskKind.probe and resource.last_probe_task_id == task.id:
+                if (resource.runtime_blocked_model and not body.is_error and not body.cancelled
+                        and task.model != resource.runtime_blocked_model):
+                    return  # a late/default probe cannot prove the failed model works
                 resource.last_probe_at = task.finished_at
                 resource.last_probe_text = body.text[:2000]
                 if body.cancelled:
@@ -507,6 +524,7 @@ class TaskResultProcessor:
                     resource.usability_status = ResourceUsability.failed
                 else:
                     resource.usability_status = ResourceUsability.usable
+                    resource.runtime_blocked_model = ""
                     resource.clear_exhaustion()
             elif body.auth_blocked:
                 # A login/policy block on any task (not just a probe) proves the
@@ -571,6 +589,7 @@ class TaskResultProcessor:
             any(resource.enabled for resource in probe_resources)
             and body.is_error
             and not body.resource_exhausted
+            and not body.runtime_blocked
             and HUMAN_FIX_PATTERNS.search(body.text)
         ):
             # A failed probe of a backend nobody asked for is fleet telemetry,
@@ -600,6 +619,26 @@ class TaskResultProcessor:
         return any(
             t.status == TaskStatus.pending and t.backend == backend and t.kind != TaskKind.probe
             for t in self.store.list(Task, workspace_id=workspace_id)
+        )
+
+    def _escalate_backend_runtime(self, task: Task, text: str, workspace_id: str) -> None:
+        runner = self.store.get(Runner, task.runner_id)
+        name = runner.name if runner else task.runner_id
+        hint = (
+            "Update the Claude SDK/runtime used by Hive (the SDK may bundle a different CLI "
+            "from the shell's `claude`), then restart the runner."
+            if task.backend == "claude" else
+            "Fix the CLI runtime or configuration identified below, then restart the runner."
+        )
+        escalate(
+            self.store, f"Fix {task.backend} runtime on {name}",
+            instructions=(f"{hint}\n\nRe-probe this resource using the failed model `{task.model}`. "
+                          "Hive temporarily holds this backend and keeps interrupted work queued; "
+                          "other configured providers can continue. No quota exhaustion was inferred.\n\n"
+                          f"Runtime diagnostic:\n\n```\n{text[:2000]}\n```"),
+            workspace_id=workspace_id, assignee_user_id=runner_machine_owner(self.store, runner),
+            kind=HumanTaskKind.repair, dedup_key=f"repair:runtime:{task.backend}:{name}",
+            resolution={"check": "resource_usable", "backend": task.backend, "runner_name": name},
         )
 
     def _escalate_backend_login(self, task: Task, text: str, workspace_id: str) -> None:

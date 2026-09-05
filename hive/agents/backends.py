@@ -65,6 +65,13 @@ TRANSIENT_PATTERNS = re.compile(
     r"socket hang.?up",
     re.IGNORECASE,
 )
+# Explicit runtime capability/configuration refusals need an operator repair,
+# not a project clarification or a fabricated quota-reset deadline.
+RUNTIME_BLOCK_PATTERNS = re.compile(
+    r"(?:claude code|codex(?: cli)?|opencode)\s+v?\d[\w.+-]*\s+does not support (?:this|the) model|"
+    r"OpenCode isolation preflight failed:",
+    re.IGNORECASE,
+)
 
 
 def classify_failure(text: str, *, is_error: bool) -> str:
@@ -72,7 +79,8 @@ def classify_failure(text: str, *, is_error: bool) -> str:
 
     Returns ``"auth"`` for a login/policy block (needs a human), ``"exhausted"``
     for a rate-limit/quota window that heals by waiting, ``"transient"`` for a
-    one-off backend flake worth an immediate retry, or ``""`` otherwise. Auth
+    one-off backend flake worth an immediate retry, ``"runtime"`` for explicit
+    CLI-version/configuration refusal, or ``""`` otherwise. Auth
     wins over exhaustion: a message that trips both (e.g. "rate limited; please
     re-login") is the safer-to-escalate case, so we treat it as an auth block.
     Both win over transient — a dead credential often also breaks the stream,
@@ -80,6 +88,8 @@ def classify_failure(text: str, *, is_error: bool) -> str:
     """
     if not is_error:
         return ""
+    if RUNTIME_BLOCK_PATTERNS.search(text):
+        return "runtime"
     if AUTH_BLOCK_PATTERNS.search(text):
         return "auth"
     if EXHAUSTION_PATTERNS.search(text):

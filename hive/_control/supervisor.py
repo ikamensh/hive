@@ -223,6 +223,11 @@ def state_reason(
             if task.resume_runner_id:
                 runner = store.get(Runner, task.resume_runner_id)
                 name = runner.name if runner else task.resume_runner_id
+                backends = {agent.backend for agent in agent_candidates(project, task)}
+                for resource in store.list(Resource, workspace_id=project.workspace_id, runner_id=task.resume_runner_id):
+                    if resource.backend in backends and resource.runtime_blocked_model:
+                        return (f"waiting to resume {task.kind} on {name} — fix the {resource.backend} runtime "
+                                f"for {resource.runtime_blocked_model} and re-probe; see the runtime repair todo")
                 return f"waiting to resume {task.kind} on {name} — its checkout is preserved; resumes when capacity returns"
         missing = sorted({t.backend for t in pending if t.backend not in available_backends})
         resources = [
@@ -818,7 +823,9 @@ class Supervisor:
                     elif not resource.enabled:
                         problems.append(f"{runner.name}: disabled")
                     elif resource.usability_status != "usable":
-                        problems.append(f"{runner.name}: {resource.usability_status}")
+                        reason = (f"runtime repair required for {resource.runtime_blocked_model}"
+                                  if resource.runtime_blocked_model else str(resource.usability_status))
+                        problems.append(f"{runner.name}: {reason}")
                     elif not resource.available(candidate.model):
                         problems.append(f"{runner.name}: quota exhausted")
                     elif not resource.supports(required):

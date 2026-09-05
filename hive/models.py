@@ -667,6 +667,7 @@ class Resource(BaseModel):
     last_probe_at: float = 0.0
     last_probe_task_id: str = ""
     last_probe_text: str = ""
+    runtime_blocked_model: str = ""  # re-probe this exact model after fixing a runtime/configuration refusal
     # Machine environments the runner advertised alongside this backend —
     # open vocabulary ("browser", "docker", "android", ...). The runner
     # re-detects on every heartbeat, so this reflects the machine now.

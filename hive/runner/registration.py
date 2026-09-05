@@ -121,6 +121,7 @@ def queue_probe(store, resource: Resource, runner: Runner) -> tuple[Task, Resour
             kind=TaskKind.probe,
             instructions=probe_instructions(resource.backend),
             backend=resource.backend,
+            model=resource.runtime_blocked_model,
             status=TaskStatus.running,
             runner_id=runner.id,
         )

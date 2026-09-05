@@ -42,6 +42,22 @@ and counts only matching known-model attempts in scoped token estimates.
 Provider gauges include usage outside Hive; Hive's empirical estimates remain
 lower bounds rather than subscription entitlements.
 
+## Runtime repairs
+
+An explicit CLI-version/model incompatibility or OpenCode isolation-preflight
+refusal is an operational block. Hive records the diagnostic in a runtime
+repair todo and keeps the interrupted stage queued as a fresh attempt. It can
+continue through configured alternatives with the same checkout and a fresh
+provider session. No repair attempt or quota deadline is fabricated.
+
+The simple policy temporarily holds the whole affected CLI on that runner,
+even if another model might work on its old version. This avoids repeatedly
+testing an incompatible runtime; it does not claim the other model exhausted
+its quota. After fixing the runtime/configuration and restarting the runner,
+startup and manual probes use the exact failed model. Discovery alone, or a
+late successful probe of a different default model, cannot clear the block.
+The runtime todo closes when the matching model probe succeeds.
+
 ## Verification
 
 `tests/test_capacity_fallback.py` runs the real plan, supervisor and result
