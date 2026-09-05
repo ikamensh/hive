@@ -120,6 +120,12 @@ nine items have landed; the event simulation and dashboard are still pending.
     review sessions, successful checks at both reviewed SHAs, review after build,
     the next item starting after the previous landing, and no overlapping work
     on different plan items.
+16. Resumed item three on Astra while the free-worker configuration safeguard
+    is completed, so that independent Hive fixes do not hold up available
+    strong-model work. The controlled Muse dispatch drill moves to the next
+    suitable task boundary. This was an observer-imposed maintenance wait, not
+    a capacity failure; `evidence/resume-during-safeguard-work.json` records the
+    transition. The prepared drill has not changed live quota state.
 
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
 for items one and two and must continue to hold for every later item. H7 has
