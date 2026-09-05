@@ -13,7 +13,9 @@ from hive.llm._core import (
     Usage,
 )
 from hive.llm._parsing import extract_json
-from hive.llm._provider import build_adapter, build_adapters, candidate_providers, resolve_provider
+from hive.llm._provider import (
+    build_adapter, build_adapters, candidate_providers, included_orchestration, resolve_provider,
+)
 
 __all__ = [
     "Completion",
@@ -29,5 +31,6 @@ __all__ = [
     "build_adapter",
     "build_adapters",
     "candidate_providers",
+    "included_orchestration",
     "resolve_provider",
 ]

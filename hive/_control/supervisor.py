@@ -282,6 +282,9 @@ class Supervisor:
     ) -> None:
         self.store = store
         self.orchestrate = orchestrate
+        # The app composition supplies its configured provider policy. Without
+        # one, included-only projects still run their deterministic pipelines.
+        self.orchestration_allowed: Callable[[Project], bool] = lambda p: not p.included_only
         self.workspace_id = workspace_id
         # Power control for on_demand machines (hive/_integrations/substrate.py);
         # None = this chief cannot switch machines on and off.
@@ -1055,7 +1058,7 @@ class Supervisor:
                 asyncio.get_running_loop().create_task(self._run_issue_scan(project.id))
             self.dispatch(project)
             state = self.refresh_state(project)
-            if project.included_only:
+            if not self.orchestration_allowed(project):
                 self._events.pop(project.id, None)
                 continue  # approved plans advance deterministically, without paid planning
             if state == ProjectState.intake:

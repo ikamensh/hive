@@ -9,8 +9,12 @@ OpenCode is never silently added to an API provider's fallback list.
 The chief needs `opencode` on PATH and whatever login the selected provider
 requires. Workers can independently select OpenCode or subscription agents.
 The planner proposes drafts through the existing Hive tools; approving and
-executing tasks remain separate state transitions. Included-only projects
-still depend on the chief's planning policy admitting the selected free model.
+executing tasks remain separate state transitions. Included-only projects can
+request plans and run todo triage at a $0 daily budget when the selected model
+is explicitly `opencode/*-free` (including the default). The API, scheduler and
+direct orchestrator entrypoint share the same admission rule. Paid OpenCode
+models and API providers remain blocked; a free-provider failure cannot fall
+back to configured API credentials. Unpinned `auto` selection does not qualify.
 
 Each existing Hive tool-loop round launches a short-lived OpenCode process in
 an isolated temporary directory. A custom agent receives the planner prompt
@@ -33,8 +37,9 @@ bounded conversation in Hive and supplies it each round, trading some input
 tokens and CLI startup time for no long-running OpenCode server to supervise.
 
 Integration tests exercise executable CLI fixtures through the real tool loop
-and planner, including draft persistence, validation-before-side-effects,
-raw JSON triage, timeout cleanup, and provider errors. A live Muse smoke also
+and planner, including included-only/$0 API-to-scheduler draft persistence,
+paid-provider rejection, validation-before-side-effects, raw JSON triage,
+timeout cleanup, and provider errors without paid fallback. A live Muse smoke also
 completed a two-round tool/result exchange and a separate JSON triage call.
 `uv run python scripts/smoke_opencode_planner.py` exercises the actual seven-tool
 planner surface in an isolated in-memory project: it requires exactly one

@@ -21,8 +21,8 @@ under `~/.local/share/hive`. Use `--data-dir <path>` to choose another directory
 Stop with Ctrl-C and run the same command to reopen the same projects. The local
 runner has its own reconnect roster and pause flag, separate from any installed
 fleet runner. GitHub is still used for pushing and landing changes. No GCP setup
-is required. Agent CLIs and `gh` should already be logged in; an orchestrator API
-key is needed for AI plan proposals, but not to start the local service.
+is required. Agent CLIs and `gh` should already be logged in. AI plan proposals
+can use free OpenCode or a configured orchestrator API provider.
 
 Write `tasks.md` with a `# Goal` and one `## Task title` per task. Put instructions
 under each task; their order is the execution order. Then, in another terminal:
@@ -69,6 +69,19 @@ this policy selects backends/models, not your provider account's billing mode.
 Session grants still apply at a zero dollar budget. To let Hive draft plans
 using an API key again, set `--included-only false` and a positive daily budget.
 
+For free AI plan proposals and todo triage, start the local chief with:
+
+```bash
+HIVE_ORCH_PROVIDER=opencode uv run hive run --local
+```
+
+Then use `hive --local plan-propose <project>`. This works with included-only
+mode and a $0 budget. The planner defaults to free Muse; `HIVE_ORCH_MODEL` can
+select another explicit `opencode/*-free` model. Provider errors stop the call
+without falling back to paid APIs. A draft still needs approval before execution.
+The builder and reviewer can both use the same free Muse model in separate
+sessions. See [OpenCode planning](wiki/opencode-planner.md) for isolation and limits.
+
 OpenCode must be installed and connected (`opencode`, then `/connect`). Its
 default is Muse Spark 1.3 Contributor Free; `HIVE_OPENCODE_MODEL` overrides the
 default for probes and unpinned work. Contributor Free permits using prompts
@@ -81,7 +94,7 @@ hold shared state. `hive run` without `--local` requires that configuration.
 
 - **[uv](https://docs.astral.sh/uv/)** (Python runner; everything below is `uv run …`).
 - **At least one agent CLI installed and logged in** — `claude`, `cursor`, `codex`, or `gemini-cli`. This is what actually writes the code.
-- **An orchestrator API key** — `OPENAI_API_KEY` *or* `GEMINI_API_KEY`. This is the "brain" that plans and decides (separate from the agent CLIs above).
+- **An orchestrator provider** — free OpenCode (`HIVE_ORCH_PROVIDER=opencode`), `OPENAI_API_KEY`, or `GEMINI_API_KEY`. This plans and decides separately from the coding sessions.
 - **`gh` logged in** (`gh auth login`) — hive pushes commits/PRs using your GitHub credentials.
 - **GCP application credentials** (`gcloud auth application-default login`) with access to the Firestore project and GCS bucket.
 - **A GitHub repo to point at** — the project's *spec home* (holds `mission.md` / `iteration.md`). For a quick test, any repo you can push to works; hive will write the goal into it.

@@ -30,6 +30,7 @@ from hive._integrations.auth import (
     AuthManager,
 )
 from hive.config.settings import Config
+from hive.llm import included_orchestration
 from hive._control import allowances, clarifications, decisions, intake, pause
 from hive.agents import BACKEND_NAMES
 from hive._integrations.github_repos import all_repos as list_github_repos
@@ -340,6 +341,9 @@ class EnrollExchange(BaseModel):
 
 def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_runner=None) -> FastAPI:
     app = FastAPI(title=f"hive {get_version()}")
+    supervisor.orchestration_allowed = (
+        lambda project: not project.included_only or included_orchestration(config)
+    )
     auth = AuthManager(store, config)
     auth.validate_config()
 
@@ -1141,8 +1145,8 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         """Ask the planner for a plan proposal (fire-and-forget: the draft
         appears when the invocation lands)."""
         project = require_project(project_id, ctx)
-        if project.included_only:
-            raise HTTPException(400, "Paid planning is disabled for this project; import a plan or disable included-only mode.")
+        if not supervisor.orchestration_allowed(project):
+            raise HTTPException(400, "Paid planning is disabled for this project; configure a free OpenCode planner or import a plan.")
         if (existing := plans.active_plan(store, project)) and existing.status == PlanStatus.approved:
             raise HTTPException(400, "an approved plan is executing; abandon it first")
         supervisor.wake(
@@ -2481,7 +2485,8 @@ def make_todo_triage(store, config: Config) -> Callable[[], None]:
         return adapter.step().text
 
     def todo_triage() -> None:
-        if not any(not p.included_only and p.daily_budget_usd > 0
+        free = included_orchestration(config)
+        if not any(free or (not p.included_only and p.daily_budget_usd > 0)
                    for p in store.list(Project, workspace_id=config.workspace_id)):
             return
         triage_open_todos(store, transport, workspace_id=config.workspace_id)

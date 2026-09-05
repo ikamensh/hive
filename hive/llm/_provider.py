@@ -13,11 +13,26 @@ from __future__ import annotations
 from hive.llm._core import LLMAdapter
 from hive.llm._gemini import GeminiAdapter
 from hive.llm._openai import OpenAIAdapter
-from hive.llm._opencode import OpenCodeAdapter
+from hive.llm._opencode import DEFAULT_OPENCODE_MODEL, OpenCodeAdapter
 
 # Gemini has no list-and-pick auto-select like OpenAI's, so auto-fallback needs a
 # concrete model. The strongest tool-caller the key serves (see hive.llm._model_intel).
 DEFAULT_GEMINI_MODEL = "gemini-3.1-pro-preview"
+
+
+def included_orchestration(config) -> bool:
+    """Whether provider selection is confined to OpenCode's explicit free tier.
+
+    A free-looking model on an API provider is insufficient. Unpinned auto
+    selection can fall back to paid APIs, even when OpenCode is installed.
+    """
+    provider = (config.orch_provider or "auto").strip().lower()
+    model = config.orch_model.strip()
+    if provider == "opencode":
+        model = model or DEFAULT_OPENCODE_MODEL
+    elif provider != "auto" or not model.startswith("opencode/"):
+        return False
+    return model.startswith("opencode/") and model.endswith("-free")
 
 
 def candidate_providers(config) -> list[str]:

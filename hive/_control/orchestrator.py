@@ -17,7 +17,9 @@ from hive.agents import REGISTRY
 from hive._control import allowances
 from hive._control.escalation import escalate
 from hive._workstreams import plans
-from hive.llm import LoopResult, ProviderUnavailable, ToolLoop, ToolSet, build_adapters
+from hive.llm import (
+    LoopResult, ProviderUnavailable, ToolLoop, ToolSet, build_adapters, included_orchestration,
+)
 from hive.models import (
     Feedback,
     HumanTask,
@@ -442,6 +444,8 @@ class Orchestrator:
         project = self.store.get(Project, project_id)
         if project is None:
             return
+        if project.included_only and not included_orchestration(self.config):
+            raise ValueError("included-only projects require a free OpenCode planner")
         spec: SpecRepo | None = SpecRepo(
             project.spec_repo, Path(self.config.data_dir) / "specs", self.config.gh_token
         )
