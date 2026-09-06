@@ -1,283 +1,133 @@
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
+import { IconArrowRight, IconCheck, IconChevronLeft, IconChevronRight, IconInbox, IconSearch } from "@tabler/icons-react";
 import { useOverview } from "../App";
 import { ago, api, usePoll } from "../api";
 import { Markdown } from "../components/shared";
-import type { HumanTodo, OverviewQuestion } from "../types";
+import type { InboxItem, InboxKind, InboxScope } from "../types";
+import "./inbox.css";
 
-function QuestionItem({ q, onAnswered }: { q: OverviewQuestion; onAnswered: () => void }) {
+const LABELS = { all: "All", question: "Questions", approval: "Approvals", blocked: "Blocked work", todo: "Human tasks" };
+const SINGULAR = { question: "Question", approval: "Approval", blocked: "Blocked work", todo: "Human task" };
+const PAGE_SIZE = 12;
+
+function ItemDetail({ item, stale, onResolved }: { item: InboxItem; stale: boolean; onResolved: () => void }) {
   const [answer, setAnswer] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const [error, setError] = useState("");
+  const wholePlan = item.kind === "approval" && !!item.plan && !item.plan_item;
+  const review = usePoll(() => api.getPlan(item.plan!.id), [item.plan?.id, wholePlan], 10000, { enabled: wholePlan });
+  const projectUrl = `/p/${item.project_id}${item.plan ? `?plan=${encodeURIComponent(item.plan.id)}` : ""}`;
+  const act = async (operation: () => Promise<unknown>) => {
     setBusy(true);
-    setError(false);
+    setError("");
     try {
-      await api.answerQuestion(q.id, answer.trim());
-      onAnswered();
-    } catch {
-      setError(true);
-      setBusy(false);
-    }
-  };
-
-  return (
-    <article className="needs-card needs-card-q reveal">
-      <header className="needs-card-head">
-        <span className="needs-kind needs-kind-q">question</span>
-        <Link to={`/p/${q.project_id}`} className="needs-scope">
-          {q.project_name || "project"}
-        </Link>
-        <span className="muted">asked {ago(q.created_at)}</span>
-      </header>
-      <Markdown text={q.text} />
-      <form onSubmit={submit}>
-        <textarea
-          value={answer}
-          onChange={(e) => setAnswer(e.target.value)}
-          rows={3}
-          placeholder="Your answer — it will be distilled into the spec…"
-        />
-        {error && <p className="form-error">submit failed, try again</p>}
-        <div className="needs-card-actions">
-          <Link to={`/p/${q.project_id}`} className="ghost-link">
-            open project →
-          </Link>
-          <button type="submit" disabled={busy || !answer.trim()}>
-            {busy ? "sending…" : "answer"}
-          </button>
-        </div>
-      </form>
-    </article>
-  );
-}
-
-function TodoItem({
-  todo,
-  scope,
-  assignee,
-  canComplete,
-  onDone,
-}: {
-  todo: HumanTodo;
-  scope: string;
-  assignee?: string;
-  canComplete: boolean;
-  onDone: () => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const done = async () => {
-    setBusy(true);
-    try {
-      await api.completeHumanTodo(todo.id);
-      onDone();
+      await operation();
+      onResolved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The action failed. Try again.");
     } finally {
       setBusy(false);
     }
   };
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    void act(() => api.answerQuestion(item.question!.id, answer.trim()));
+  };
+  const disabled = busy || stale;
 
-  const kind = todo.kind ?? "external";
-  const selfClosing = Object.keys(todo.resolution ?? {}).length > 0;
   return (
-    <article className="needs-card reveal">
-      <header className="needs-card-head">
-        <span className={`needs-kind needs-kind-${kind}`}>{kind}</span>
-        {todo.project_id ? (
-          <Link to={`/p/${todo.project_id}`} className="needs-scope">
-            {scope}
-          </Link>
-        ) : (
-          <span className="needs-scope">{scope}</span>
-        )}
-        {assignee && (
-          <span className="chip" title="only this user can act on it">
-            @{assignee}
-          </span>
-        )}
-        <span className="muted">{ago(todo.created_at)}</span>
-        {selfClosing && (
-          <span className="muted needs-selfclose" title="Hive closes this itself once it observes the condition resolved (e.g. a successful probe or heartbeat)">
-            closes itself when resolved
-          </span>
-        )}
+    <article className="inbox-detail" aria-label="Selected inbox item">
+      <header className="inbox-detail-head">
+        <span className={`inbox-kind inbox-kind-${item.kind}`}>{SINGULAR[item.kind]}</span>
+        <span className="inbox-meta">{ago(item.created_at)}</span>
       </header>
-      <h3 className="needs-card-title">{todo.title}</h3>
-      <Markdown text={todo.instructions} />
-      <div className="needs-card-actions">
-        {(kind === "access" || kind === "infra") && (
-          <Link to="/machines" className="ghost-link">
-            machines & subscriptions →
-          </Link>
-        )}
-        {todo.project_id && (
-          <Link to={`/p/${todo.project_id}`} className="ghost-link">
-            open project →
-          </Link>
-        )}
-        {canComplete && (
-          <button onClick={done} disabled={busy}>
-            {busy ? "marking…" : "mark done"}
-          </button>
-        )}
+      <h2>{item.title}</h2>
+      <div className="inbox-detail-context">
+        {item.project_id ? <Link to={projectUrl}>{item.project_name}</Link> : <span>Workspace</span>}
+        {item.assignee_user_id && <span>Assigned to @{item.assignee_name || item.assignee_user_id}</span>}
       </div>
+      {item.waiting_on_other && (
+        <p className="inbox-owner-note">Waiting on {item.assignee_name ? `@${item.assignee_name}` : "a workspace administrator"}.
+          {item.can_act && " You can mark this resolved after confirming the work is done."}</p>
+      )}
+      <div className="inbox-detail-body"><Markdown text={item.body} /></div>
+      {item.todo && Object.keys(item.todo.resolution ?? {}).length > 0 && (
+        <p className="inbox-meta">Hive will close this automatically when it observes the issue resolved.</p>
+      )}
+      {wholePlan && (
+        <div className="inbox-plan-review">
+          {review.failed ? <p role="alert">Plan details could not be loaded. <button className="ghost" onClick={review.refresh}>Retry</button></p>
+            : !review.data ? <p className="inbox-meta">Loading work items…</p>
+            : <ol>{review.data.items.filter(i => i.status !== "cancelled").map(i => (
+              <li key={i.id}><strong>{i.title}</strong>{i.story && <Markdown text={i.story} />}{i.constraints && <p className="inbox-meta">{i.constraints}</p>}</li>
+            ))}</ol>}
+        </div>
+      )}
+      {item.plan_item && item.kind === "approval" && item.plan_item.constraints && <p className="inbox-meta">{item.plan_item.constraints}</p>}
+      {error && <p className="form-error" role="alert">{error}</p>}
+      {item.question && item.can_act && (
+        <form onSubmit={submit} className="inbox-answer">
+          <label htmlFor={`answer-${item.question.id}`}>Your answer</label>
+          <textarea id={`answer-${item.question.id}`} value={answer} onChange={event => setAnswer(event.target.value)} rows={5} placeholder="Add the information Hive needs to continue" />
+          <button type="submit" disabled={disabled || !answer.trim()}>{busy ? "Sending…" : "Send answer"}<IconArrowRight size={16} /></button>
+        </form>
+      )}
+      <footer className="inbox-detail-actions">
+        {item.todo && item.can_act && <button onClick={() => void act(() => api.completeHumanTodo(item.todo!.id))} disabled={disabled}><IconCheck size={16} />{busy ? "Saving…" : "Mark done"}</button>}
+        {item.kind === "blocked" && item.plan_item && item.can_act && <button onClick={() => void act(() => api.retryPlanItem(item.plan_item!.id))} disabled={disabled}>{busy ? "Retrying…" : "Retry work"}</button>}
+        {item.kind === "approval" && item.can_act && (item.plan_item
+          ? <button onClick={() => void act(() => api.approvePlanItem(item.plan_item!.id))} disabled={disabled}>{busy ? "Approving…" : "Approve work item"}</button>
+          : <button onClick={() => void act(() => api.approvePlan(item.plan!.id))} disabled={disabled || !review.data || review.failed || review.data.plan.status !== "draft"}>{busy ? "Starting…" : "Approve and start plan"}</button>)}
+        {item.project_id && <Link className="inbox-context-link" to={projectUrl}>{item.plan ? "Open plan" : "Open project"}<IconArrowRight size={16} /></Link>}
+        {item.todo && (item.todo.kind === "access" || item.todo.kind === "infra") && <Link className="inbox-context-link" to="/machines">Open Capacity<IconArrowRight size={16} /></Link>}
+      </footer>
+      {!item.can_act && !item.waiting_on_other && <p className="inbox-meta">A workspace administrator can resolve this item.</p>}
     </article>
   );
 }
 
-// Only-you-can actions first; things Hive is also working around come after.
-const KIND_ORDER: Record<string, number> = { external: 0, access: 1, infra: 2, repair: 3, env: 4 };
-
 export default function NeedsYou() {
   const overview = useOverview();
-  const { data: todos, refresh: refreshTodos } = usePoll(() => api.humanTodos(), []);
-  const { data: projects } = usePoll(() => api.projects(), [], 30000);
-  const { data: auth } = usePoll(() => api.me(), [], 30000);
-  const { data: members } = usePoll(() => api.users(), [], 30000);
-
-  const myId = auth?.user.id ?? "";
-  const isAdmin = auth?.role !== "resource_provider";
-  const loginById = new Map((members ?? []).map((m) => [m.user.id, m.user.github_login]));
-
-  const questions = overview.data?.attention.questions ?? [];
-  const offers = overview.data?.attention.offers ?? [];
-  const openTodos = (todos ?? [])
-    .filter((t) => t.status === "open")
-    .sort(
-      (a, b) =>
-        (KIND_ORDER[a.kind ?? "external"] ?? 9) - (KIND_ORDER[b.kind ?? "external"] ?? 9) ||
-        b.created_at - a.created_at,
-    );
-  const doneTodos = (todos ?? []).filter((t) => t.status === "done");
-  // Yours first: assigned to you, or unassigned (any admin's job) when you're
-  // an admin. The rest wait on a specific other user.
-  const yourTodos = openTodos.filter(
-    (t) => t.assignee_user_id === myId || (isAdmin && !t.assignee_user_id),
-  );
-  const otherTodos = openTodos.filter((t) => !yourTodos.includes(t));
-  const shown = questions.length + openTodos.length;
-  // attention.count is the authoritative open total; the embedded lists are capped.
-  const total = overview.data?.attention.count ?? shown;
-  const hidden = Math.max(0, total - shown);
-
-  const scopeName = (projectId: string) =>
-    projectId === "" ? "org-wide" : projects?.find((p) => p.id === projectId)?.name ?? projectId;
-  const assigneeName = (t: HumanTodo) =>
-    t.assignee_user_id ? loginById.get(t.assignee_user_id) ?? t.assignee_user_id : undefined;
-  const canComplete = (t: HumanTodo) => isAdmin || t.assignee_user_id === myId;
-
-  const refreshAll = () => {
-    refreshTodos();
-    overview.refresh();
+  const [kind, setKind] = useState<InboxKind>("all");
+  const [scope, setScope] = useState<InboxScope>("all");
+  const [query, setQuery] = useState("");
+  const [offset, setOffset] = useState(0);
+  const [selectedId, setSelectedId] = useState("");
+  const inbox = usePoll(() => api.inbox({ kind, scope, q: query, offset, limit: PAGE_SIZE }), [kind, scope, query, offset]);
+  const selected = inbox.data?.items.find(item => item.id === selectedId) ?? inbox.data?.items[0];
+  const total = inbox.data?.total ?? 0;
+  const resetPage = () => { setOffset(0); setSelectedId(""); };
+  const refresh = () => {
+    // Refill a shortened last page after resolving its final item.
+    if (inbox.data?.items.length === 1 && offset > 0) setOffset(Math.max(0, offset - PAGE_SIZE));
+    else void inbox.refresh();
+    void overview.refresh();
+    setSelectedId("");
   };
 
   return (
-    <div className="page page-needs">
-      <div className="page-head">
-        <h1>
-          Needs you {total > 0 && <span className="badge hot">{total}</span>}
-        </h1>
+    <div className="page page-inbox">
+      <div className="page-head"><div><h1>Inbox <span className="inbox-total">{inbox.data?.counts.all ?? "—"}</span></h1><p className="muted">Decisions and actions that help Hive move forward.</p></div></div>
+      <div className="inbox-toolbar">
+        <label className="inbox-search"><IconSearch size={18} /><input aria-label="Search inbox" type="search" placeholder="Search inbox" value={query} onChange={event => { setQuery(event.target.value); resetPage(); }} /></label>
+        <label className="inbox-scope"><span>Assigned to</span><select aria-label="Inbox ownership" value={scope} onChange={event => { setScope(event.target.value as InboxScope); resetPage(); }}><option value="all">Everyone</option><option value="yours">You</option><option value="others">Others</option></select></label>
       </div>
-      <p className="muted">
-        Open questions and human-only todos across every project — answer or clear them here.
-      </p>
-
-      {overview.data && total === 0 && (
-        <p className="muted needs-empty">Nothing needs you right now — the hive is unblocked.</p>
-      )}
-
-      {questions.length > 0 && (
-        <section className="needs-section">
-          <h2 className="col-title">
-            questions <span className="col-count">{questions.length}</span>
-          </h2>
-          {questions.map((q) => (
-            <QuestionItem key={q.id} q={q} onAnswered={refreshAll} />
-          ))}
-        </section>
-      )}
-
-      {yourTodos.length > 0 && (
-        <section className="needs-section">
-          <h2 className="col-title">
-            your todos <span className="col-count">{yourTodos.length}</span>
-          </h2>
-          {yourTodos.map((t) => (
-            <TodoItem
-              key={t.id}
-              todo={t}
-              scope={scopeName(t.project_id)}
-              assignee={t.assignee_user_id && t.assignee_user_id !== myId ? assigneeName(t) : undefined}
-              canComplete={canComplete(t)}
-              onDone={refreshAll}
-            />
-          ))}
-        </section>
-      )}
-
-      {otherTodos.length > 0 && (
-        <section className="needs-section">
-          <h2 className="col-title">
-            waiting on others <span className="col-count">{otherTodos.length}</span>
-          </h2>
-          <p className="muted">
-            Assigned to whoever owns the machine or license involved — only they can act.
-          </p>
-          {otherTodos.map((t) => (
-            <TodoItem
-              key={t.id}
-              todo={t}
-              scope={scopeName(t.project_id)}
-              assignee={assigneeName(t)}
-              canComplete={canComplete(t)}
-              onDone={refreshAll}
-            />
-          ))}
-        </section>
-      )}
-
-      {hidden > 0 && (
-        <p className="muted needs-more">
-          +{hidden} more not shown — clear a few above and the rest will surface.
-        </p>
-      )}
-
-      {offers.length > 0 && (
-        <section className="needs-section">
-          <h2 className="col-title">
-            hive offers <span className="col-count">{offers.length}</span>
-          </h2>
-          <p className="muted">
-            Things Hive can do autonomously but is not allowed to yet — accept from the
-            project, or turn on auto testing with a daily budget and it handles them itself.
-          </p>
-          {offers.map((offer) => (
-            <Link key={offer.workstream_id} to={`/p/${offer.project_id}`} className="offer-row">
-              <span className={`chip chip-health-${offer.state}`}>{offer.state}</span>
-              <span className="offer-project">{offer.project_name}</span>
-              <span className="offer-text">
-                {offer.summary} {offer.offer}
-              </span>
-            </Link>
-          ))}
-        </section>
-      )}
-
-      {doneTodos.length > 0 && (
-        <details className="answered-fold needs-done">
-          <summary>{doneTodos.length} done</summary>
-          {doneTodos.map((t) => (
-            <div key={t.id} className="answered-row">
-              <span>{t.title}</span>
-              {t.resolved_reason && (
-                <span className="muted needs-resolved">auto: {t.resolved_reason}</span>
-              )}
-              <span className="muted">{ago(t.done_at)}</span>
-            </div>
-          ))}
-        </details>
-      )}
+      <div className="inbox-filters" role="group" aria-label="Filter inbox by kind">{(Object.keys(LABELS) as InboxKind[]).map(value => <button key={value} className={kind === value ? "inbox-filter active" : "inbox-filter"} aria-pressed={kind === value} onClick={() => { setKind(value); resetPage(); }}>{LABELS[value]}<span>{inbox.data?.counts[value] ?? "—"}</span></button>)}</div>
+      {inbox.failed && <div className="inbox-error" role="alert"><span>Inbox could not be refreshed. {inbox.data ? "These items may be out of date." : "Check the chief connection and retry."}</span><button className="ghost" onClick={inbox.refresh}>Retry</button></div>}
+      {!inbox.data && !inbox.failed && <p className="inbox-loading" role="status">Loading inbox…</p>}
+      {inbox.data && !inbox.failed && total === 0 && <div className="inbox-empty"><IconInbox size={32} /><h2>{kind === "all" && scope === "all" && !query ? "You're all caught up" : "No matching items"}</h2><p>{kind === "all" && scope === "all" && !query ? "There are no open questions, approvals, blocked plan items or human tasks." : "Try another filter or search."}</p></div>}
+      {inbox.data && total > 0 && <>
+        <div className="inbox-workspace">
+          <section className="inbox-list" aria-label="Inbox items">{inbox.data.items.map(item => <button key={item.id} className={selected?.id === item.id ? "inbox-row selected" : "inbox-row"} aria-pressed={selected?.id === item.id} onClick={() => setSelectedId(item.id)}>
+            <span className="inbox-row-top"><span className={`inbox-kind inbox-kind-${item.kind}`}>{SINGULAR[item.kind]}</span><span>{ago(item.created_at)}</span></span>
+            <strong>{item.title}</strong><span className="inbox-row-scope">{item.project_name}{item.waiting_on_other ? ` · Waiting on ${item.assignee_name ? `@${item.assignee_name}` : "admin"}` : ""}</span>
+          </button>)}</section>
+          {selected && <ItemDetail key={selected.id} item={selected} stale={inbox.failed} onResolved={refresh} />}
+          {!selected && <div className="inbox-empty"><p>No items on this page. Return to the previous page.</p></div>}
+        </div>
+        <div className="inbox-pagination"><span>{inbox.data.items.length ? offset + 1 : 0}–{Math.min(offset + inbox.data.items.length, total)} of {total} items</span><div><button className="ghost" aria-label="Previous inbox page" disabled={offset === 0} onClick={() => { setOffset(Math.max(0, offset - PAGE_SIZE)); setSelectedId(""); }}><IconChevronLeft size={17} />Previous</button><button className="ghost" aria-label="Next inbox page" disabled={offset + PAGE_SIZE >= total} onClick={() => { setOffset(offset + PAGE_SIZE); setSelectedId(""); }}>Next<IconChevronRight size={17} /></button></div></div>
+      </>}
     </div>
   );
 }

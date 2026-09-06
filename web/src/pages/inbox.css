@@ -1,0 +1,63 @@
+.page-inbox { max-width: 1500px; }
+.page-inbox .page-head h1 { display: flex; align-items: center; gap: 10px; }
+.inbox-total { color: #64748b; background: #e8edf2; font-size: 14px; padding: 3px 8px; border-radius: 6px; }
+.inbox-toolbar { display: flex; align-items: center; gap: 18px; margin: 22px 0 16px; }
+.inbox-search { display: flex; align-items: center; gap: 8px; border: 1px solid #d9dee7; border-radius: 7px; background: #fff; color: #64748b; padding: 0 12px; width: min(420px, 100%); }
+.inbox-search input { border: none; background: transparent; padding: 11px 0; box-shadow: none; min-width: 0; width: 100%; }
+.inbox-search:focus-within { outline: 2px solid #2563eb; outline-offset: 2px; }
+.inbox-search input:focus { outline: none; box-shadow: none; }
+.inbox-scope { display: flex; align-items: center; gap: 10px; color: #64748b; font-size: 13px; white-space: nowrap; }
+.inbox-scope select { min-width: 130px; }
+.inbox-filters { display: flex; flex-wrap: wrap; gap: 5px; border-bottom: 1px solid #dfe4eb; padding-bottom: 12px; margin-bottom: 18px; }
+.inbox-filters .inbox-filter { border: none; background: transparent; box-shadow: none; border-radius: 6px; color: #5e6b7c; font-weight: 500; padding: 8px 11px; gap: 9px; display: inline-flex; align-items: center; }
+.inbox-filter span { font-size: 11px; background: #e9edf3; padding: 1px 5px; border-radius: 4px; }
+.inbox-filters .inbox-filter.active { color: #2255bd; background: #e8effe; }
+.inbox-workspace { display: grid; grid-template-columns: minmax(260px, 38%) minmax(0, 1fr); background: white; border: 1px solid #dfe4eb; border-radius: 9px; overflow: hidden; align-items: start; height: clamp(420px, calc(100dvh - 310px), 760px); }
+.inbox-list { border-right: 1px solid #dfe4eb; align-self: stretch; height: 100%; overflow-y: auto; min-height: 0; }
+.inbox-list .inbox-row { display: flex; flex-direction: column; align-items: stretch; text-align: left; gap: 8px; width: 100%; padding: 17px 18px; border: none; border-bottom: 1px solid #e9edf2; border-radius: 0; background: white; color: #1e293b; box-shadow: none; font-weight: 400; }
+.inbox-list .inbox-row:last-child { border-bottom: 0; }
+.inbox-list .inbox-row:hover { background: #f6f8fc; }
+.inbox-list .inbox-row.selected { background: #eef4ff; box-shadow: inset 3px 0 #2563eb; }
+.inbox-row strong { font-size: 14px; font-weight: 600; line-height: 1.45; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.inbox-row-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 11px; color: #6b778a; }
+.inbox-kind { display: inline-flex; width: fit-content; font-size: 11px; font-weight: 600; color: #4d5d76; background: #edf1f6; border-radius: 4px; padding: 3px 6px; }
+.inbox-kind-approval { background: #e8f0ff; color: #2759b1; }
+.inbox-kind-blocked { background: #fff0e8; color: #a74621; }
+.inbox-kind-question { background: #f0ebfc; color: #6c4a9e; }
+.inbox-row-scope { color: #657286; font-size: 12px; }
+.inbox-detail { padding: 26px 30px 30px; min-width: 0; height: 100%; overflow-y: auto; box-sizing: border-box; }
+.inbox-detail-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.inbox-detail h2 { font-size: 21px; line-height: 1.4; font-weight: 600; margin: 20px 0 8px; overflow-wrap: anywhere; }
+.inbox-detail-context { display: flex; flex-wrap: wrap; gap: 15px; font-size: 13px; color: #68758a; }
+.inbox-detail-context a { color: #3866af; }
+.inbox-detail-body { margin: 24px 0; line-height: 1.7; overflow-wrap: anywhere; }
+.inbox-detail-body pre { overflow: auto; max-width: 100%; }
+.inbox-meta { color: #68758a; font-size: 12px; line-height: 1.6; }
+.inbox-owner-note { background: #f4f6f9; padding: 11px 13px; border-radius: 6px; font-size: 13px; color: #536074; margin: 20px 0; }
+.inbox-answer { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; margin-top: 26px; }
+.inbox-answer label { color: #3e4b5f; font-size: 13px; font-weight: 600; }
+.inbox-answer textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 100px; }
+.inbox-detail button, .inbox-pagination button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+.inbox-detail-actions { border-top: 1px solid #e9edf2; margin-top: 25px; padding-top: 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 17px; }
+.inbox-context-link { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #456ba9; }
+.inbox-plan-review { margin: 20px 0; }
+.inbox-plan-review ol { margin: 0; padding-left: 23px; }
+.inbox-plan-review li { padding: 10px 0; font-size: 13px; line-height: 1.6; }
+.inbox-plan-review li p { margin: 5px 0; }
+.inbox-pagination { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 18px 2px; color: #6b778a; font-size: 12px; }
+.inbox-pagination > div { display: flex; gap: 7px; }
+.inbox-empty { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 65px 20px; color: #64748b; border: 1px solid #dfe4eb; border-radius: 9px; background: white; }
+.inbox-empty h2 { font-size: 18px; color: #334155; margin: 18px 0 5px; }
+.inbox-empty p { font-size: 13px; line-height: 1.6; max-width: 460px; }
+.inbox-error { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 14px 18px; background: #fff4e9; color: #8c501f; border: 1px solid #f0dbc4; border-radius: 7px; margin-bottom: 15px; font-size: 13px; }
+.inbox-loading { padding: 35px 0; color: #64748b; }
+@media (max-width: 760px) {
+  .inbox-toolbar { flex-wrap: wrap; gap: 10px; }
+  .inbox-search { width: 100%; }
+  .inbox-workspace { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .inbox-list { height: auto; border-right: 0; border-bottom: 1px solid #dfe4eb; max-height: 330px; overflow-y: auto; }
+  .inbox-detail { padding: 20px; height: auto; overflow: visible; }
+  .inbox-filters { gap: 2px; }
+  .inbox-filters .inbox-filter { padding: 7px 8px; font-size: 12px; }
+  .inbox-pagination { align-items: flex-start; }
+}
