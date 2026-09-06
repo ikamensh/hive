@@ -13,7 +13,7 @@ const VALIDATION_LABEL: Record<RecentDelivery["validation"]["status"], string> =
 };
 
 function DeliveryRow({ delivery }: { delivery: RecentDelivery }) {
-  const evidenceUrl = `/p/${encodeURIComponent(delivery.project_id)}?plan=${encodeURIComponent(delivery.plan_id)}&item=${encodeURIComponent(delivery.work_item_id)}`;
+  const evidenceUrl = `/p/${encodeURIComponent(delivery.project_id)}?plan=${encodeURIComponent(delivery.plan_id)}&item=${encodeURIComponent(delivery.work_item_id)}&evidence=1`;
   return <article className="results-delivery" aria-label={delivery.title}>
     <div className="results-work">
       <span className="results-commit-icon" aria-hidden><IconGitCommit size={21} /></span>

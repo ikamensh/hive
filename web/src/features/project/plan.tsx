@@ -303,16 +303,19 @@ export function PlanPanel({
   payload,
   onChanged,
   selectedItemId = "",
+  showEvidence = false,
 }: {
   project: Project;
   payload: PlanPayload | null | undefined;
   onChanged: (planId?: string) => void;
   selectedItemId?: string;
+  showEvidence?: boolean;
 }) {
   const projectId = project.id;
   const [expandedId, setExpandedId] = useState(selectedItemId);
   useEffect(() => { if (selectedItemId) setExpandedId(selectedItemId); }, [selectedItemId]);
-  const [view, setView] = useState<"items" | "results" | null>(null);
+  const [view, setView] = useState<"items" | "results" | null>(showEvidence ? "results" : null);
+  useEffect(() => { setView(showEvidence ? "results" : null); }, [showEvidence, selectedItemId]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -391,7 +394,7 @@ export function PlanPanel({
       </nav>
       {!ended && <PlanValidation project={project} onChanged={onChanged} />}
       {!ended && !reviewing && <PlanReadiness plan={plan} project={project} onChanged={onChanged} onReviewItems={() => setView("items")} />}
-      {showResults ? <PlanResults key={plan.id} planId={plan.id} /> : <>
+      {showResults ? <PlanResults key={plan.id} planId={plan.id} selectedItemId={selectedItemId} /> : <>
       <div className="plan-items" id="plan-items">
         {items.map((item, position) => {
           const previous = items[position - 1];

@@ -406,6 +406,7 @@ export default function ProjectPage() {
                         payload={selectedPlanId ? selectedPlan.data : data.plan}
                         onChanged={refreshAll}
                         selectedItemId={searchParams.get("item") ?? ""}
+                        showEvidence={searchParams.get("evidence") === "1"}
                       />
                     )}
                   </>

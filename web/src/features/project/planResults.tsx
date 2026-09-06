@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { api, usePoll } from "../../api";
 import { Markdown } from "../../components/shared";
 import type { PlanResult } from "../../types";
@@ -23,8 +24,16 @@ function commitUrl(repo: string, sha: string): string | undefined {
   return `https://github.com/${match[1]}/${match[2].replace(/\.git$/, "")}/commit/${sha}`;
 }
 
-export function PlanResults({ planId }: { planId: string }) {
+export function PlanResults({ planId, selectedItemId = "" }: { planId: string; selectedItemId?: string }) {
   const { data, error, failed, refresh } = usePoll(() => api.planResult(planId), [planId]);
+  const selected = useRef<HTMLDetailsElement>(null);
+  const hasSelectedItem = !!data?.items.some(item => item.id === selectedItemId);
+  useEffect(() => {
+    if (!selected.current) return;
+    selected.current.open = true;
+    selected.current.querySelector("summary")?.focus({ preventScroll: true });
+    selected.current.scrollIntoView({ block: "start" });
+  }, [planId, selectedItemId, hasSelectedItem]);
   return (
     <section className="plan-results" aria-label="Execution results">
       {failed && <p role="alert" className="form-error">Could not refresh results: {String(error)}.
@@ -49,7 +58,7 @@ export function PlanResults({ planId }: { planId: string }) {
         {data.items.map(item => {
           const url = commitUrl(item.repo, item.merged_commit_sha);
           return (
-            <details className="result-item" key={item.id}>
+            <details className="result-item" key={item.id} ref={item.id === selectedItemId ? selected : undefined}>
               <summary><span>{item.title}</span><span className={`chip chip-plan-${item.status}`}>
                 {item.status === "done" ? "landed" : item.status.replaceAll("_", " ")}
               </span></summary>
