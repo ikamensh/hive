@@ -229,9 +229,10 @@ def build_parser() -> argparse.ArgumentParser:
         "planning wakes).",
     )
     p.add_argument("project_id")
-    p.add_argument("-m", "--message", default="", help="answer or correct the scout")
-    p.add_argument("--proceed", action="store_true", help="proceed with the scout's assumptions")
-    p.add_argument("--approve", action="store_true", help="approve the brief; finalize and go")
+    action = p.add_mutually_exclusive_group()
+    action.add_argument("-m", "--message", default="", help="answer or correct the scout")
+    action.add_argument("--proceed", action="store_true", help="proceed with the scout's assumptions")
+    action.add_argument("--approve", action="store_true", help="approve the brief; finalize and go")
     p.add_argument("--backend", default="", help="pin the scout backend when (re)starting intake")
 
     p = sub.add_parser("project", help="project glance: state + reason, plan, questions, recent tasks")

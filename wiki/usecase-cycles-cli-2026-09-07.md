@@ -42,3 +42,21 @@ deployments, live project mutations, or user inputs were needed.
 - Self-review: one project listing per scoped command is a deliberate small
   cost for unambiguous resolution. The previous route-recording tests now
   assert writes without coupling their expectations to lookup implementation.
+
+## Cycle 3 — Correct an intake brief while accidentally passing approval flags
+
+- Scenario: a scout proposes SQLite; the operator sends
+  `hive intake demo -m 'Use PostgreSQL instead' --proceed`.
+- Initial reproduction: through the actual CLI/app/runner protocol, the
+  result task had `conversation_turn=proceed` and its instructions did **not**
+  contain the PostgreSQL correction. Combining approval and message flags
+  silently selected one action.
+- Regression first: three tests exercised every pair of conflicting actions.
+  They failed because the CLI attempted API actions instead of rejecting the
+  conflicting command.
+- Fix: argparse makes `-m`, `--proceed`, and `--approve` mutually exclusive.
+- Verified: all conflicts exit 2 with argparse's conflicting-argument error
+  and leave conversations/tasks empty. Existing single-action intake and
+  project creation workflows also pass (`5 passed` in the focused run).
+- Self-review: enforcement lives in the public command grammar; no new
+  server state or action precedence is needed.

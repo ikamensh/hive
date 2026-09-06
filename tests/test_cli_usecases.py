@@ -48,3 +48,21 @@ def test_id_shaped_project_name_resolves_for_read_and_write(harness):
     assert cli(client, "project", project["name"])["project"]["id"] == project["id"]
     cli(client, "set", project["name"], "--paused", "true")
     assert cli(client, "project", project["id"])["project"]["paused"] is True
+
+
+@pytest.mark.parametrize("actions", [
+    ["-m", "Use PostgreSQL instead", "--proceed"],
+    ["-m", "Use PostgreSQL instead", "--approve"],
+    ["--proceed", "--approve"],
+])
+def test_conflicting_intake_actions_cannot_start_or_advance_work(harness, actions, capsys):
+    """A correction must never be silently discarded in favor of an approval flag."""
+    client, _ = harness
+    project = client.post("/api/projects", json={"name": "demo"}).raise_for_status().json()
+    with pytest.raises(SystemExit) as error:
+        cli(client, "intake", project["id"], *actions)
+    assert error.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
+    detail = cli(client, "project", project["id"])
+    assert detail["conversations"] == []
+    assert detail["tasks"] == []
