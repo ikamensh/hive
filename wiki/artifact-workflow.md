@@ -85,6 +85,7 @@ on Markdown headings as field delimiters. The authoritative schema is
 hive plan-check plan.toml
 hive plan-import PROJECT plan.toml --validate 'make check'
 hive plan PROJECT
+hive plan-ready PLAN_ID
 hive plan-approve PROJECT
 ```
 
@@ -95,6 +96,18 @@ work is feasible. A submission must contain at least one item. Add
 Existing project settings are preserved unless options such as `--validate` or
 `--prefer` explicitly change them. Agent selection, session allowances, and
 budgets remain project policy configured with `hive set`.
+
+`plan-ready PLAN_ID` reads the chief's current execution prerequisites without
+starting a task or contacting GitHub. It uses dispatch's concrete model selection,
+included-only policy, session allowances, runner capabilities, quota windows and
+retry checkout affinity. Busy runners and conflicting repository work appear as
+waiting. The web shows these checks beside approval, with direct repair links.
+Use `--json` for `plan_id`, `revision`, `observed_at`, `ready` and individual checks.
+`ready` means no observed blocker in this snapshot. It does not reserve a runner,
+fund the entire build/review cycle, prove repository access, or guarantee success.
+An automatic reviewer follows the eventual builder choice; current review tasks
+retain their selected agent and validation settings. Changes to validation apply
+to newly queued reviews. Approval remains available while work waits for capacity.
 
 When the operator has authorized execution of this revision, use
 `hive plan-import PROJECT plan.toml --start` to submit and approve together.

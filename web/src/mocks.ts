@@ -20,6 +20,7 @@ import type {
   PlanItemPatch,
   PlanPayload,
   PlanResult,
+  PlanReadiness,
   Project,
   ProjectCreate,
   ProjectDetail,
@@ -1216,14 +1217,25 @@ export const api = {
         created_at: t.created_at,
       }));
 
+    const planSummaries: Record<string, Overview["projects"][number]["plan"]> = {};
+    for (const project of projects) {
+      const payload = planPayload(project.id);
+      if (!payload) continue;
+      const result = await api.planResult(payload.plan.id);
+      planSummaries[project.id] = {
+        id: result.plan_id, goal: result.goal, status: result.status,
+        outcome: result.outcome, counts: result.counts,
+      };
+    }
+
     return structuredClone({
       paused: fleetPaused,
       projects: [
-        { id: "p-relay", name: "relay", spec_repo: "git@github.com:acme/relay.git", state: "working", state_reason: "1 task(s) running: resolve on claude", paused: false, created_at: now - 86400 * 5, daily_budget_usd: 40, spend_today: 8.2, counts: { running: 1, questions: 0, blockers: 0 } },
-        { id: "p-atlas", name: "atlas", spec_repo: "git@github.com:acme/atlas-spec.git", state: "needs_attention", state_reason: "needs you: 1 question(s) to answer; 1 issue(s) blocked on your call (#41)", paused: false, created_at: now - 86400 * 9, daily_budget_usd: 25, spend_today: 3.1, counts: { running: 0, questions: 1, blockers: 1 } },
-        { id: "p-probe", name: "probe", spec_repo: "git@github.com:acme/probe.git", state: "blocked_resources", state_reason: "waiting for capacity: no online machine offers codex — wake or log in a machine on the machines page", paused: false, created_at: now - 86400 * 2, daily_budget_usd: 15, spend_today: 0, counts: { running: 0, questions: 0, blockers: 0 } },
-        { id: "p-beacon", name: "beacon", spec_repo: "git@github.com:acme/beacon.git", state: "needs_attention", state_reason: "needs you: 1 question(s) to answer", paused: false, created_at: now - 86400, daily_budget_usd: 0, spend_today: 1.4, counts: { running: 0, questions: 1, blockers: 0 } },
-        { id: "p-ledger", name: "ledger", spec_repo: "git@github.com:acme/ledger-spec.git", state: "idle_goal_complete", state_reason: "iteration complete — read the completion note and set the next goal", paused: false, created_at: now - 86400 * 20, daily_budget_usd: 0, spend_today: 0, counts: { running: 0, questions: 0, blockers: 0 } },
+        { id: "p-relay", plan: planSummaries["p-relay"] ?? null, name: "relay", spec_repo: "git@github.com:acme/relay.git", state: "working", state_reason: "1 task(s) running: resolve on claude", paused: false, created_at: now - 86400 * 5, daily_budget_usd: 40, spend_today: 8.2, counts: { running: 1, questions: 0, blockers: 0 } },
+        { id: "p-atlas", plan: planSummaries["p-atlas"] ?? null, name: "atlas", spec_repo: "git@github.com:acme/atlas-spec.git", state: "needs_attention", state_reason: "needs you: 1 question(s) to answer; 1 issue(s) blocked on your call (#41)", paused: false, created_at: now - 86400 * 9, daily_budget_usd: 25, spend_today: 3.1, counts: { running: 0, questions: 1, blockers: 1 } },
+        { id: "p-probe", plan: planSummaries["p-probe"] ?? null, name: "probe", spec_repo: "git@github.com:acme/probe.git", state: "blocked_resources", state_reason: "waiting for capacity: no online machine offers codex — wake or log in a machine on the machines page", paused: false, created_at: now - 86400 * 2, daily_budget_usd: 15, spend_today: 0, counts: { running: 0, questions: 0, blockers: 0 } },
+        { id: "p-beacon", plan: planSummaries["p-beacon"] ?? null, name: "beacon", spec_repo: "git@github.com:acme/beacon.git", state: "needs_attention", state_reason: "needs you: 1 question(s) to answer", paused: false, created_at: now - 86400, daily_budget_usd: 0, spend_today: 1.4, counts: { running: 0, questions: 1, blockers: 0 } },
+        { id: "p-ledger", plan: planSummaries["p-ledger"] ?? null, name: "ledger", spec_repo: "git@github.com:acme/ledger-spec.git", state: "idle_goal_complete", state_reason: "iteration complete — read the completion note and set the next goal", paused: false, created_at: now - 86400 * 20, daily_budget_usd: 0, spend_today: 0, counts: { running: 0, questions: 0, blockers: 0 } },
       ],
       capacity: {
         machines_total: 2,
@@ -1585,6 +1597,12 @@ export const api = {
   },
   planDocument: async (_planId: string): Promise<string> => {
     throw new Error("Plan export needs a running chief.");
+  },
+  planReadiness: async (planId: string): Promise<PlanReadiness> => {
+    const { plan } = await api.getPlan(planId);
+    return { plan_id: planId, revision: plan.revision ?? 1, observed_at: Date.now() / 1000,
+      ready: false, checks: [{ key: "mock", label: "Preview mode", status: "info",
+        detail: "Connect to a chief to check real execution capacity.", action: "" }] };
   },
   planResult: async (planId: string): Promise<PlanResult> => {
     const { plan, items } = await api.getPlan(planId);

@@ -392,6 +392,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--submitted", action="store_true", help="export the original submitted bytes")
     p.add_argument("--output", "-o", default="-", help="output file (default: stdout)")
 
+    p = sub.add_parser("plan-ready", help="check a plan's execution settings and observed agent capacity")
+    p.add_argument("plan_id")
+    p.add_argument("--json", action="store_true", help="raw readiness snapshot")
+
     p = sub.add_parser("plan-result", help="export execution outcomes and verification results as JSON")
     p.add_argument("plan_id")
     p.add_argument("--output", "-o", default="-", help="output file (default: stdout)")
@@ -1059,6 +1063,16 @@ def format_plan(payload: dict, *, command_prefix: str = "hive") -> str:
     return "\n".join(lines)
 
 
+def format_readiness(payload: dict) -> str:
+    """Explain current blockers without promising successful execution."""
+    lines = [f"EXECUTION READINESS · {payload['plan_id']}"]
+    for check in payload["checks"]:
+        lines.append(f"  [{check['status'].upper()}] {check['label']}: {check['detail']}")
+    lines += ["", "Current capacity and settings only; checks do not reserve a runner or guarantee completion.",
+              "Repository access and validation are proven during execution."]
+    return "\n".join(lines)
+
+
 def format_stories(report: dict) -> str:
     """Readable coverage view: per testing workstream the health verdict and
     one glyphed row per story."""
@@ -1626,6 +1640,8 @@ def run(args: argparse.Namespace, client) -> dict | list:
         source = sys.stdin.read() if args.file == "-" else Path(args.file).read_bytes().decode("utf-8")
         document = PlanDocument.model_validate(parse_plan_document(source))
         return {"valid": True, "document": document.model_dump()}
+    if c == "plan-ready":
+        return client.get(f"/api/plans/{args.plan_id}/readiness").raise_for_status().json()
     if c in ("plan-export", "plan-result"):
         endpoint = ("input" if args.submitted else "document") if c == "plan-export" else "result"
         suffix = f"?revision={args.revision}" if c == "plan-export" and args.revision is not None else ""
@@ -2152,6 +2168,8 @@ def main(argv: list[str] | None = None) -> None:
                 print(format_inbox(payload))
             elif args.command in ("plan", "plan-import") and not args.json:
                 print(format_plan(payload, command_prefix="hive --local" if args.local_target else "hive"))
+            elif args.command == "plan-ready" and not args.json:
+                print(format_readiness(payload))
             elif args.command == "stories" and not args.json:
                 print(format_stories(payload))
             else:

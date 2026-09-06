@@ -1135,6 +1135,13 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         plan = require_plan(plan_id, ctx)
         return plan_payload(require_project(plan.project_id, ctx), plan)
 
+    @app.get("/api/plans/{plan_id}/readiness")
+    @plans.synchronized
+    def get_plan_readiness(plan_id: str, ctx: AuthContext = Depends(current)):
+        from hive._workstreams.plan_readiness import readiness
+        plan = require_plan(plan_id, ctx)
+        return readiness(store, supervisor, config, require_project(plan.project_id, ctx), plan)
+
     @app.get("/api/plans/{plan_id}/document", response_class=PlainTextResponse)
     @plans.synchronized
     def get_plan_document(plan_id: str, revision: int | None = None,

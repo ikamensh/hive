@@ -280,6 +280,21 @@ export interface PlanPayload {
   items: PlanItem[];
 }
 
+/** Observed execution prerequisites; no reservations or validation evidence. */
+export interface PlanReadiness {
+  plan_id: string;
+  revision: number;
+  observed_at: number;
+  ready: boolean;
+  checks: {
+    key: string;
+    label: string;
+    status: "ready" | "blocked" | "waiting" | "info";
+    detail: string;
+    action: "" | "resources" | "settings" | "resume_project" | "resume_fleet" | "items";
+  }[];
+}
+
 /** Read-only execution evidence from /api/plans/:id/result. */
 export interface PlanResult {
   schema_version: number;

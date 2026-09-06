@@ -310,8 +310,17 @@ hive subs | hive todos | hive org-context
 
 `web/` is the chief SPA (React + Vite + TypeScript). Create a project with a
 repository and optional validation command, then upload or paste a plan on its
-page. Review the accepted items and choose **Approve all & start**. The plan
-stays at the top of the page, alongside decisions that need you.
+page. Review the accepted items and choose **Approve all & queue**. The plan
+stays at the top of the page, alongside decisions that need you. Home shows each
+project's current plan goal and separate landed, cancelled and remaining counts;
+fleet diagnostics are in a disclosure below the work.
+
+**Execution readiness** checks current builder/reviewer capacity, model quotas,
+allowances, pause and budget before approval. Resume a paused project inline or
+follow the link to fix its agents/settings. Approval queues work even when it
+must wait. The same observation is available as `hive plan-ready PLAN_ID`
+(`--json` for automation). This preview does not reserve capacity or prove
+repository permissions, validation success, or feasibility.
 
 **Results & evidence** shows delivered and cancelled items, review reports,
 validation output and checked/landed commits. Download the full result JSON or

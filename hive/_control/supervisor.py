@@ -65,13 +65,40 @@ def effective_capabilities(task: Task, project: Project) -> list[str]:
     return sorted(set(task.required_capabilities) | set(project.required_capabilities))
 
 
+def agent_problem(project: Project, task: Task, agent: AgentPreference, left: list[int | None]) -> str:
+    if project.included_only and not included_model(agent.backend, agent.model):
+        return "excluded by included-only policy"
+    if not allowances.exempt(task) and not allowances.admits(
+        project.agent_grants, left, agent.backend, agent.model
+    ):
+        return "session allowance exhausted or not granted"
+    return ""
+
+
 def agent_admitted(project: Project, task: Task, agent: AgentPreference, left: list[int | None]) -> bool:
-    return (
-        (not project.included_only or included_model(agent.backend, agent.model))
-        and (allowances.exempt(task) or allowances.admits(
-            project.agent_grants, left, agent.backend, agent.model
-        ))
-    )
+    return not agent_problem(project, task, agent, left)
+
+
+def runner_problem(project: Project, task: Task, agent: AgentPreference,
+                   runner: Runner, resource: Resource | None) -> str:
+    """Shared eligibility for dispatch and readiness; occupancy is checked separately."""
+    if not runner.online():
+        return "offline"
+    if task.resume_runner_id and runner.id != task.resume_runner_id:
+        return f"unfinished checkout belongs to {task.resume_runner_id}"
+    if agent.backend not in runner.backends or resource is None:
+        return "backend unavailable"
+    if not resource.enabled:
+        return "disabled"
+    if resource.usability_status != "usable":
+        return (f"runtime repair required for {resource.runtime_blocked_model}"
+                if resource.runtime_blocked_model else str(resource.usability_status))
+    if not resource.available(agent.model):
+        return "quota exhausted"
+    missing = sorted(set(effective_capabilities(task, project)) - set(resource.capabilities))
+    if missing:
+        return f"missing {', '.join(missing)}"
+    return ""
 
 
 def has_capacity(
@@ -80,7 +107,7 @@ def has_capacity(
     return any(set(capabilities) <= offered for offered in capacity.get(backend, []))
 
 
-def _serializes_repo(task: Task) -> bool:
+def serializes_repo(task: Task) -> bool:
     return task.kind not in PARALLEL_REPO_TASKS
 
 
@@ -743,9 +770,7 @@ class Supervisor:
                 continue
             ready = [agent for agent in agent_candidates(project, task) if any(
                 r.backend == agent.backend and r.runner_id in online
-                and agent.backend in online[r.runner_id].backends
-                and (not task.resume_runner_id or task.resume_runner_id == r.runner_id)
-                and r.available(agent.model) and r.supports(effective_capabilities(task, project))
+                and not runner_problem(project, task, agent, online[r.runner_id], r)
                 for r in resources
             )]
             if not ready:
@@ -775,7 +800,7 @@ class Supervisor:
         running = self.store.list(
             Task, workspace_id=self.workspace_id, status=TaskStatus.running
         )
-        busy_repos = {t.repo for t in running if _serializes_repo(t)}
+        busy_repos = {t.repo for t in running if serializes_repo(t)}
         busy_runners = {t.runner_id for t in running if t.runner_id}
         runners = [r for r in self.store.list(Runner, workspace_id=self.workspace_id) if r.online()]
         resources = {
@@ -791,17 +816,13 @@ class Supervisor:
         for task in tasks:
             if task.status != TaskStatus.pending:
                 continue
-            if _serializes_repo(task) and task.repo in busy_repos:
+            if serializes_repo(task) and task.repo in busy_repos:
                 continue
-            required = effective_capabilities(task, project)
             assigned = False
             skipped: list[str] = []
             for candidate in agent_candidates(project, task):
                 label = f"{candidate.backend}={candidate.model or 'default'}"
-                if not agent_admitted(project, task, candidate, grant_left):
-                    reason = ("excluded by included-only policy" if project.included_only
-                              and not included_model(candidate.backend, candidate.model)
-                              else "session allowance exhausted or not granted")
+                if reason := agent_problem(project, task, candidate, grant_left):
                     skipped.append(f"{label}: {reason}")
                     continue
                 problems: list[str] = []
@@ -817,24 +838,13 @@ class Supervisor:
                         problems.append(f"{runner.name}: busy")
                         continue
                     resource = resources.get((runner.id, candidate.backend))
-                    if candidate.backend not in runner.backends or resource is None:
-                        problems.append(f"{runner.name}: backend unavailable")
-                    elif not resource.enabled:
-                        problems.append(f"{runner.name}: disabled")
-                    elif resource.usability_status != "usable":
-                        reason = (f"runtime repair required for {resource.runtime_blocked_model}"
-                                  if resource.runtime_blocked_model else str(resource.usability_status))
-                        problems.append(f"{runner.name}: {reason}")
-                    elif not resource.available(candidate.model):
-                        problems.append(f"{runner.name}: quota exhausted")
-                    elif not resource.supports(required):
-                        missing = sorted(set(required) - set(resource.capabilities))
-                        problems.append(f"{runner.name}: missing {', '.join(missing)}")
+                    if problem := runner_problem(project, task, candidate, runner, resource):
+                        problems.append(f"{runner.name}: {problem}")
                     else:
                         reason = "; ".join([f"selected {label}", *skipped])
                         if self._claim(task.id, runner, candidate, reason):
                             busy_runners.add(runner.id)
-                            if _serializes_repo(task):
+                            if serializes_repo(task):
                                 busy_repos.add(task.repo)
                             if grants and not allowances.exempt(task):
                                 allowances.consume(grants, grant_left, candidate.backend, candidate.model)

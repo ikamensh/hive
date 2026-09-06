@@ -34,7 +34,7 @@ export function PlanResults({ planId }: { planId: string }) {
       {data && <>
         <header className="result-head">
           <div>
-            <h3>{OUTCOMES[data.outcome]}</h3>
+            <h3>{data.outcome === "partial" && data.counts.done === 0 ? "No items delivered" : OUTCOMES[data.outcome]}</h3>
             <p>{data.terminal ? "Execution has ended." : "Execution has not ended."} Assess the goal against the delivered work below.</p>
           </div>
           <button type="button" className="ghost" onClick={() => downloadText(

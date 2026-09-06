@@ -35,7 +35,11 @@ const item = {
 
 async function setup(page, initial = null) {
   const state = { payload: initial, requests: [], rejectSubmit: false, result: null, failResult: false,
-    project: { ...project }, projectPlan: null, failWiring: false };
+    project: { ...project }, projectPlan: null, failWiring: false, failReadiness: false,
+    readiness: { plan_id: plan.id, revision: 1, observed_at: 1, ready: true, checks: [
+      { key: "build", label: "Build capacity", status: "ready", detail: "claude on laptop", action: "" },
+      { key: "review", label: "Review capacity", status: "ready", detail: "codex on laptop", action: "" },
+    ] } };
   await page.route("**/api/**", async route => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -72,6 +76,8 @@ async function setup(page, initial = null) {
       return route.fulfill({ json: { ...state.payload, notes: [] } });
     }
     if (path === "/api/plans/csv-plan") return route.fulfill({ json: state.payload });
+    if (path === "/api/plans/csv-plan/readiness") return route.fulfill(state.failReadiness
+      ? { status: 503, json: { detail: "Chief unavailable" } } : { json: state.readiness });
     if (path === "/api/plans/csv-plan/result") return route.fulfill(state.failResult
       ? { status: 503, json: { detail: "Chief unavailable" } } : { json: state.result });
     if (path === "/api/plans/csv-plan/document") return route.fulfill({ contentType: "text/plain", body: 'version = 1\nplan_id = "csv-plan"\nrevision = 1\n' });
@@ -94,8 +100,8 @@ test("submit a file, correct a rejected submission, and start without intake", a
   state.rejectSubmit = false;
   await page.getByRole("button", { name: "Submit for review", exact: true }).click();
   await expect(page.getByRole("heading", { name: plan.goal })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Approve all 1 & start/ })).toBeVisible();
-  await page.getByRole("button", { name: /Approve all 1 & start/ }).click();
+  await expect(page.getByRole("button", { name: /Approve all 1 & queue/ })).toBeVisible();
+  await page.getByRole("button", { name: /Approve all 1 & queue/ }).click();
   await expect(page.getByRole("button", { name: /Export rows.*building/ })).toBeVisible();
   await capture(page, "monitor-plan");
   expect(state.requests.filter(r => r.path.endsWith("/plan/submit")).at(-1).body).toEqual({ source, start: false });
@@ -168,4 +174,51 @@ test("completion updates live, preserves cancellation evidence, and remains insp
   await page.reload();
   await expect(page.getByRole("alert")).toContainText("Chief unavailable");
   await expect(page.getByRole("heading", { name: "Partially delivered" })).toHaveCount(0);
+});
+
+
+test("readiness shows fixes before approval and never presents stale checks as current", async ({ page }) => {
+  const state = await setup(page, { plan: { ...plan }, items: [{ ...item }] });
+  state.project.paused = true;
+  state.readiness = { ...state.readiness, ready: false, checks: [
+    { key: "project_pause", label: "Project paused", status: "blocked", detail: "Resume this project to dispatch queued work.", action: "resume_project" },
+    { key: "build", label: "Build capacity", status: "ready", detail: "claude on laptop", action: "" },
+    { key: "review", label: "Review capacity", status: "blocked", detail: "codex on laptop: quota exhausted", action: "resources" },
+  ] };
+  await page.goto("/p/csv");
+  const readiness = page.getByRole("region", { name: "Execution readiness" });
+  await expect(readiness.getByText("2 checks need attention")).toBeVisible();
+  await expect(readiness.getByRole("link", { name: "Manage agents" })).toHaveAttribute("href", "/resources");
+  await expect(page.getByRole("button", { name: "Approve all 1 & queue" })).toBeEnabled();
+  await capture(page, "plan-readiness-blocked");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await capture(page, "plan-readiness-mobile");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  state.failWiring = true;
+  await readiness.getByRole("button", { name: "Resume project" }).click();
+  await expect(readiness.getByRole("alert")).toContainText("Repository access denied");
+  state.failWiring = false;
+  state.readiness = { ...state.readiness, ready: true, checks: state.readiness.checks.slice(1).map(c => ({ ...c, status: "ready", action: "", detail: c.key === "review" ? "codex on laptop" : c.detail })) };
+  await readiness.getByRole("button", { name: "Resume project" }).click();
+  await expect.poll(() => state.project.paused).toBe(false);
+  await expect(readiness.getByText("Capacity available")).toBeVisible();
+  await page.setViewportSize({ width: 1200, height: 850 });
+  await capture(page, "plan-readiness-ready");
+  state.failReadiness = true;
+  await readiness.getByRole("button", { name: "Refresh checks" }).click();
+  await expect(readiness.getByRole("alert")).toContainText("Could not refresh readiness");
+  await expect(readiness.getByText("Capacity available")).toHaveCount(0);
+});
+
+
+test("a plan with only cancelled items never claims delivery", async ({ page }) => {
+  const state = await setup(page, { plan: { ...plan, status: "complete" }, items: [{ ...item, status: "cancelled" }] });
+  state.result = { schema_version: 1, kind: "plan_result", project_id: project.id, plan_id: plan.id,
+    revision: 1, goal: plan.goal, status: "complete", terminal: true, outcome: "partial",
+    counts: { total: 1, done: 0, cancelled: 1, remaining: 0 }, items: [], questions: [], todos: [], captured_at: 1 };
+  await page.goto("/p/csv");
+  await expect(page.getByRole("heading", { name: "No items delivered" })).toBeVisible();
+  await expect(page.getByText("0 landed", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Execution readiness" })).toHaveCount(0);
+  await capture(page, "plan-all-cancelled");
 });

@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { api } from "../../api";
 import { Markdown } from "../../components/shared";
 import type { PlanItem, PlanItemStatus, PlanPayload, Project } from "../../types";
+import { PlanReadiness } from "./planReadiness";
 import { PlanSubmission } from "./planSubmission";
 import { downloadText, PlanResults } from "./planResults";
 
@@ -9,7 +10,7 @@ import { downloadText, PlanResults } from "./planResults";
  *
  * One component, two faces keyed off plan status: a draft renders as the
  * review checklist (edit anything, flip items, one-click "Approve all &
- * start"), an approved/finished plan renders as the execution rail. The
+ * queue"), an approved/finished plan renders as the execution rail. The
  * emergence↔certainty dial is the human's review depth — both extremes stay
  * one click. */
 
@@ -436,8 +437,9 @@ export function PlanPanel({
         <a href={`/p/${projectId}?plan=${encodeURIComponent(plan.id)}`}>Link to this plan</a>
       </nav>
       {!ended && <PlanValidation project={project} onChanged={onChanged} />}
+      {!ended && !reviewing && <PlanReadiness plan={plan} project={project} onChanged={onChanged} onReviewItems={() => setView("items")} />}
       {showResults ? <PlanResults key={plan.id} planId={plan.id} /> : <>
-      <div className="plan-items">
+      <div className="plan-items" id="plan-items">
         {items.map((item, position) => {
           const previous = items[position - 1];
           const movable =
@@ -470,6 +472,7 @@ export function PlanPanel({
         <AddItemForm planId={plan.id} onAdded={onChanged} />
       )}
 
+      {reviewing && <PlanReadiness plan={plan} project={project} onChanged={onChanged} onReviewItems={() => setView("items")} />}
       {reviewing && (
         <footer className="plan-footer">
           <button
@@ -479,7 +482,7 @@ export function PlanPanel({
             onClick={run(() => api.approvePlan(plan.id))}
           >
             <i className="ti ti-player-play" aria-hidden />
-            {pendingCount > 0 ? `Approve all ${live.length} & start` : "Start plan"}
+            {pendingCount > 0 ? `Approve all ${live.length} & queue` : "Queue approved plan"}
           </button>
           <button type="button" className="ghost" disabled={busy}
             onClick={run(() => api.abandonPlan(plan.id))}>

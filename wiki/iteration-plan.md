@@ -47,7 +47,7 @@ that lets hive run a whole iteration without check-ins.
 
 How much certainty the human buys is their choice per plan, not a setting:
 
-- **Max emergence** — one click on *Approve all & start*, zero reading. The
+- **Max emergence** — one click on *Approve all & queue*, zero reading. The
   plan still exists: inspectable later, and the record of what hive intended.
 - **Incremental** — approve item by item; a big plan is reviewed in pieces,
   with a running tally. Edit any part of any item along the way.
@@ -167,7 +167,7 @@ the human must supply the next iteration goal before another plan is drafted.
 - **Review mode** — a checklist. Each item expands to editable
   story/constraints/notes with provenance badges (agent-authored / you edited).
   Per-item approve flips; tally "4/7 approved"; sticky actions:
-  *Approve all & start* · *Add item* · *Discard plan*.
+  *Approve all & queue* · *Add item* · *Discard plan*.
 - **Execution mode** — a progress rail: done items (merge commit link), the
   active item (live agent task), queued items, blocked items with their
   Needs-you entry inline. Bounded per UI convention: active + next few +

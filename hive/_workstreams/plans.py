@@ -473,6 +473,22 @@ def build_work_doc(plan: Plan, item: PlanItem) -> str:
     return "\n".join(parts)
 
 
+def plan_agent(store, project: Project, kind: TaskKind, backend: str, model: str = "") -> tuple[str, str]:
+    """Select the initial role agent for both queueing and the readiness preview."""
+    role = "build" if kind == TaskKind.resolve else "review"
+    selected = getattr(project, f"{role}_backend")
+    if selected:
+        backend, model = selected, getattr(project, f"{role}_model")
+    elif project.agent_preferences:
+        backend, model = project.agent_preferences[0].backend, project.agent_preferences[0].model
+    else:
+        backend, model = build_agent(store, project, backend, model)
+    if backend == "opencode" and not model:
+        from hive.agents.backends import opencode_model
+        model = opencode_model()
+    return backend, model
+
+
 @synchronized
 def _make_plan_task(
     store,
@@ -508,17 +524,7 @@ def _make_plan_task(
                    "Use the current item document above and the previous attempt's report below. "
                    "Complete, validate, commit and push the result.\n\n"
                    + (feedback or continue_from.result_text)[-REASON_LIMIT:] + "\n")
-    role = "build" if kind == TaskKind.resolve else "review"
-    selected = getattr(project, f"{role}_backend")
-    if selected:
-        backend, model = selected, getattr(project, f"{role}_model")
-    elif project.agent_preferences:
-        backend, model = project.agent_preferences[0].backend, project.agent_preferences[0].model
-    else:
-        backend, model = build_agent(store, project, backend, model)
-    if backend == "opencode" and not model:
-        from hive.agents.backends import opencode_model
-        model = opencode_model()
+    backend, model = plan_agent(store, project, kind, backend, model)
     return store.put(
         Task(
             workspace_id=project.workspace_id,

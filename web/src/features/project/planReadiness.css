@@ -1,0 +1,28 @@
+.plan-readiness { margin: 16px 0; padding: 16px; border: 1px solid var(--line); border-radius: 8px; }
+.plan-readiness > header { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.plan-readiness h4 { margin: 0; font-size: 14px; }
+.plan-readiness > header button { margin-left: auto; }
+.readiness-checks { list-style: none; margin: 12px 0; padding: 0; }
+.readiness-checks li { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; }
+.readiness-checks li > div { flex: 1; min-width: 0; }
+.readiness-checks p { margin: 3px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.readiness-checks strong { font-size: 12px; }
+.readiness-checks a, .readiness-checks button { flex-shrink: 0; font-size: 12px; }
+.readiness-checks li > span { width: 14px; flex-shrink: 0; font-weight: 700; }
+.readiness-ready > span { color: var(--green); }
+.readiness-blocked > span, .readiness-waiting > span { color: var(--amber); }
+.plan-readiness .readiness-warning { color: var(--amber); }
+.readiness-details { font-size: 12px; }
+.readiness-details summary { cursor: pointer; }
+.readiness-details p { white-space: pre-line; overflow-wrap: anywhere; line-height: 1.55; }
+.readiness-approval-note { margin: 12px 0 0; font-size: 12px; }
+@media (max-width: 600px) {
+  .plan-readiness { padding: 12px; }
+  .plan-readiness > header { gap: 8px; }
+  .plan-readiness > header button { margin-left: 0; }
+  .readiness-checks li { flex-wrap: wrap; }
+  .readiness-checks li > div { flex-basis: calc(100% - 24px); }
+  .readiness-checks a, .readiness-checks button { margin-left: 24px; }
+}
+
+.plan-readiness a { color: var(--accent); }

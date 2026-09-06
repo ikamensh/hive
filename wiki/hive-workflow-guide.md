@@ -166,7 +166,7 @@ A plan drafted by Hive or imported by you meets the same approval gate. You edit
 | Notes | Context, examples and detailed instructions supplied to the builder. |
 | Repository | The code repository this item changes, when different from the default. |
 
-**Review and start.** Edit, reorder, add or remove items. Approving an individual item in a draft records your review progress. Start the plan after approval, or use “Approve all & start” in one action. On activation, the approved items enter the queue and Hive attempts to save iteration-plan.md in the spec home. The stored plan remains authoritative if that Git write fails.
+**Review and start.** Edit, reorder, add or remove items. Approving an individual item in a draft records your review progress. Start the plan after approval, or use “Approve all & queue” in one action. On activation, the approved items enter the queue and Hive attempts to save iteration-plan.md in the spec home. The stored plan remains authoritative if that Git write fails.
 
 ### Bring your own Markdown plan
 
