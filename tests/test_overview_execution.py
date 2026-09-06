@@ -44,6 +44,15 @@ def test_overview_locates_work_and_preserves_lost_heartbeats_while_paused(app):
     assert not live["runner_online"] and live["runner_last_seen"] == runner.last_seen
     assert live["delivered"] and live["repo"] == task.repo
     assert "Private prompt" not in str(snapshot)
+    assert snapshot["execution"] == {"working": 0, "starting": 0, "disconnected": 1}
+
+    online = store.put(Runner(name="Online runner", backends=["codex"]))
+    for delivered in (False, True):
+        store.put(Task(project_id=project.id, workstream_id="", repo=task.repo, instructions="Work",
+                       runner_id=online.id, status=TaskStatus.running, delivered=delivered))
+    mixed = client.get("/api/overview").raise_for_status().json()
+    assert mixed["execution"] == {"working": 1, "starting": 1, "disconnected": 1}
+    assert sum(mixed["execution"].values()) == mixed["totals"]["tasks_running"]
 
 
 def test_overview_counts_idle_runners_instead_of_backend_choices_or_preview_rows(app):
@@ -71,6 +80,7 @@ def test_overview_counts_idle_runners_instead_of_backend_choices_or_preview_rows
     capacity = snapshot["capacity"]
 
     assert len(snapshot["live_tasks"]) < len(busy)
+    assert snapshot["execution"] == {"working": 0, "starting": len(busy), "disconnected": 0}
     assert capacity["runners_total"] == len(busy) + 3
     assert capacity["runners_online"] == len(busy) + 2
     assert capacity["runners_busy"] == len(busy)
@@ -192,3 +202,18 @@ def test_overview_keeps_provider_gauges_separate_and_preserves_missing_data(app)
         assert codex["model_cooldowns"] == {"model-specific": reset}
         assert gauges["cursor"]["usage_windows"] == []
         assert gauges["cursor"]["usage_captured_at"] == 0
+
+
+def test_archived_projects_keep_their_identity_while_running_work_drains(app):
+    """Archiving hides the portfolio row, not the identity of already running work."""
+    client, store = app
+    project = store.put(Project(name="Archived exports", archived=True))
+    task = store.put(Task(project_id=project.id, workstream_id="", repo="r", instructions="Finish",
+                          kind=TaskKind.resolve, status=TaskStatus.running))
+
+    snapshot = client.get("/api/overview").raise_for_status().json()
+
+    assert snapshot["projects"] == []
+    assert snapshot["totals"]["tasks_running"] == 1
+    assert snapshot["live_tasks"][0]["id"] == task.id
+    assert snapshot["live_tasks"][0]["project_name"] == project.name

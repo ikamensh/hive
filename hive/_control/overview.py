@@ -180,10 +180,9 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
     stays a pure read over the store and is trivial to test.
     """
     observed_at = time.time()
-    projects = [
-        p for p in store.list(Project, workspace_id=workspace_id) if not p.archived
-    ]
-    name_by_id = {p.id: p.name for p in projects}
+    all_projects = store.list(Project, workspace_id=workspace_id)
+    projects = [p for p in all_projects if not p.archived]
+    name_by_id = {p.id: p.name for p in all_projects}
 
     all_tasks = store.list(Task, workspace_id=workspace_id)
     runners = store.list(Runner, workspace_id=workspace_id)
@@ -262,6 +261,13 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
 
     running = [t for t in all_tasks if t.status == TaskStatus.running]
     running.sort(key=lambda t: t.started_at, reverse=True)
+    execution = {"working": 0, "starting": 0, "disconnected": 0}
+    for task in running:
+        if task.runner_id not in online_runner_ids:
+            state = "disconnected"
+        else:
+            state = "working" if task.delivered else "starting"
+        execution[state] += 1
     busy_runner_ids = {task.runner_id for task in running if task.runner_id}
     for group, card in zip(machine_groups, capacity["machines"]):
         for agent in card["agents"]:
@@ -364,6 +370,7 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
     return {
         "observed_at": observed_at,
         "tasks_pending": sum(t.status == TaskStatus.pending for t in all_tasks),
+        "execution": execution,
         "paused": pause.fleet_paused(store, workspace_id),
         "projects": project_rows,
         "capacity": capacity,

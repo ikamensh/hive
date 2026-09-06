@@ -12,7 +12,7 @@
 .capacity-tabs button, .capacity-tabs button.ghost { border: 0; background: transparent; color: var(--ink-dim); border-radius: 0; box-shadow: none; padding: 10px 1px 13px; font-size: 14px; letter-spacing: 0; margin-bottom: -1px; }
 .capacity-tabs button.selected { color: var(--ink); border-bottom: 2px solid var(--accent); font-weight: 600; }
 .capacity-machines { display: grid; gap: 14px; }
-.capacity-machine { border: 1px solid var(--line-soft); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.capacity-machine { border: 1px solid var(--line-soft); border-radius: 10px; background: var(--panel); overflow: hidden; scroll-margin-top: 80px; }
 .capacity-machine-head { display: grid; grid-template-columns: 42px minmax(160px, 1fr) auto minmax(150px, auto) auto; align-items: center; gap: 18px; padding: 20px 22px; }
 .capacity-device-icon { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--panel-2); font-size: 21px; color: var(--ink-dim); }
 .capacity-machine-name { min-width: 0; }

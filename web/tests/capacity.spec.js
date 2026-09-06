@@ -37,6 +37,7 @@ async function setup(page) {
     if (path === "/api/org-context") return route.fulfill({ json: { text: "Workspace conventions" } });
     if (path === "/api/overview") return route.fulfill({ json: {
       observed_at: now, tasks_pending: 1, paused: false, projects: [], subscriptions: [],
+      execution: { working: 1, starting: 0, disconnected: 0 },
       live_tasks: [{ id: "task", title: "Export rows", project_id: "exports", project_name: "Exports",
         backend: "codex", kind: "resolve", runner_id: "runner", machine_id: "laptop", delivered: true,
         runner_online: true, runner_last_seen: now, started_at: now }],
@@ -67,10 +68,15 @@ async function setup(page) {
 
 test("capacity distinguishes a busy runner from its usable agents and preserves repair controls", async ({ page }) => {
   const state = await setup(page);
-  await page.goto("/machines");
+  await page.setViewportSize({ width: 1280, height: 400 });
+  await page.goto("/machines#laptop");
   await expect(page.getByRole("heading", { name: "Capacity", exact: true })).toBeVisible();
   await expect(page.getByLabel("Spare execution capacity")).toContainText("0");
   const machine = page.getByRole("article", { name: "Laptop", exact: true });
+  await expect(machine).toHaveAttribute("id", new URL(page.url()).hash.slice(1));
+  await expect(machine).toBeInViewport({ ratio: 1 });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.evaluate(() => window.scrollTo(0, 0));
   await expect(machine.getByText("1 running", { exact: true })).toBeVisible();
   await expect(machine.getByText("2 usable agents", { exact: true })).toBeVisible();
   await capture(page, "capacity-overview.png");

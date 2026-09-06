@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 import { IconDeviceLaptop, IconServer } from "@tabler/icons-react";
 import { useOverview } from "../App";
 import { ago, api, countdown, money, usePoll } from "../api";
@@ -345,6 +345,11 @@ export default function Resources() {
   const tab = searchParams.get("tab") === "limits" ? "limits" : "machines";
   const setTab = (tab: "machines" | "limits") => setSearchParams(tab === "limits" ? { tab } : {});
   const { data, failed, refresh } = usePoll(() => api.resources(), []);
+  const { hash } = useLocation();
+  const targetMachineId = tab === "machines" ? data?.cards.find(card => `#${card.machine.id}` === hash)?.machine.id : undefined;
+  useEffect(() => {
+    if (targetMachineId) document.getElementById(targetMachineId)?.scrollIntoView({ block: "start" });
+  }, [targetMachineId]);
   const { data: members, refresh: refreshMembers } = usePoll(() => api.users(), [], 30000);
   const { data: auth } = usePoll(() => api.me(), [], 30000);
   const [probing, setProbing] = useState<string | null>(null);
@@ -616,7 +621,7 @@ function MachineCard({
   const runnerNames = new Map(card.runners.map(runner => [runner.id, runner.name]));
 
   return (
-    <article className="capacity-machine" aria-label={card.machine.name}>
+    <article id={card.machine.id} className="capacity-machine" aria-label={card.machine.name}>
       <header className="capacity-machine-head">
         <span className="capacity-device-icon" aria-hidden>{card.machine.device_kind === "server" ? <IconServer size={20} /> : <IconDeviceLaptop size={20} />}</span>
         <div className="capacity-machine-name"><h2>{card.machine.name}</h2>
