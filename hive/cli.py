@@ -23,7 +23,6 @@ import argparse
 import json
 import math
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -1567,18 +1566,13 @@ def _plan_id(client, project_id: str) -> str:
     return payload["plan"]["id"]
 
 
-_PROJECT_ID_RE = re.compile(r"[0-9a-f]{12}")  # new_id(): uuid4().hex[:12]
-
-
 def resolve_project_id(client, token: str) -> str:
     """Accept a project id or the name `hive projects` shows; return the id.
 
     Every project-scoped verb takes an id, but a name is the handle the user
-    actually sees, so `hive project gleaner` must resolve rather than 404. An
-    id resolves for free — only a name costs the lookup.
+    actually sees, so `hive project gleaner` must resolve rather than 404.
+    Match real IDs first; a name's shape cannot establish its identity.
     """
-    if _PROJECT_ID_RE.fullmatch(token):
-        return token
     projects = client.get("/api/projects").raise_for_status().json()
     if any(p["id"] == token for p in projects):
         return token

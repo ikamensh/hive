@@ -39,3 +39,12 @@ def test_offline_missing_plan_reports_filename_without_traceback(tmp_path):
     assert result.returncode != 0
     assert str(source) in result.stderr
     assert "Traceback" not in result.stderr
+
+
+def test_id_shaped_project_name_resolves_for_read_and_write(harness):
+    """Names that happen to look like IDs still address the project listed to the user."""
+    client, _ = harness
+    project = client.post("/api/projects", json={"name": "deadbeef1234"}).raise_for_status().json()
+    assert cli(client, "project", project["name"])["project"]["id"] == project["id"]
+    cli(client, "set", project["name"], "--paused", "true")
+    assert cli(client, "project", project["id"])["project"]["paused"] is True

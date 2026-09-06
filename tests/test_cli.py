@@ -956,6 +956,8 @@ class _Recorder:
                 return self
 
             def json(self):
+                if url == "/api/projects":
+                    return [{"id": "0123456789ab", "name": "demo"}]
                 return {"task": {"id": "t1"}}
 
         return _Resp()
@@ -987,12 +989,12 @@ def test_cli_pause_resume_map_to_workspace_patch():
 
 def test_cli_run_cancels_map_to_endpoints():
     rec = _Recorder()
-    pid = "0123456789ab"  # id-shaped: resolves without a projects lookup
+    pid = "0123456789ab"
     cli(rec, "test-run", pid, "ws1", "--scope", "full", "--max", "3")
     cli(rec, "test-run", pid, "ws1", "--story", "login", "--story", "signup")
     cli(rec, "test-cancel", "ep1")
     cli(rec, "issue-cancel", "run1")
-    assert rec.calls == [
+    assert [call for call in rec.calls if call[0] != "GET"] == [
         ("POST", f"/api/projects/{pid}/workstreams/ws1/test-episodes",
          {"scope": "full", "story_keys": [], "max_stories": 3}),
         # naming stories implies the selected scope
@@ -1009,14 +1011,14 @@ def test_cli_issue_commands_map_to_endpoints():
     issue-sync refreshes the mirror without a run at all. machine-forget and
     decision-reopen hit the same routes as their UI buttons."""
     rec = _Recorder()
-    pid = "0123456789ab"  # id-shaped: resolves without a projects lookup
+    pid = "0123456789ab"
     cli(rec, "issue-run", pid, "ws1")
     cli(rec, "issue-run", pid, "ws1", "--issue", "3", "--issue", "7")
     cli(rec, "issue-run", pid, "ws1", "--scan-only")
     cli(rec, "issue-sync", pid, "ws1")
     cli(rec, "machine-forget", "m1")
     cli(rec, "decision-reopen", pid, "D-002", "--workstream", "ws9")
-    assert rec.calls == [
+    assert [call for call in rec.calls if call[0] != "GET"] == [
         ("POST", f"/api/projects/{pid}/workstreams/ws1/issue-runs",
          {"scope": "all_open_now", "issue_numbers": []}),
         ("POST", f"/api/projects/{pid}/workstreams/ws1/issue-runs",
