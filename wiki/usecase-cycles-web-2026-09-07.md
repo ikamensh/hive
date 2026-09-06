@@ -18,6 +18,13 @@ The initial browser baseline was 34 passing tests.
 - Visual check: viewed `/tmp/hive-usecase-cycles/screenshots/inbox-preserved-draft.png`.
 - Scope: drafts survive selection/filter/pagination within the current inbox
   visit; they are not persisted across page reloads.
+- Independent review follow-up: a delayed answer POST plus question navigation
+  reset the detail view's busy state and enabled duplicate submission. The
+  CLI subagent reproduced this with a held HTTP response. Pending/error state
+  now lives alongside drafts at page level, keyed by item. The new
+  `inbox keeps an answer pending` journey passes: returning to the question
+  still shows disabled Sending, other drafts stay editable, and only one POST
+  is delivered. Viewed `inbox-pending-answer-navigation.png`.
 
 ## Cycle 17 — Share a pageable inbox with another operator
 

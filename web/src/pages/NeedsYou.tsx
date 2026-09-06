@@ -11,30 +11,18 @@ const LABELS = { all: "All", question: "Questions", approval: "Approvals", block
 const SINGULAR = { question: "Question", approval: "Approval", blocked: "Blocked work", todo: "Human task" };
 const PAGE_SIZE = 12;
 
-function ItemDetail({ item, stale, answer, onAnswer, onResolved }: {
+function ItemDetail({ item, stale, answer, onAnswer, busy, error, act }: {
   item: InboxItem;
   stale: boolean;
   answer: string;
   onAnswer: (answer: string) => void;
-  onResolved: () => void;
+  busy: boolean;
+  error: string;
+  act: (operation: () => Promise<unknown>) => Promise<void>;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
   const wholePlan = item.kind === "approval" && !!item.plan && !item.plan_item;
   const review = usePoll(() => api.getPlan(item.plan!.id), [item.plan?.id, wholePlan], 10000, { enabled: wholePlan });
   const projectUrl = `/p/${item.project_id}${item.plan ? `?plan=${encodeURIComponent(item.plan.id)}` : ""}`;
-  const act = async (operation: () => Promise<unknown>) => {
-    setBusy(true);
-    setError("");
-    try {
-      await operation();
-      onResolved();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "The action failed. Try again.");
-    } finally {
-      setBusy(false);
-    }
-  };
   const submit = (event: FormEvent) => {
     event.preventDefault();
     void act(() => api.answerQuestion(item.question!.id, answer.trim()));
@@ -102,6 +90,7 @@ export default function NeedsYou() {
   const [offset, setOffset] = useState(0);
   const [selectedId, setSelectedId] = useState("");
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [actions, setActions] = useState<Record<string, { busy: boolean; error: string }>>({});
   const inbox = usePoll(() => api.inbox({ kind, scope, project_id: projectId, q: query, offset, limit: PAGE_SIZE }), [kind, scope, projectId, query, offset]);
   const selected = inbox.data?.items.find(item => item.id === selectedId) ?? inbox.data?.items[0];
   const total = inbox.data?.total ?? 0;
@@ -120,6 +109,27 @@ export default function NeedsYou() {
     void inbox.refresh();
     void overview.refresh();
     setSelectedId("");
+  };
+  const act = async (id: string, operation: () => Promise<unknown>) => {
+    setActions(previous => ({ ...previous, [id]: { busy: true, error: "" } }));
+    try {
+      await operation();
+      setAnswers(previous => {
+        const next = { ...previous };
+        delete next[id];
+        return next;
+      });
+      setActions(previous => {
+        const next = { ...previous };
+        delete next[id];
+        return next;
+      });
+      refresh();
+    } catch (err) {
+      setActions(previous => ({ ...previous, [id]: {
+        busy: false, error: err instanceof Error ? err.message : "The action failed. Try again.",
+      } }));
+    }
   };
 
   return (
@@ -150,14 +160,9 @@ export default function NeedsYou() {
           {selected && <ItemDetail key={selected.id} item={selected} stale={inbox.failed}
             answer={answers[selected.id] ?? ""}
             onAnswer={answer => setAnswers(previous => ({ ...previous, [selected.id]: answer }))}
-            onResolved={() => {
-              setAnswers(previous => {
-                const next = { ...previous };
-                delete next[selected.id];
-                return next;
-              });
-              refresh();
-            }} />}
+            busy={actions[selected.id]?.busy ?? false}
+            error={actions[selected.id]?.error ?? ""}
+            act={operation => act(selected.id, operation)} />}
           {!selected && <div className="inbox-empty"><p>No items on this page. Return to the previous page.</p></div>}
         </div>
         <div className="inbox-pagination"><span>{inbox.data.items.length ? offset + 1 : 0}–{Math.min(offset + inbox.data.items.length, total)} of {total} items</span><div><button className="ghost" aria-label="Previous inbox page" disabled={offset === 0} onClick={() => { setOffset(Math.max(0, offset - PAGE_SIZE)); setSelectedId(""); }}><IconChevronLeft size={17} />Previous</button><button className="ghost" aria-label="Next inbox page" disabled={offset + PAGE_SIZE >= total} onClick={() => { setOffset(offset + PAGE_SIZE); setSelectedId(""); }}>Next<IconChevronRight size={17} /></button></div></div>

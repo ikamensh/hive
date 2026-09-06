@@ -73,6 +73,36 @@ test("inbox keeps separate answer drafts while switching questions and filters",
   await expect(page.getByLabel("Your answer")).toHaveValue("Keep the original spelling.");
 });
 
+// Navigating away and back must not reopen a question's pending submission.
+test("inbox keeps an answer pending while navigating between questions", async ({ page }) => {
+  const state = await setup(page, [question(1), question(2)]);
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  await page.route("**/api/questions/q1/answer", async route => {
+    await pending;
+    await route.fallback();
+  });
+  await page.goto("/needs-you");
+  await page.getByLabel("Your answer").fill("Keep the original spelling.");
+  await page.getByRole("button", { name: "Send answer" }).click();
+  try {
+    await expect(page.getByRole("button", { name: "Sending…" })).toBeDisabled();
+    await page.getByRole("button", { name: /Decision 2/ }).click();
+    await page.getByLabel("Your answer").fill("Another draft remains editable.");
+    await page.getByRole("button", { name: /Decision 1/ }).click();
+    await expect(page.getByLabel("Your answer")).toHaveValue("Keep the original spelling.");
+    await capture(page, "inbox-pending-answer-navigation");
+    await expect(page.getByRole("button", { name: /Send(ing…| answer)/ })).toBeDisabled();
+  } finally {
+    release();
+  }
+  await expect(page.getByRole("heading", { name: "Decision 2", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Your answer")).toHaveValue("Another draft remains editable.");
+  expect(state.mutations).toEqual([
+    { path: "/api/questions/q1/answer", body: { answer: "Keep the original spelling." } },
+  ]);
+});
+
 // Another operator can resolve the last page without an action in this tab.
 test("inbox returns to an available page when another operator resolves its last items", async ({ page }) => {
   const state = await setup(page, Array.from({ length: 13 }, (_, index) => question(index)));
