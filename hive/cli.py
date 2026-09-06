@@ -1674,13 +1674,10 @@ def run(args: argparse.Namespace, client) -> dict | list:
         me = client.get("/api/auth/me").raise_for_status().json()
         return {"target": str(client.base_url), "cli_version": version_payload(), **me}
     elif c == "version":
-        payload = {"target": str(client.base_url), "cli": version_payload()}
-        try:
-            payload["chief"] = client.get("/api/version").raise_for_status().json()
-        except Exception as exc:
-            payload["chief"] = None
-            payload["chief_error"] = str(exc)
-        return payload
+        return {
+            "target": str(client.base_url), "cli": version_payload(),
+            "chief": client.get("/api/version").raise_for_status().json(),
+        }
     elif c in ("pause", "resume"):
         r = client.patch("/api/workspace", json={"paused": c == "pause"})
     elif c == "projects":

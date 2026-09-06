@@ -1,8 +1,10 @@
 """CLI regressions discovered while exercising operator workflows."""
 
+import json
 import subprocess
 import sys
 
+import httpx
 import pytest
 
 from test_cli import cli, harness as harness
@@ -96,3 +98,48 @@ def test_invalid_budget_fails_before_mutating_projects(harness, command, budget,
     assert error.value.code == 2
     assert "finite nonnegative number" in capsys.readouterr().err
     assert cli(client, "projects") == before
+
+
+@pytest.mark.parametrize("chief_online", [True, False])
+def test_version_discovers_runner_chief_or_reports_total_failure(
+    harness, tmp_path, monkeypatch, capsys, chief_online,
+):
+    """Version checks discover the real chief and fail clearly if every target is down."""
+    from hive.cli import main
+
+    client, _ = harness
+    runner_env = tmp_path / "runner.env"
+    runner_env.write_text("HIVE_URL=https://fleet.example\n")
+    monkeypatch.setenv("HIVE_RUNNER_ENV_FILE", str(runner_env))
+    monkeypatch.setenv("HIVE_CONFIG_FILE", str(tmp_path / "config.env"))
+    monkeypatch.delenv("HIVE_URL", raising=False)
+
+    def route(request):
+        if request.url.host == "localhost" or not chief_online:
+            raise httpx.ConnectError("connection refused", request=request)
+        response = client.get(request.url.path)
+        return httpx.Response(response.status_code, json=response.json(), request=request)
+
+    http_client = httpx.Client
+    monkeypatch.setattr(
+        httpx, "Client", lambda **kwargs: http_client(**kwargs, transport=httpx.MockTransport(route)),
+    )
+    if chief_online:
+        main(["version"])
+        captured = capsys.readouterr()
+        shown = json.loads(captured.out)
+        assert shown["target"].rstrip("/") == "https://fleet.example"
+        assert shown["chief"]["version"]
+        assert captured.err == ""
+    else:
+        with pytest.raises(SystemExit) as error:
+            main(["version"])
+        assert error.value.code == 1
+        captured = capsys.readouterr()
+        assert "Hive API unreachable" in captured.err
+        assert "localhost:8000" in captured.err and "fleet.example" in captured.err
+        assert captured.out == ""
+    with pytest.raises(SystemExit) as offline_version:
+        main(["--version"])
+    assert offline_version.value.code == 0
+    assert capsys.readouterr().out.startswith("hive ")

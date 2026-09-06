@@ -48,7 +48,8 @@ def test_live_plan_view_and_amendments(app, tmp_path, monkeypatch, repaired_repo
 
     edited = cli(client, "plan-item-edit", initial["items"][1]["id"],
                  "--notes", "Show production throughput and bottlenecks.")
-    assert edited["status"] == "queued"
+    assert edited["status"] == "proposed"
+    assert cli(client, "plan-item-approve", edited["id"])["status"] == "queued"
     source.write_text("# Production simulator\n\n## Export\nExport scenario results.\n")
     appended = cli(client, "plan-import", "simulator", str(source), "--append", "--start")
     assert [i["status"] for i in appended["items"]] == ["resolving", "queued", "queued"]

@@ -82,3 +82,36 @@ deployments, live project mutations, or user inputs were needed.
   `budget must be a finite nonnegative number` without contacting a chief.
 - Self-review: zero and fractional amounts remain valid; the two flags share
   one small parser rather than relying on HTTP serialization or API failures.
+
+## Cycle 5 — Discover the chief while checking CLI/chief versions
+
+- Scenario: no localhost chief, but the installed runner's configuration
+  points to a reachable chief; then try again with every chief unreachable.
+- Initial reproduction: the actual `main(["version"])` with an isolated
+  HTTP transport reported the localhost target, `chief: null`, and
+  `chief_error: connection refused`. Only localhost was attempted; the
+  available runner target was ignored and the command exited successfully.
+- Regression first: two entrypoint tests failed, one for discovery and one
+  for the missing failure exit. The reachable target delegates through the
+  HTTP transport seam to the real app's `/api/version` route.
+- Fix: remove the command-specific catch-all. Version requests now use the
+  normal chief discovery, connection failure, and HTTP error handling.
+- Verified: the runner chief is selected and its actual version appears in
+  JSON. Total connection failure exits 1 and names both attempted chiefs.
+  `hive --version` still succeeds offline.
+- Self-review and agent discussion: ordinary discovery semantics are simpler
+  than maintaining a special partial-success format for one command. Local
+  version discovery remains a separate existing flag.
+
+## Combined validation and cross-agent integration
+
+- `uv run pytest -q tests/test_cli_usecases.py tests/test_cli.py
+  tests/test_cli_plan.py tests/test_plan_wait.py tests/test_version.py` covers
+  all five cycles plus established CLI, chief, plan, runner, and wait flows.
+  Final result: **100 passed** (9 existing TestClient timeout deprecation warnings).
+- Concurrent API/plan improvements intentionally require canonical `claude`
+  subscription identifiers and renewed approval after editing queued work.
+  Updated the existing CLI workflow tests to exercise those new contracts,
+  including explicitly approving an edited proposal before it executes.
+- `uv run ruff check hive/cli.py tests/test_cli.py tests/test_cli_plan.py
+  tests/test_cli_usecases.py` and `git diff --check` pass.

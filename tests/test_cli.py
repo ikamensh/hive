@@ -504,8 +504,8 @@ def test_cli_settings_and_admin(harness):
 
     cli(client, "feedback", pid, "some-task-id", "reject", "--comment", "wrong direction")
 
-    sub = cli(client, "sub-add", "anthropic", "--plan", "max")
-    assert cli(client, "subs")[0]["provider"] == "anthropic"
+    sub = cli(client, "sub-add", "claude", "--plan", "max")
+    assert cli(client, "subs")[0]["provider"] == "claude"
     cli(client, "sub-rm", sub["id"])
     assert cli(client, "subs") == []
 
