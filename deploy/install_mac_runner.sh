@@ -152,6 +152,9 @@ cat > "$MENUBAR_PLIST" <<EOF
 EOF
 echo "-> wrote $MENUBAR_PLIST"
 
+# --- Spotlight entry and CLI, using the same managed installation -------------
+python3 "$(dirname "$0")/install_mac_desktop.py" --service-repo "$SERVICE_REPO"
+
 # --- (re)load -----------------------------------------------------------------
 reload_agent() {
   # bootout returns before the old instance is fully torn down; an immediate
