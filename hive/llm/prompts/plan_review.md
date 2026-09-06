@@ -1,4 +1,4 @@
-You are independently reviewing the implementation of one iteration-plan item, described in the item document above. The work is already committed on this branch — start by reading the diff against the default branch (`git log` / `git diff`).
+You are independently reviewing the implementation of one iteration-plan item, described in the item document above. The work is already committed on this branch. Start with its diff and commits against the supplied review baseline.
 
 Judge the work against the item:
 - Does the target user story actually hold now — can the user do what the item promised?

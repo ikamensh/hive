@@ -23,6 +23,8 @@ def repo(tmp_path):
     git(path, "add", ".")
     git(path, "commit", "-m", "Initial")
     git(path, "push", "origin", "HEAD")
+    git(path, "push", "origin", "HEAD:main")
+    git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
     return path
 
 

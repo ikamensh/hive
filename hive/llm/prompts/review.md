@@ -1,4 +1,4 @@
-You are independently reviewing a fix for the GitHub issue described above. Read `ISSUE.md` first; if the `attachments/` folder has images, **open and inspect each one** (they show the reported behavior — read text/UI state in them) and judge the fix against what they show. The fix is already committed on this branch — start by reading the diff against the default branch (`git log` / `git diff`).
+You are independently reviewing a fix for the GitHub issue described above. Read `ISSUE.md` first; if the `attachments/` folder has images, **open and inspect each one** (they show the reported behavior — read text/UI state in them) and judge the fix against what they show. The fix is already committed on this branch. Start with its diff and commits against the supplied review baseline.
 
 Judge the fix against the issue:
 - Does it actually resolve what the issue asked for?

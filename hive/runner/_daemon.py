@@ -683,6 +683,29 @@ def _reset_task_scratch(project_dir: Path) -> None:
                 path.unlink(missing_ok=True)
 
 
+def prepare_review_baseline(project_dir: Path, task: dict) -> str:
+    """Freeze the remote default commit without changing the owned checkout."""
+    def git(*args: str) -> str:
+        return _run_checkout_git(
+            list(args), cwd=project_dir, timeout=120, env=None,
+            repo_url=task["repo"], branch=task.get("branch", ""),
+        ).stdout.strip()
+
+    git("fetch", "--no-tags", "origin", "HEAD")
+    base = git("rev-parse", "--verify", "FETCH_HEAD^{commit}")
+    baseline = {"task_id": task["id"], "remote": "origin", "remote_ref": "HEAD",
+                "base_sha": base, "head_sha": git("rev-parse", "HEAD"), "captured_at": time.time()}
+    exclude = project_dir / ".git" / "info" / "exclude"
+    if ".hive/" not in exclude.read_text():
+        with exclude.open("a") as stream:
+            stream.write("\n.hive/\n")
+    artifact = project_dir / ".hive" / "artifacts" / "review-baseline.json"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(json.dumps(baseline, indent=2) + "\n")
+    return (f"Review baseline: `{base}`, fetched from origin's current default HEAD. "
+            f"Inspect `git diff {base}...HEAD` and `git log {base}..HEAD`.\n\n")
+
+
 def _upload_trace(task_id: str, log_file, headers: dict, auth) -> None:
     """Best-effort: ship the kodo JSONL run trace to the chief so the
     operator can inspect what the agent actually did."""
@@ -770,6 +793,12 @@ def execute(task: dict, headers: dict, auth) -> dict:
     prepare_issue_workspace(project_dir, task, headers, auth)
 
     with _git_auth_environment(task["repo"]):
+        instructions = str(task.get("instructions") or "")
+        if task["kind"] == "review":
+            try:
+                instructions = prepare_review_baseline(project_dir, task) + instructions
+            except CheckoutError as exc:
+                return {"text": f"Review baseline unavailable: {exc}", "is_error": True}
         kodo_log.init(kodo_log.RunDir.create(project_dir))  # capture a per-task JSONL trace
         cancelled = threading.Event()
         stop_watch = threading.Event()
@@ -785,7 +814,7 @@ def execute(task: dict, headers: dict, auth) -> dict:
         try:
             result = run_agent(
                 task["backend"],
-                str(task.get("instructions") or ""),
+                instructions,
                 project_dir,
                 model=task.get("model", ""),
                 resume_session=task.get("session_handle", ""),
