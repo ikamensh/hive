@@ -332,6 +332,13 @@ class ResourcePatch(BaseModel):
     disabled_reason: str = ""
 
 
+class HumanTodoCreate(BaseModel):
+    title: str
+    instructions: str = ""
+    project_id: str = ""
+    assignee_user_id: str = ""
+
+
 class LocalRunnerPatch(BaseModel):
     autostart: bool
 
@@ -2180,11 +2187,13 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return [t.model_dump() for t in store.list(HumanTask, workspace_id=ctx.workspace_id)]
 
     @app.post("/api/human-todos")
-    def create_human_todo(body: dict, ctx: AuthContext = Depends(editor)):
-        project_id = body.get("project_id", "")
-        if project_id:
-            require_project(project_id, ctx)
-        assignee = body.get("assignee_user_id", "").strip()
+    def create_human_todo(body: HumanTodoCreate, ctx: AuthContext = Depends(editor)):
+        if body.project_id:
+            require_project(body.project_id, ctx)
+        title = body.title.strip()
+        if not title:
+            raise HTTPException(400, "title cannot be empty")
+        assignee = body.assignee_user_id.strip()
         if assignee and not store.list(
             WorkspaceMembership, workspace_id=ctx.workspace_id, user_id=assignee
         ):
@@ -2192,10 +2201,10 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         return store.put(
             HumanTask(
                 workspace_id=ctx.workspace_id,
-                project_id=project_id,
+                project_id=body.project_id,
                 assignee_user_id=assignee,
-                title=body["title"],
-                instructions=body.get("instructions", ""),
+                title=title,
+                instructions=body.instructions,
             )
         ).model_dump()
 

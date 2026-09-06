@@ -62,3 +62,33 @@ def test_blank_answer_keeps_question_in_inbox_until_operator_answers(client):
     assert client.get("/api/inbox?kind=question").json()["total"] == 0
     history = client.get(path).json()["questions"]
     assert history[0]["answer"] == answer
+
+
+def test_manual_todo_corrects_invalid_input_then_completes_from_inbox(client):
+    """Malformed or nameless todos must not create dead-end entries in Inbox."""
+    for body, status in (
+        ({}, 422),
+        ({"title": "  "}, 400),
+        ({"title": "Restore access", "assignee_user_id": None}, 422),
+        ({"title": "Restore access", "assignee_user_id": "missing-member"}, 400),
+    ):
+        rejected = client.post("/api/human-todos", json=body)
+        assert rejected.status_code == status
+        assert client.get("/api/human-todos").json() == []
+
+    project = client.post("/api/projects", json={"name": "Repository move"}).json()
+    instructions = "Grant the runner access.\n\nThen retry the repository probe."
+    created = client.post("/api/human-todos", json={
+        "title": "  Restore repository access  ", "instructions": instructions,
+        "project_id": project["id"],
+    })
+    assert created.status_code == 200
+    todo = created.json()
+    assert todo["title"] == "Restore repository access"
+    assert todo["instructions"] == instructions
+    row, = client.get("/api/inbox?kind=todo").json()["items"]
+    assert row["project_name"] == "Repository move"
+    assert row["todo"]["id"] == todo["id"]
+    assert client.post(f"/api/human-todos/{todo['id']}/done").json()["status"] == "done"
+    assert client.get("/api/inbox?kind=todo").json()["total"] == 0
+    assert client.get("/api/human-todos").json()[0]["status"] == "done"

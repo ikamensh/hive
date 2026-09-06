@@ -37,3 +37,21 @@ HTTP. System-generated records may be seeded as initial scenario fixtures.
   tests/test_inbox_api.py tests/test_api_e2e.py -k 'question or answer or
   project_setup' -q` — passes; the invalid answer remains open, a valid answer
   clears Inbox, and project history retains the answer.
+
+## Cycle 13 — Create a manual todo and finish it from Inbox
+
+- Tried: submit a missing title, blank title, null assignee, and unknown member;
+  then create a project-scoped todo with multiline instructions and finish it.
+- Initial observation: missing title and null assignee returned HTTP 500;
+  whitespace title returned 200 and appeared in Inbox as a blank action.
+  Properly named todo creation worked.
+- Fix: replace the untyped request dictionary with a `HumanTodoCreate` request
+  model; reject empty titles and trim surrounding title whitespace. Existing
+  project and assignee authorization remain in the route.
+- Evidence: `uv run pytest tests/test_api_operator_workflows.py -k manual_todo
+  -q` initially failed with `KeyError: 'title'` in the API route.
+- Verified: `uv run pytest tests/test_api_operator_workflows.py
+  tests/test_inbox_api.py tests/test_users_roles.py tests/test_api_e2e.py -k
+  'todo or manual_todo or project_setup or blank_answer' -q` — passes. Rejected
+  requests create no rows; valid instructions survive, Inbox links the right
+  project, and completion removes the action while retaining history.
