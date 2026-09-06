@@ -249,9 +249,10 @@ def default_branch(repo_ref: str, token: str) -> str:
     return str(response.json().get("default_branch") or "main")
 
 
-def merge_branch(repo_ref: str, head: str, token: str, message: str = "") -> None:
+def merge_branch(repo_ref: str, head: str, token: str, message: str = "") -> str:
     """Merge *head* into the repo's default branch via the merges API — a real
-    merge commit, no PR. Raises on conflict (409) so the caller can escalate."""
+    merge commit, no PR. Return the resulting commit SHA. An already-landed
+    retry returns the current default head. Raises on conflict (409)."""
     owner_repo = parse_repo_ref(repo_ref)
     base = default_branch(repo_ref, token)
     response = httpx.post(
@@ -263,6 +264,16 @@ def merge_branch(repo_ref: str, head: str, token: str, message: str = "") -> Non
     if response.status_code == 409:
         raise MergeConflictError(head, base)
     response.raise_for_status()  # 201 merged, 204 nothing to merge
+    if response.status_code == 204:
+        response = httpx.get(
+            f"https://api.github.com/repos/{owner_repo}/commits/{base}",
+            headers=_headers(token), timeout=15.0,
+        )
+        response.raise_for_status()
+    sha = response.json()["sha"]
+    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha):
+        raise ValueError("GitHub returned an invalid landing commit SHA")
+    return sha
 
 
 def delete_branch(repo_ref: str, branch: str, token: str) -> None:
@@ -790,4 +801,3 @@ def create_landing_integration_task(
         prompt_name="landing_integration",
         context=context,
     )
-

@@ -264,6 +264,16 @@ def state_reason(
         )
     if state == ProjectState.idle_goal_complete:
         return "iteration complete — read the completion note and set the next goal"
+    if project.pending_iteration_goal:
+        return "next iteration goal recorded — awaiting a draft plan"
+    from hive._workstreams.plans import latest_plan, plan_items
+
+    latest = latest_plan(store, project)
+    if latest is not None and latest.status in (PlanStatus.complete, PlanStatus.abandoned):
+        items = plan_items(store, latest)
+        merged = sum(item.status == PlanItemStatus.done for item in items)
+        cancelled = sum(item.status == PlanItemStatus.cancelled for item in items)
+        return f"plan {latest.status} — {merged} merged, {cancelled} cancelled; inspect the execution result"
     return "idle — no live plan; ask Hive to propose one, or type an ask into the launchpad"
 
 

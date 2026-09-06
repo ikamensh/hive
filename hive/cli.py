@@ -369,6 +369,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--watch", nargs="?", type=_watch_interval, const=5.0, metavar="SECONDS",
                    help="refresh until complete/abandoned or Ctrl-C (default: 5s; --json emits JSON lines)")
 
+    p = sub.add_parser("plan-wait", help="wait on one submitted plan until it finishes, needs attention, or times out")
+    p.add_argument("plan_id")
+    p.add_argument("--timeout", type=_wait_timeout, default=60.0, metavar="SECONDS",
+                   help="maximum wait in seconds (default: 60)")
+    p.add_argument("--json", action="store_true", help="one JSON observation including the final snapshot")
+
     p = sub.add_parser("plan-propose", help="ask the planner to draft an iteration plan")
     p.add_argument("project_id")
 
@@ -377,11 +383,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("goal")
     p.add_argument("items", help="JSON list of {title,story,constraints,notes,repo}; '-' = stdin")
 
-    p = sub.add_parser("plan-import", help="import a Markdown plan (# goal, ## tasks), without intake")
+    p = sub.add_parser("plan-check", help="validate a TOML or Markdown plan file without contacting a chief")
+    p.add_argument("file", help="plan file, or '-' for stdin")
+
+    p = sub.add_parser("plan-export", help="export an editable plan file, or the exact submitted input")
+    p.add_argument("plan_id")
+    p.add_argument("--revision", type=int, help="retained revision (default: current)")
+    p.add_argument("--submitted", action="store_true", help="export the original submitted bytes")
+    p.add_argument("--output", "-o", default="-", help="output file (default: stdout)")
+
+    p = sub.add_parser("plan-result", help="export execution outcomes and verification results as JSON")
+    p.add_argument("plan_id")
+    p.add_argument("--output", "-o", default="-", help="output file (default: stdout)")
+
+    p = sub.add_parser("plan-import", help="submit a TOML or Markdown plan, without intake; exported revisions amend safely")
     p.add_argument("--validate", help="set the project's required validation command")
     p.add_argument("--prefer", action="append", help="set ordered capacity fallbacks: backend[=model], repeatable")
     p.add_argument("project", help="project name or id; --repo creates it if missing")
-    p.add_argument("file", help="Markdown file, or '-' for stdin")
+    p.add_argument("file", help="plan file, or '-' for stdin")
     p.add_argument("--repo", help="GitHub repo for a new project")
     p.add_argument("--append", action="store_true", help="append proposals to the live plan")
     p.add_argument("--start", action="store_true", help="approve the imported tasks and start execution")
@@ -915,6 +934,41 @@ def _watch_interval(value: str) -> float:
     if not math.isfinite(seconds) or seconds <= 0:
         raise argparse.ArgumentTypeError("watch interval must be a positive number of seconds")
     return seconds
+
+
+def _wait_timeout(value: str) -> float:
+    seconds = float(value)
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError("timeout must be a positive number of seconds")
+    return seconds
+
+
+def wait_for_plan(args, client) -> dict:
+    """Observe a submitted plan by its durable id, without following later plans."""
+    started = time.monotonic()
+    deadline = started + args.timeout
+    reason, snapshot = "timed_out", None
+    while (remaining := deadline - time.monotonic()) > 0:
+        snapshot = client.get(f"/api/plans/{args.plan_id}", timeout=remaining).raise_for_status().json()
+        status = snapshot["plan"]["status"]
+        if status in {"complete", "abandoned"}:
+            reason = "completed" if status == "complete" else "abandoned"
+            break
+        if (status == "draft" or snapshot.get("paused") or snapshot.get("project_state") == "needs_attention"
+                or any(item["status"] in {"blocked_clarity", "rejected"} for item in snapshot["items"])):
+            reason = "needs_attention"
+            break
+        if snapshot.get("project_state") in {"blocked_resources", "blocked_budget"}:
+            reason = "waiting_capacity"
+            break
+        if (remaining := deadline - time.monotonic()) > 0:
+            time.sleep(min(2.0, remaining))
+    return {
+        "reason": reason,
+        "plan_id": args.plan_id,
+        "elapsed_seconds": round(time.monotonic() - started, 3),
+        "snapshot": snapshot,
+    }
 
 
 def watch_plan(args, client) -> None:
@@ -1527,10 +1581,12 @@ def resolve_project_id(client, token: str) -> str:
 
 
 def _import_plan(args, client) -> dict:
-    from hive._workstreams.plan_document import parse_plan_document
+    from hive._workstreams.plan_document import PlanDocument, parse_plan_document
 
-    text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text()
-    document = parse_plan_document(text)
+    text = sys.stdin.read() if args.file == "-" else Path(args.file).read_bytes().decode("utf-8")
+    document = PlanDocument.model_validate(parse_plan_document(text))
+    if not document.items:
+        raise ValueError("a submitted plan needs at least one item")
     preferences = parse_agent_preferences(args.prefer) if args.prefer is not None else None
     projects = client.get("/api/projects").raise_for_status().json()
     matches = [p for p in projects if args.project in (p["id"], p["name"])]
@@ -1556,31 +1612,29 @@ def _import_plan(args, client) -> dict:
         client.patch(f"/api/projects/{pid}", json={"validation_command": args.validate}).raise_for_status()
     if preferences is not None:
         client.patch(f"/api/projects/{pid}", json={"agent_preferences": preferences}).raise_for_status()
-    if args.append:
-        detail = client.get(f"/api/projects/{pid}").raise_for_status().json()
-        payload = detail.get("plan")
-        if not payload or payload["plan"]["status"] not in ("draft", "approved"):
-            raise SystemExit("There is no live plan to append to")
-        if document["goal"] != payload["plan"]["goal"]:
-            raise SystemExit("An appended document must use the live plan's goal")
-        plan_id = payload["plan"]["id"]
-        for item in document["items"]:
-            added = client.post(f"/api/plans/{plan_id}/items", json=item).raise_for_status().json()
-            if args.start and payload["plan"]["status"] == "approved":
-                client.post(f"/api/plan-items/{added['id']}/approve").raise_for_status()
-        if args.start and payload["plan"]["status"] == "draft":
-            client.post(f"/api/plans/{plan_id}/approve").raise_for_status()
-    else:
-        payload = client.post(f"/api/projects/{pid}/plan", json=document).raise_for_status().json()
-        if args.start:
-            client.post(f"/api/plans/{payload['plan']['id']}/approve").raise_for_status()
-    return client.get(f"/api/projects/{pid}").raise_for_status().json()["plan"]
+    return client.post(f"/api/projects/{pid}/plan/submit", json={
+        "source": text, "start": args.start, "append": args.append,
+    }).raise_for_status().json()
 
 
 def run(args: argparse.Namespace, client) -> dict | list:
     """Execute one command against an httpx-compatible client and return the
     response payload. Non-2xx responses raise (clear failure over silence)."""
     c = args.command
+    if c == "plan-check":
+        from hive._workstreams.plan_document import PlanDocument, parse_plan_document
+        source = sys.stdin.read() if args.file == "-" else Path(args.file).read_bytes().decode("utf-8")
+        document = PlanDocument.model_validate(parse_plan_document(source))
+        return {"valid": True, "document": document.model_dump()}
+    if c in ("plan-export", "plan-result"):
+        endpoint = ("input" if args.submitted else "document") if c == "plan-export" else "result"
+        suffix = f"?revision={args.revision}" if c == "plan-export" and args.revision is not None else ""
+        response = client.get(f"/api/plans/{args.plan_id}/{endpoint}{suffix}").raise_for_status()
+        content = response.text if c == "plan-export" else json.dumps(response.json(), indent=2) + "\n"
+        if args.output != "-":
+            Path(args.output).write_bytes(content.encode("utf-8"))
+            return {"plan_id": args.plan_id, "output": args.output}
+        return {"content": content} if c == "plan-export" else response.json()
     if c == "plan-import":
         return _import_plan(args, client)
     if getattr(args, "project_id", None):
@@ -2025,6 +2079,13 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Chief switch failed: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
         return
+    if args.command == "plan-check":
+        try:
+            print(json.dumps(run(args, None), indent=2))
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(1) from exc
+        return
     if args.command == "run":
         _run_chief(args)
         return
@@ -2054,6 +2115,15 @@ def main(argv: list[str] | None = None) -> None:
             timeout=30.0,
         )
         try:
+            if args.command == "plan-wait":
+                observation = wait_for_plan(args, client)
+                if args.json:
+                    print(json.dumps(observation, indent=2))
+                else:
+                    print(f"PLAN {observation['plan_id']}: {observation['reason']}")
+                    if observation["snapshot"] is not None:
+                        print(format_plan(observation["snapshot"], command_prefix="hive --local" if args.local_target else "hive"))
+                return
             if args.command == "plan" and args.watch is not None:
                 watch_plan(args, client)
                 return
@@ -2070,7 +2140,9 @@ def main(argv: list[str] | None = None) -> None:
                 print(response.raise_for_status().text)
                 return
             payload = run(args, client)
-            if args.command == "show" and not args.json:
+            if args.command == "plan-export" and args.output == "-":
+                print(payload["content"], end="")
+            elif args.command == "show" and not args.json:
                 print(format_show(payload, args.part))
             elif args.command == "projects" and not args.json:
                 print(format_projects(payload))

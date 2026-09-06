@@ -309,9 +309,45 @@ class Plan(BaseModel):
     status: PlanStatus = PlanStatus.draft
     proposed_by: str = "agent"  # "agent" | "human"
     spec_ref: str = ""  # path of the committed plan doc in the spec home
+    revision: int = 1
+    input_digest: str = ""
+    context_documents: dict[str, str] = {}
+    repo_baselines: dict[str, str] = {}
     created_at: float = Field(default_factory=now)
     approved_at: float = 0.0
     finished_at: float = 0.0
+
+
+class PlanRevision(BaseModel):
+    """A retained plan input; execution never rewrites an accepted revision."""
+
+    id: str
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    project_id: str
+    plan_id: str
+    revision: int
+    document: dict
+    source: str
+    input_digest: str
+    submission_digest: str = ""
+    authored_by: str = "human"
+    created_at: float = Field(default_factory=now)
+
+
+class PlanSubmission(BaseModel):
+    """A validated file application, replayable if the chief stops between writes."""
+
+    id: str
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    project_id: str
+    plan_id: str
+    revision: int
+    document: dict
+    source: str
+    submission_digest: str
+    authored_by: str = "human"
+    pending_goal: str = ""
+    created_at: float = Field(default_factory=now)
 
 
 class PlanItemStatus(StrEnum):
@@ -345,6 +381,7 @@ class PlanItem(BaseModel):
     workspace_id: str = DEFAULT_WORKSPACE_ID
     project_id: str
     plan_id: str
+    key: str = ""  # stable identity in an editable plan document
     order: int = 0
     repo: str = ""  # target repo; the project's main repo when empty
     title: str
@@ -352,6 +389,8 @@ class PlanItem(BaseModel):
     constraints: str = ""  # technical boundaries, intentionally sparse
     notes: str = ""
     story_keys: list[str] = []  # acceptance stories this claims to deliver
+    merged_commit_sha: str = ""
+    merged_at: float = 0.0
     status: PlanItemStatus = PlanItemStatus.proposed
     parked_reason: str = ""  # blocked/rejected: the agent's explanation
     repair_attempts: int = 0  # bounded automatic build/review loops for this item
@@ -514,6 +553,7 @@ class Task(BaseModel):
     workstream_id: str  # migration note: still the work-item id for most tasks
     work_item_id: str = ""
     run_id: str = ""
+    plan_revision: int = 0
     repo: str  # git URL the runner checks out
     branch: str = ""  # non-default branch to check out (PR-mode work and its verify/fix)
     fresh_branch: bool = False  # reset an existing task branch to default before running
@@ -1092,6 +1132,8 @@ ALL_MODELS: tuple[type[BaseModel], ...] = (
     OrchestratorRun,
     Plan,
     PlanItem,
+    PlanRevision,
+    PlanSubmission,
     Project,
     ProjectWorkstream,
     Question,

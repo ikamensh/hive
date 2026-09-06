@@ -68,7 +68,7 @@ def make_processor(store, tmp_path, merge=None, delete=None):
         store,
         supervisor,
         make_config(tmp_path),
-        merge_branch_func=merge or (lambda repo, head, token, message="": None),
+        merge_branch_func=merge or (lambda repo, head, token, message="": "a" * 40),
         resolve_issue_func=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no GitHub issue I/O for plans")),
         delete_branch_func=delete or (lambda repo, branch, token: None),
     )
@@ -386,7 +386,7 @@ def test_review_accept_merges_lands_and_advances(tmp_path):
     merged, deleted = [], []
     processor, _ = make_processor(
         store, tmp_path,
-        merge=lambda repo, head, token, message="": merged.append((head, message)),
+        merge=lambda repo, head, token, message="": merged.append((head, message)) or "a" * 40,
         delete=lambda repo, branch, token: deleted.append(branch),
     )
 
@@ -437,7 +437,7 @@ def test_cancel_requested_during_review_checks_prevents_landing(tmp_path):
     project = make_project(store)
     plan = activated_plan(store, project)
     merged = []
-    processor, _ = make_processor(store, tmp_path, merge=lambda *a, **kw: merged.append(a))
+    processor, _ = make_processor(store, tmp_path, merge=lambda *a, **kw: merged.append(a) or "a" * 40)
     report(store, processor, only_resolve_task(store, project), "OUTCOME: FIXED")
     review = store.list(Task, status=TaskStatus.pending)[0]
     store.update(Task, review.id, lambda t: setattr(t, "cancel_requested", True))

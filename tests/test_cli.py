@@ -125,7 +125,7 @@ def test_cli_drives_full_loop(harness, tmp_path, monkeypatch):
     merged = {}
     monkeypatch.setattr(
         "hive.api.merge_branch",
-        lambda repo, head, token, message="": merged.setdefault("head", head),
+        lambda repo, head, token, message="": (merged.setdefault("head", head), "a" * 40)[1],
     )
     monkeypatch.setattr("hive.api.delete_branch", lambda repo, branch, token: None)
     origin = _spec_origin(tmp_path, {

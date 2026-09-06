@@ -136,7 +136,7 @@ def test_review_runner_evidence_gates_landing(repo, tmp_path, monkeypatch, comma
                                 validation_command=command or "echo checks-passed"))
     plan = activated_plan(store, project)
     merged = []
-    processor, _ = make_processor(store, tmp_path, merge=lambda repo, head, token, **kw: merged.append(head))
+    processor, _ = make_processor(store, tmp_path, merge=lambda repo, head, token, **kw: merged.append(head) or "a" * 40)
     report(store, processor, only_resolve_task(store, project), "OUTCOME: FIXED")
     review = store.list(Task, status=TaskStatus.pending)[0]
     assert review.validation_command == project.validation_command

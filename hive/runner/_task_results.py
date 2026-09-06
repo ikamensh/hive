@@ -290,7 +290,7 @@ class TaskResultProcessor:
         supervisor,
         config: Config,
         *,
-        merge_branch_func: Callable[..., None] = default_merge_branch,
+        merge_branch_func: Callable[..., str] = default_merge_branch,
         resolve_issue_func: Callable[..., None] = default_resolve_issue_on_github,
         delete_branch_func: Callable[..., None] = default_delete_branch,
         file_finding_issue_func: Callable[..., tuple[int, str]] = default_file_or_update_finding_issue,
@@ -1039,10 +1039,16 @@ class TaskResultProcessor:
 
     # -- iteration-plan items (doc-fed pipeline, wiki/iteration-plan.md) -------
 
+    @plans.synchronized
     def _handle_plan_task_result(self, task: Task, body: TaskResult, item: PlanItem) -> None:
+        item = self.store.get(PlanItem, item.id) or item
         project = self.store.get(Project, task.project_id)
         plan = self.store.get(Plan, task.run_id) if task.run_id else None
         if not project or not plan:
+            return
+        if plan.status in (PlanStatus.complete, PlanStatus.abandoned):
+            # The attempt's report is already recorded. Draining a stopped plan
+            # must not reopen its terminal items or start another attempt.
             return
         if body.cancelled or task.cancel_requested:
             # No scan exists to resurrect plan work: an operator cancel parks
@@ -1070,12 +1076,16 @@ class TaskResultProcessor:
         )
         finished = self.store.get(Plan, plan.id)
         if finished and finished.status == PlanStatus.complete:
+            items = plans.plan_items(self.store, finished)
+            merged = sum(item.status == PlanItemStatus.done for item in items)
+            cancelled = sum(item.status == PlanItemStatus.cancelled for item in items)
             self.supervisor.wake(
                 project.id,
-                "Iteration plan complete: every item is merged on the default branch. "
+                f"Iteration plan complete: {merged} item(s) merged, {cancelled} cancelled. "
                 f"The goal was: {plan.goal[:500]}\n"
-                "Record the outcome in the spec, then call mark_goal_complete with the "
-                "Try it: commands and verification evidence. The human sets the next iteration goal.",
+                "Record the result in the spec. Assess whether the goal is met before "
+                "mark_goal_complete with Try it: commands and verification evidence; "
+                "cancelled items were not delivered.",
             )
 
     def _land_plan_resolve(
@@ -1134,10 +1144,12 @@ class TaskResultProcessor:
             # Strict sequencing makes landing conflicts rare (each item branches
             # after the prior merge), so there is no auto-integration chain here:
             # any landing failure parks the item and files the todo.
-            self.merge_branch(
+            merged_commit_sha = self.merge_branch(
                 task.repo, validation.commit_sha if command else branch, self.config.gh_token,
                 message=f"Land plan item '{item.title}' via Hive",
             )
+            if not isinstance(merged_commit_sha, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", merged_commit_sha):
+                raise ValueError("merge transport returned no valid commit SHA")
         except Exception as exc:
             log.error("landing plan item '%s' failed: %s", item.title, exc)
             plans.set_item_status(
@@ -1162,7 +1174,14 @@ class TaskResultProcessor:
             self.delete_branch(task.repo, branch, self.config.gh_token)
         except Exception as exc:  # never fail a completed landing over branch cleanup
             log.info("plan item '%s' landed; leftover branch %s not deleted: %s", item.title, branch, exc)
-        plans.set_item_status(self.store, item.id, PlanItemStatus.done, "")
+        def landed(saved: PlanItem) -> None:
+            saved.status = PlanItemStatus.done
+            saved.parked_reason = ""
+            saved.merged_commit_sha = merged_commit_sha
+            saved.merged_at = time.time()
+            saved.updated_at = saved.merged_at
+
+        self.store.update(PlanItem, item.id, landed)
         log.info("plan item '%s' landed: merged on the default branch", item.title)
 
     @staticmethod

@@ -225,6 +225,7 @@ def test_full_loop(harness, tmp_path, monkeypatch):
     def fake_merge(repo, head, token, message=""):
         merged["head"] = head
         merged["message"] = message
+        return "a" * 40
 
     monkeypatch.setattr("hive.api.merge_branch", fake_merge)
     monkeypatch.setattr(
@@ -256,7 +257,7 @@ def test_full_loop(harness, tmp_path, monkeypatch):
     assert approved["items"][0]["status"] == "resolving"
     # The durable record landed in the spec home's git origin.
     committed = subprocess.run(
-        ["git", "--git-dir", str(origin), "show", "main:iteration-plan.md"],
+        ["git", "--git-dir", str(origin), "show", "main:iteration-plan.toml"],
         capture_output=True, text=True,
     )
     assert committed.returncode == 0 and "build the thing" in committed.stdout

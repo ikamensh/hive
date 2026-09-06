@@ -21,7 +21,7 @@ from typing import Callable
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from hive._integrations.auth import (
     ENROLL_TTL_S,
@@ -288,25 +288,37 @@ class DirectiveCreate(BaseModel):
 
 
 class PlanCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     goal: str
     items: list[dict] = []
 
 
+class PlanSubmit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: str
+    start: bool = False
+    append: bool = False
+
+
 class PlanItemCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     title: str
     story: str = ""
     constraints: str = ""
     notes: str = ""
     repo: str = ""
+    story_keys: list[str] = []
 
 
 class PlanItemPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     title: str | None = None
     story: str | None = None
     constraints: str | None = None
     notes: str | None = None
     repo: str | None = None
     order: int | None = None
+    story_keys: list[str] | None = None
 
 
 class PlanItemCancel(BaseModel):
@@ -1084,7 +1096,9 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         plan = store.get(Plan, plan_id)
         if not plan or plan.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
-        return plan
+        from hive._workstreams.plan_artifacts import recover_submissions
+        recover_submissions(store, require_project(plan.project_id, ctx), plan_id=plan.id)
+        return store.get(Plan, plan.id)
 
     def require_plan_item(item_id: str, ctx: AuthContext) -> tuple[Plan, PlanItem]:
         item = store.get(PlanItem, item_id)
@@ -1092,10 +1106,16 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             raise HTTPException(404)
         return require_plan(item.plan_id, ctx), item
 
-    def plan_payload(project: Project) -> dict | None:
-        plan = plans.latest_plan(store, project)
+    @plans.synchronized
+    def plan_payload(project: Project, plan: Plan | None = None) -> dict | None:
+        from hive._workstreams.plan_artifacts import recover_submissions
+        recover_submissions(store, project)
+        if plan is not None:
+            plan = store.get(Plan, plan.id)
+        plan = plan or plans.latest_plan(store, project)
         if plan is None:
             return None
+        project_state = supervisor.refresh_state(project).value
         return {
             "plan": plan.model_dump(),
             "items": [i.model_dump() for i in plans.plan_items(store, plan)],
@@ -1105,7 +1125,67 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             "state_reason": state_reason(
                 store, project, supervisor.available_backends(), supervisor.spend_today(project.id)
             ),
+            "project_state": project_state,
+            "paused": project.paused or pause.fleet_paused(store, project.workspace_id),
+            "observed_at": time.time(),
         }
+
+    @app.get("/api/plans/{plan_id}")
+    def get_plan(plan_id: str, ctx: AuthContext = Depends(current)):
+        plan = require_plan(plan_id, ctx)
+        return plan_payload(require_project(plan.project_id, ctx), plan)
+
+    @app.get("/api/plans/{plan_id}/document", response_class=PlainTextResponse)
+    @plans.synchronized
+    def get_plan_document(plan_id: str, revision: int | None = None,
+                          ctx: AuthContext = Depends(current)):
+        from hive._workstreams.plan_artifacts import document, revision_record
+        from hive._workstreams.plan_document import render_plan_document
+        plan = require_plan(plan_id, ctx)
+        try:
+            payload = document(store, plan) if revision is None else revision_record(store, plan, revision).document
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return render_plan_document(payload)
+
+    @app.get("/api/plans/{plan_id}/input", response_class=PlainTextResponse)
+    @plans.synchronized
+    def get_plan_input(plan_id: str, revision: int | None = None,
+                       ctx: AuthContext = Depends(current)):
+        from hive._workstreams.plan_artifacts import revision_record
+        try:
+            return revision_record(store, require_plan(plan_id, ctx), revision).source
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.get("/api/plans/{plan_id}/result")
+    @plans.synchronized
+    def get_plan_result(plan_id: str, ctx: AuthContext = Depends(current)):
+        from hive._workstreams.plan_results import result_document
+        plan = require_plan(plan_id, ctx)
+        return result_document(store, require_project(plan.project_id, ctx), plan)
+
+    @app.post("/api/projects/{project_id}/plan/submit")
+    def submit_plan(project_id: str, body: PlanSubmit, ctx: AuthContext = Depends(editor)):
+        from hive._workstreams.plan_artifacts import RevisionConflict, submit
+        project = require_project(project_id, ctx)
+        with plans.lock:
+            try:
+                plan, accepted_revision = submit(store, project, body.source, append=body.append)
+                if body.start and plan.status in (PlanStatus.draft, PlanStatus.approved):
+                    if accepted_revision != plan.revision:
+                        raise RevisionConflict("the submitted revision was superseded; export the current plan before starting")
+                    plans.approve_all(store, plan)
+                    if plan.status == PlanStatus.draft:
+                        plans.activate(store, project, plan, spec=plan_spec_or_reporter(project))
+                    else:
+                        plans.advance_plan(store, project, plan)
+                    supervisor.poke()
+            except RevisionConflict as exc:
+                raise HTTPException(409, str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            return {**plan_payload(project, store.get(Plan, plan.id)), "accepted_revision": accepted_revision}
 
     def plan_spec_or_reporter(project: Project):
         """The spec home for the approved-plan doc commit; a failed sync

@@ -15,7 +15,7 @@ def test_live_plan_view_and_amendments(app, tmp_path, monkeypatch, repaired_repo
     the actual task, repair feedback, validation, and landed work throughout."""
     client, store = app
     monkeypatch.setattr("hive.api.SpecRepo", FakeSpecRepo)
-    monkeypatch.setattr("hive.api.merge_branch", lambda *a, **kw: None)
+    monkeypatch.setattr("hive.api.merge_branch", lambda *a, **kw: "a" * 40)
     monkeypatch.setattr("hive.api.delete_branch", lambda *a, **kw: None)
     source = tmp_path / "tasks.md"
     source.write_text("# Production simulator\n\n## Core\nBuild the core.\n\n## Charts\nDraw charts.\n")
@@ -152,6 +152,7 @@ def test_plan_watch_emits_json_updates_and_stops_on_abandon(app, tmp_path, monke
     assert sleeps == [0.1]
     assert client.get("/api/workspace").json()["paused"] is False
 
+    source.write_text("# Next goal\n\n## First\nBuild it.\n")
     cli(client, "plan-import", "demo", str(source))
 
     def interrupt(interval):

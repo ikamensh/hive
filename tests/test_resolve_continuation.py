@@ -124,7 +124,8 @@ def test_unfinished_review_continues_review_and_cannot_land_from_legacy_accept(t
     store.put(project)
     plan = activated_plan(store, project)
     merged = []
-    processor, _ = make_processor(store, tmp_path, merge=lambda *args, **kw: merged.append(args[1]))
+    processor, _ = make_processor(store, tmp_path,
+                                  merge=lambda *args, **kw: merged.append(args[1]) or args[1])
     build = only_resolve_task(store, project)
     claim(store, build)
     processor.handle(build.id, TaskResult(text="Built.", session_handle="builder-session",

@@ -20,7 +20,9 @@ Strictness invariants:
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from functools import wraps
 
 from hive._control.agent_choice import build_agent
 from hive._control.escalation import escalate
@@ -42,8 +44,17 @@ from hive.models import (
 from hive.llm.prompts import load as load_prompt
 
 log = logging.getLogger("hive._workstreams.plans")
+lock = threading.RLock()  # the chief is one writer; serialize its API/planner/result threads
 
-PLAN_DOC_PATH = "iteration-plan.md"
+
+def synchronized(operation):
+    @wraps(operation)
+    def call(*args, **kwargs):
+        with lock:
+            return operation(*args, **kwargs)
+    return call
+
+PLAN_DOC_PATH = "iteration-plan.toml"
 LANDING_FAILED_PREFIX = "accepted but landing failed"
 RESOLVE_BACKEND = "codex"  # same default agent as issue solving
 REASON_LIMIT = 4000
@@ -52,6 +63,13 @@ REPAIR_LIMIT = 2
 
 def now_s() -> float:
     return time.time()
+
+
+def _current(store, record):
+    saved = store.get(type(record), record.id)
+    if saved is None:
+        raise ValueError(f"{type(record).__name__} {record.id} no longer exists")
+    return saved
 
 
 def plan_branch(item: PlanItem) -> str:
@@ -86,6 +104,7 @@ def latest_plan(store, project: Project) -> Plan | None:
     return max(plans_all, key=lambda p: p.created_at) if plans_all else None
 
 
+@synchronized
 def cancel_plan_work(store, task: Task) -> None:
     """Release a plan item whose resolve/review task was hard-cancelled at the
     chief (never reached a runner). The runner-reported cancel path goes
@@ -106,11 +125,23 @@ def cancel_plan_work(store, task: Task) -> None:
 # -- drafting + review ----------------------------------------------------------
 
 
+@synchronized
 def create_draft(
-    store, project: Project, goal: str, items: list[dict], proposed_by: str = "agent"
+    store, project: Project, goal: str, items: list[dict], proposed_by: str = "agent", *,
+    source: str | None = None, submission_digest: str = "",
+    context_documents: dict[str, str] | None = None, repo_baselines: dict[str, str] | None = None,
 ) -> Plan:
     """Create a draft plan, replacing (abandoning) any existing draft. An
     approved plan is never replaced silently — abandon it explicitly first."""
+    from .plan_document import PlanDocument
+    from .plan_artifacts import record_revision
+
+    project = _current(store, project)
+    parsed = PlanDocument.model_validate({
+        "goal": goal, "items": items, "context_documents": context_documents or {},
+        "repo_baselines": repo_baselines or {},
+    })
+    items = [item.model_dump() for item in parsed.items]
     existing = active_plan(store, project)
     if existing is not None:
         if existing.status == PlanStatus.approved:
@@ -122,8 +153,10 @@ def create_draft(
         Plan(
             workspace_id=project.workspace_id,
             project_id=project.id,
-            goal=goal.strip(),
+            goal=goal,
             proposed_by=proposed_by,
+            context_documents=context_documents or {},
+            repo_baselines=repo_baselines or {},
         )
     )
     for position, item in enumerate(items):
@@ -141,14 +174,15 @@ def create_draft(
         project.pending_iteration_goal = ""
         project.goal_complete = False
         project.goal_complete_note = ""
-    return plan
+    return record_revision(store, plan, source=source, submission_digest=submission_digest,
+                           authored_by=proposed_by, bump=False)
 
 
 def _put_item(
     store, project: Project, plan: Plan, fields: dict, *, order: int, authored_by: str
 ) -> PlanItem:
-    title = str(fields.get("title") or "").strip()
-    if not title:
+    title = str(fields.get("title") or "")
+    if not title.strip():
         raise ValueError("a plan item needs a title")
     return store.put(
         PlanItem(
@@ -156,54 +190,94 @@ def _put_item(
             project_id=project.id,
             plan_id=plan.id,
             order=order,
-            repo=str(fields.get("repo") or "").strip(),
+            key=fields.get("key") or f"item-{order + 1}",
+            repo=str(fields.get("repo") or project.spec_repo).strip(),
             title=title,
-            story=str(fields.get("story") or "").strip(),
-            constraints=str(fields.get("constraints") or "").strip(),
-            notes=str(fields.get("notes") or "").strip(),
+            story=str(fields.get("story") or ""),
+            constraints=str(fields.get("constraints") or ""),
+            notes=str(fields.get("notes") or ""),
+            story_keys=fields.get("story_keys", []),
             authored_by=authored_by,
         )
     )
 
 
+@synchronized
 def add_item(store, project: Project, plan: Plan, fields: dict, authored_by: str) -> PlanItem:
     """Append an item. On a draft this is normal assembly; on an approved plan
     it is an amendment proposal — the item enters `proposed` either way and
     needs the human's flip before it can execute."""
+    project, plan = _current(store, project), _current(store, plan)
     if plan.status not in (PlanStatus.draft, PlanStatus.approved):
         raise ValueError(f"plan is {plan.status}; cannot add items")
-    orders = [i.order for i in plan_items(store, plan)]
-    return _put_item(
-        store, project, plan, fields, order=(max(orders) + 1 if orders else 0), authored_by=authored_by
+    existing = plan_items(store, plan)
+    order = max((item.order for item in existing), default=-1) + 1
+    from .plan_document import PlanDocument, PlanDocumentItem
+    from .plan_artifacts import document, record_revision
+
+    fields = PlanDocumentItem.model_validate(fields).model_dump(exclude_unset=True)
+    if not fields.get("key"):
+        keys = {item.key or item.id for item in existing}
+        number = order + 1
+        while f"item-{number}" in keys:
+            number += 1
+        fields["key"] = f"item-{number}"
+    proposed = document(store, plan)
+    proposed["items"].append(fields)
+    PlanDocument.model_validate(proposed)
+    item = _put_item(
+        store, project, plan, fields, order=order, authored_by=authored_by
     )
+    record_revision(store, plan, authored_by=authored_by)
+    return item
 
 
-EDITABLE_FIELDS = ("title", "story", "constraints", "notes", "repo", "order")
+EDITABLE_FIELDS = ("title", "story", "constraints", "notes", "repo", "order", "story_keys")
 
 
+@synchronized
 def update_item(store, item: PlanItem, fields: dict) -> PlanItem:
     """Rewrite any part of an item — the human's edit (the AI only adds via
     amendments). Allowed whenever no agent is working on it and it is not
     terminal: editing a parked item's constraints before a retry is the direct
     amendment path. Editing does not change approval."""
+    item = _current(store, item)
     if item.status in PLAN_ITEM_IN_FLIGHT:
         raise ValueError("an agent is working on this item; cancel its task first")
     if item.status in PLAN_ITEM_TERMINAL:
         raise ValueError(f"item is {item.status} and can no longer change")
 
+    from .plan_artifacts import document, record_revision
+    from .plan_document import PlanDocument
+
+    updates = {}
+    for key in EDITABLE_FIELDS:
+        if key in fields and fields[key] is not None:
+            value = fields[key]
+            updates[key] = int(value) if key == "order" else value if key == "story_keys" else str(value).strip()
+    plan = store.get(Plan, item.plan_id)
+    proposed = document(store, plan)
+    for row in proposed["items"]:
+        if row["key"] == (item.key or item.id):
+            row.update({key: value for key, value in updates.items() if key != "order"})
+    PlanDocument.model_validate(proposed)
+
     def mutate(saved: PlanItem) -> None:
-        for key in EDITABLE_FIELDS:
-            if key in fields and fields[key] is not None:
-                setattr(saved, key, int(fields[key]) if key == "order" else str(fields[key]).strip())
+        for key, value in updates.items():
+            setattr(saved, key, value)
         saved.edited_by_human = True
         saved.updated_at = now_s()
 
-    return store.update(PlanItem, item.id, mutate) or item
+    updated = store.update(PlanItem, item.id, mutate) or item
+    record_revision(store, plan)
+    return updated
 
 
+@synchronized
 def approve_item(store, plan: Plan, item: PlanItem) -> PlanItem:
     """The human's flip. Before whole-plan approval it marks review progress;
     on an already-approved plan (an amendment) it queues the item directly."""
+    plan, item = _current(store, plan), _current(store, item)
     if item.status != PlanItemStatus.proposed:
         raise ValueError(f"item is {item.status}; only proposed items can be approved")
     target = (
@@ -217,7 +291,9 @@ def approve_item(store, plan: Plan, item: PlanItem) -> PlanItem:
     return store.update(PlanItem, item.id, mutate) or item
 
 
+@synchronized
 def unapprove_item(store, item: PlanItem) -> PlanItem:
+    item = _current(store, item)
     if item.status != PlanItemStatus.approved:
         raise ValueError(f"item is {item.status}; only approved (not yet queued) items can flip back")
 
@@ -228,9 +304,11 @@ def unapprove_item(store, item: PlanItem) -> PlanItem:
     return store.update(PlanItem, item.id, mutate) or item
 
 
+@synchronized
 def approve_all(store, plan: Plan) -> int:
     """The one-click blind path: flip every proposed item. Equivalent to
     flipping each individually — same resulting states."""
+    plan = _current(store, plan)
     flipped = 0
     for item in plan_items(store, plan):
         if item.status == PlanItemStatus.proposed:
@@ -239,7 +317,9 @@ def approve_all(store, plan: Plan) -> int:
     return flipped
 
 
+@synchronized
 def cancel_item(store, item: PlanItem, reason: str = "") -> PlanItem:
+    item = _current(store, item)
     if item.status in PLAN_ITEM_IN_FLIGHT:
         raise ValueError("an agent is working on this item; cancel its task first")
     if item.status == PlanItemStatus.done:
@@ -253,8 +333,10 @@ def cancel_item(store, item: PlanItem, reason: str = "") -> PlanItem:
     return store.update(PlanItem, item.id, mutate) or item
 
 
+@synchronized
 def retry_item(store, project: Project, plan: Plan, item: PlanItem) -> PlanItem:
     """Re-queue a parked item, retaining its checkout when execution resumes."""
+    project, plan, item = _current(store, project), _current(store, plan), _current(store, item)
     if item.status not in PLAN_ITEM_PARKED:
         raise ValueError(f"item is {item.status}; only blocked/rejected items can be retried")
 
@@ -269,9 +351,12 @@ def retry_item(store, project: Project, plan: Plan, item: PlanItem) -> PlanItem:
     return updated
 
 
+@synchronized
 def abandon_plan(store, plan: Plan) -> Plan:
     """Terminal for the plan and every non-terminal item. In-flight agent tasks
     are cancelled by the caller (API) — the store flip here never strands one."""
+
+    plan = _current(store, plan)
 
     def mutate_plan(saved: Plan) -> None:
         saved.status = PlanStatus.abandoned
@@ -303,6 +388,7 @@ def activation_problem(items: list[PlanItem]) -> str:
     return ""
 
 
+@synchronized
 def activate(store, project: Project, plan: Plan, spec=None) -> list[str]:
     """Whole-plan approval: queue every approved item (store-only, atomic in
     effect — nothing external can half-fail), commit the plan document to the
@@ -310,6 +396,7 @@ def activate(store, project: Project, plan: Plan, spec=None) -> list[str]:
 
     The store is the source of truth; the spec-home commit is best-effort and
     escalates a todo on failure rather than blocking the approved work."""
+    project, plan = _current(store, project), _current(store, plan)
     if plan.status != PlanStatus.draft:
         raise ValueError(f"plan is {plan.status}; only a draft can be activated")
     items = plan_items(store, plan)
@@ -338,8 +425,11 @@ def activate(store, project: Project, plan: Plan, spec=None) -> list[str]:
 
     if spec is not None:
         try:
+            from .plan_artifacts import document
+            from .plan_document import render_plan_document
+
             spec.commit_files(
-                {PLAN_DOC_PATH: plan_doc_markdown(plan, plan_items(store, plan))},
+                {PLAN_DOC_PATH: render_plan_document(document(store, plan))},
                 f"Approved iteration plan: {plan.goal[:60]}",
             )
             store.update(Plan, plan.id, lambda saved: setattr(saved, "spec_ref", PLAN_DOC_PATH))
@@ -368,30 +458,6 @@ def activate(store, project: Project, plan: Plan, spec=None) -> list[str]:
     return notes
 
 
-def plan_doc_markdown(plan: Plan, items: list[PlanItem]) -> str:
-    """The durable record committed to the spec home at approval."""
-    lines = [
-        "# Iteration plan",
-        "",
-        f"Goal: {plan.goal}",
-        f"Proposed by: {plan.proposed_by} · approved {time.strftime('%Y-%m-%d', time.gmtime(now_s()))}",
-        "",
-    ]
-    for position, item in enumerate(items, start=1):
-        if item.status == PlanItemStatus.cancelled:
-            continue
-        lines += [f"## {position}. {item.title}", ""]
-        if item.repo:
-            lines += [f"Repo: {item.repo}", ""]
-        if item.story:
-            lines += ["**Story:** " + item.story, ""]
-        if item.constraints:
-            lines += ["**Constraints:** " + item.constraints, ""]
-        if item.notes:
-            lines += [item.notes, ""]
-    return "\n".join(lines)
-
-
 # -- execution: the doc-fed pipeline ----------------------------------------------
 
 
@@ -407,6 +473,7 @@ def build_work_doc(plan: Plan, item: PlanItem) -> str:
     return "\n".join(parts)
 
 
+@synchronized
 def _make_plan_task(
     store,
     project: Project,
@@ -419,6 +486,7 @@ def _make_plan_task(
     continue_from: Task | None = None,
     feedback: str = "",
 ) -> Task:
+    project, plan, item = _current(store, project), _current(store, plan), _current(store, item)
     prompt_name = "plan_resolve" if kind == TaskKind.resolve else "plan_review"
     prompt, version = load_prompt(prompt_name)
     branch = plan_branch(item)
@@ -428,6 +496,11 @@ def _make_plan_task(
         f"You are on git branch `{branch}` (already checked out).\n\n"
         f"--- ITEM DOCUMENT ---\n{build_work_doc(plan, item)}\n--- END ITEM DOCUMENT ---\n"
     )
+    for name, content in plan.context_documents.items():
+        header += f"\n--- CONTEXT DOCUMENT: {name} ---\n{content}\n--- END CONTEXT ---\n"
+    if plan.repo_baselines:
+        header += "\nPlanning baselines (earlier plan items may have advanced these repos):\n"
+        header += "\n".join(f"{repo}: {sha}" for repo, sha in plan.repo_baselines.items()) + "\n"
     if project.validation_command:
         header += f"\nRequired validation command: `{project.validation_command}`.\n"
     if continue_from is not None:
@@ -453,6 +526,7 @@ def _make_plan_task(
             workstream_id=item.id,
             work_item_id=item.id,
             run_id=plan.id,
+            plan_revision=plan.revision,
             repo=item.repo or project.spec_repo,
             branch=branch,
             fresh_branch=kind == TaskKind.resolve and continue_from is None,
@@ -470,6 +544,7 @@ def _make_plan_task(
     )
 
 
+@synchronized
 def create_review_task(
     store, project: Project, plan: Plan, item: PlanItem, backend: str, model: str = ""
 ) -> Task:
@@ -477,10 +552,12 @@ def create_review_task(
     return _make_plan_task(store, project, plan, item, TaskKind.review, backend, model=model)
 
 
+@synchronized
 def repair_after_review(
     store, project: Project, plan: Plan, item: PlanItem, task: Task, report: str,
 ) -> None:
     """Keep the reviewed checkout for two repair attempts, then park with evidence."""
+    project, plan, item = _current(store, project), _current(store, plan), _current(store, item)
     if item.repair_attempts >= REPAIR_LIMIT:
         set_item_status(store, item.id, PlanItemStatus.rejected,
                         f"Still failing after {REPAIR_LIMIT} repair attempts:\n\n{report}")
@@ -497,6 +574,7 @@ def repair_after_review(
                     continue_from=task, feedback=report)
 
 
+@synchronized
 def advance_plan(
     store, project: Project, plan: Plan, backend: str = "", model: str = ""
 ) -> int:
@@ -506,11 +584,18 @@ def advance_plan(
     Parked items stall the queue deliberately — later items may
     build on them, and a parked item is a decision waiting on the human.
     Idempotent; call after activation and after every plan-task landing."""
+    project, plan = _current(store, project), _current(store, plan)
+    from .plan_artifacts import recover_submissions
+    recover_submissions(store, project, plan_id=plan.id)
+    plan = _current(store, plan)
     if plan.status != PlanStatus.approved:
         return 0
     items = plan_items(store, plan)
     if any(i.status in PLAN_ITEM_IN_FLIGHT or i.status in PLAN_ITEM_PARKED for i in items):
         return 0
+    remaining = [i for i in items if i.status not in PLAN_ITEM_TERMINAL]
+    if remaining and remaining[0].status in (PlanItemStatus.proposed, PlanItemStatus.approved):
+        return 0  # an unapproved amendment cannot be skipped by later queued work
     queued = [i for i in items if i.status == PlanItemStatus.queued]
     if not queued:
         refresh_plan(store, plan)
@@ -551,10 +636,12 @@ def advance_plan(
     return 1
 
 
+@synchronized
 def refresh_plan(store, plan: Plan) -> Plan:
     """Completion detection: an approved plan whose items are all terminal is
     complete (done items exist) — the moment the AI proposes the next
     iteration. All-cancelled degenerates to abandoned."""
+    plan = _current(store, plan)
     if plan.status != PlanStatus.approved:
         return plan
     items = plan_items(store, plan)
@@ -573,6 +660,7 @@ def refresh_plan(store, plan: Plan) -> Plan:
     return store.update(Plan, plan.id, finish) or plan
 
 
+@synchronized
 def set_item_status(store, item_id: str, status: PlanItemStatus, reason: str) -> PlanItem | None:
     def mutate(saved: PlanItem) -> None:
         saved.status = status

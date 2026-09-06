@@ -57,7 +57,7 @@ def make_processor(store, tmp_path):
         supervisor,
         Config(gcp_project="", gcs_bucket="", gh_token="t", gemini_api_key="",
                orch_model="", runner_token="test-token", data_dir=tmp_path),
-        merge_branch_func=lambda repo, head, token, message="": None,
+        merge_branch_func=lambda repo, head, token, message="": "a" * 40,
         resolve_issue_func=lambda *a, **k: None,
         delete_branch_func=lambda repo, branch, token: None,
     )
