@@ -668,6 +668,10 @@ class TaskResultProcessor:
             if task.backend == "claude" else
             "Fix the CLI runtime or configuration identified below, then restart the runner."
         )
+        if task.backend == "claude" and "maximum buffer size" in text:
+            hint = ("Update the Claude SDK adapter's max_buffer_size for large tool/image messages, "
+                    "verify the failed message fits, then restart the runner. "
+                    "A small model probe alone does not verify large-message handling.")
         escalate(
             self.store, f"Fix {task.backend} runtime on {name}",
             instructions=(f"{hint}\n\nRe-probe this resource using the failed model `{task.model}`. "

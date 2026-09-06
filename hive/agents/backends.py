@@ -69,6 +69,7 @@ TRANSIENT_PATTERNS = re.compile(
 # not a project clarification or a fabricated quota-reset deadline.
 RUNTIME_BLOCK_PATTERNS = re.compile(
     r"(?:claude code|codex(?: cli)?|opencode)\s+v?\d[\w.+-]*\s+does not support (?:this|the) model|"
+    r"Claude session error during query:\s*CLIJSONDecodeError:[^\n]*JSON message exceeded maximum buffer size|"
     r"OpenCode isolation preflight failed:",
     re.IGNORECASE,
 )
@@ -80,7 +81,7 @@ def classify_failure(text: str, *, is_error: bool) -> str:
     Returns ``"auth"`` for a login/policy block (needs a human), ``"exhausted"``
     for a rate-limit/quota window that heals by waiting, ``"transient"`` for a
     one-off backend flake worth an immediate retry, ``"runtime"`` for explicit
-    CLI-version/configuration refusal, or ``""`` otherwise. Auth
+    CLI-version/configuration refusal or transport-size failure, or ``""`` otherwise. Auth
     wins over exhaustion: a message that trips both (e.g. "rate limited; please
     re-login") is the safer-to-escalate case, so we treat it as an auth block.
     Both win over transient — a dead credential often also breaks the stream,
