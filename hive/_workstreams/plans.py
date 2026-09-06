@@ -37,6 +37,7 @@ from hive.models import (
     Task,
     TaskKind,
     TaskStatus,
+    Verdict,
 )
 from hive.llm.prompts import load as load_prompt
 
@@ -500,8 +501,9 @@ def advance_plan(
     store, project: Project, plan: Plan, backend: str = "", model: str = ""
 ) -> int:
     """Strict sequencing: if any item is in flight *or parked*, do nothing;
-    otherwise promote the lowest-order queued item to `resolving` and queue its
-    resolve task. Parked items stall the queue deliberately — later items may
+    otherwise start the lowest-order queued item, resuming an unfinished review
+    when its delivered attempt failed without a product/gate rejection.
+    Parked items stall the queue deliberately — later items may
     build on them, and a parked item is a decision waiting on the human.
     Idempotent; call after activation and after every plan-task landing."""
     if plan.status != PlanStatus.approved:
@@ -515,28 +517,36 @@ def advance_plan(
         return 0
     nxt = queued[0]
 
-    def promote(saved: PlanItem) -> None:
-        saved.status = PlanItemStatus.resolving
-        saved.parked_reason = ""
-        saved.updated_at = now_s()
-
-    item = store.update(PlanItem, nxt.id, promote) or nxt
     # A manual retry may wait behind another item. Derive its continuation from
     # durable delivered-attempt history here, so a chief restart cannot lose the
     # checkout. An undelivered attempt never owned one, even if it was dispatched.
     previous = max(
-        (task for task in store.list(Task, workspace_id=project.workspace_id, work_item_id=item.id)
-         if task.run_id == plan.id and task.repo == (item.repo or project.spec_repo)
-         and task.branch == plan_branch(item)
+        (task for task in store.list(Task, workspace_id=project.workspace_id, work_item_id=nxt.id)
+         if task.run_id == plan.id and task.repo == (nxt.repo or project.spec_repo)
+         and task.branch == plan_branch(nxt)
          and task.delivered
          and task.status in (TaskStatus.done, TaskStatus.failed, TaskStatus.cancelled)),
         key=lambda task: task.created_at, default=None,
     )
-    _make_plan_task(store, project, plan, item, TaskKind.resolve, backend or RESOLVE_BACKEND,
+    retry_review = (
+        previous is not None and previous.kind == TaskKind.review
+        and previous.status == TaskStatus.failed and previous.verdict == Verdict.none
+        and (previous.validation is None or previous.validation.exit_code == 0)
+    )
+    kind = TaskKind.review if retry_review else TaskKind.resolve
+    status = PlanItemStatus.reviewing if retry_review else PlanItemStatus.resolving
+
+    def promote(saved: PlanItem) -> None:
+        saved.status = status
+        saved.parked_reason = ""
+        saved.updated_at = now_s()
+
+    item = store.update(PlanItem, nxt.id, promote) or nxt
+    _make_plan_task(store, project, plan, item, kind, backend or RESOLVE_BACKEND,
                     model=model, continue_from=previous)
     log.info(
-        "plan %s: item %d '%s' → resolving (%d still queued)",
-        plan.id, item.order + 1, item.title, len(queued) - 1,
+        "plan %s: item %d '%s' → %s (%d still queued)",
+        plan.id, item.order + 1, item.title, status, len(queued) - 1,
     )
     return 1
 
