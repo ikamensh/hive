@@ -308,13 +308,23 @@ hive subs | hive todos | hive org-context
 
 ### Web UI
 
-`web/` is the chief SPA (React + Vite + TypeScript): a project list with live state badges, a project page (workstream board, question inbox, activity feed, policy toggles), and a resources page (runners, backend cooldowns, human todos, subscriptions, org context). It polls the API every 4s and shows a clear "chief unreachable" banner when the backend is down.
+`web/` is the chief SPA (React + Vite + TypeScript). Create a project with a
+repository and optional validation command, then upload or paste a plan on its
+page. Review the accepted items and choose **Approve all & start**. The plan
+stays at the top of the page, alongside decisions that need you.
+
+**Results & evidence** shows delivered and cancelled items, review reports,
+validation output and checked/landed commits. Download the full result JSON or
+export the plan as TOML for amendments. **Link to this plan** keeps the same
+execution selected after a reload or a newer iteration. Intake and Hive-authored
+planning remain optional; issues, tests, requests and diagnostics live in
+secondary disclosures. See [the project workspace](wiki/project-launchpad.md).
 
 ```bash
 cd web
 npm install
 npm run dev              # dev server, proxies /api → http://localhost:8000
-VITE_MOCK=1 npm run dev  # canned fixtures, no backend needed
+VITE_MOCK=1 npm run dev  # preview canned states; submission/export need a chief
 npm run build            # tsc --noEmit + vite build → web/dist (served by the chief)
 ```
 

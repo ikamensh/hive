@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { api } from "../../api";
 import { Markdown } from "../../components/shared";
-import type { PlanItem, PlanItemStatus, PlanPayload } from "../../types";
+import type { PlanItem, PlanItemStatus, PlanPayload, Project } from "../../types";
 import { PlanSubmission } from "./planSubmission";
 import { downloadText, PlanResults } from "./planResults";
 
@@ -53,6 +53,7 @@ function ItemEditor({ item, onSaved }: { item: PlanItem; onSaved: () => void }) 
   const [constraints, setConstraints] = useState(item.constraints);
   const [notes, setNotes] = useState(item.notes);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const canEdit = editable(item);
   const dirty =
     title !== item.title || story !== item.story ||
@@ -61,9 +62,12 @@ function ItemEditor({ item, onSaved }: { item: PlanItem; onSaved: () => void }) 
   const save = async () => {
     if (!dirty || busy) return;
     setBusy(true);
+    setError("");
     try {
       await api.patchPlanItem(item.id, { title, story, constraints, notes });
       onSaved();
+    } catch (error) {
+      setError(String(error));
     } finally {
       setBusy(false);
     }
@@ -105,6 +109,7 @@ function ItemEditor({ item, onSaved }: { item: PlanItem; onSaved: () => void }) 
           {busy ? "saving…" : "save"}
         </button>
       </div>
+      {error && <p className="form-error" role="alert">{error}</p>}
     </div>
   );
 }
@@ -125,12 +130,16 @@ function ItemRow({
   onMoveUp?: () => Promise<void>; // review mode, not the first item
 }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const act = (fn: () => Promise<unknown>) => async () => {
     if (busy) return;
     setBusy(true);
+    setError("");
     try {
       await fn();
       onChanged();
+    } catch (error) {
+      setError(String(error));
     } finally {
       setBusy(false);
     }
@@ -150,7 +159,7 @@ function ItemRow({
         >
           {RAIL_MARK[item.status]}
         </span>
-        <button type="button" className="plan-item-main" onClick={onToggle}>
+        <button type="button" className="plan-item-main" onClick={onToggle} aria-expanded={expanded}>
           <span className="plan-item-order">{item.order + 1}</span>
           <span className={`plan-item-title${item.status === "cancelled" ? " plan-item-struck" : ""}`}>
             {item.title}
@@ -197,6 +206,7 @@ function ItemRow({
           )}
         </div>
       </div>
+      {error && <p className="form-error" role="alert">{error}</p>}
       {parked && item.parked_reason && (
         <div className="plan-parked-reason">
           <Markdown text={item.parked_reason} />
@@ -210,14 +220,18 @@ function ItemRow({
 function AddItemForm({ planId, onAdded }: { planId: string; onAdded: () => void }) {
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!title.trim() || busy) return;
     setBusy(true);
+    setError("");
     try {
       await api.addPlanItem(planId, { title: title.trim() });
       setTitle("");
       onAdded();
+    } catch (error) {
+      setError(String(error));
     } finally {
       setBusy(false);
     }
@@ -225,6 +239,7 @@ function AddItemForm({ planId, onAdded }: { planId: string; onAdded: () => void 
   return (
     <form className="plan-add-item" onSubmit={submit}>
       <input
+        aria-label="New work item"
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         placeholder="add an item — high-level statement, details after"
@@ -232,19 +247,18 @@ function AddItemForm({ planId, onAdded }: { planId: string; onAdded: () => void 
       <button type="submit" className="ghost" disabled={!title.trim() || busy}>
         <i className="ti ti-plus" aria-hidden /> add
       </button>
+      {error && <p className="form-error" role="alert">{error}</p>}
     </form>
   );
 }
 
-/** Empty state + hand-written start: the AI proposes, or you write. */
+/** Submission is the default; drafting tools remain optional. */
 function PlanStarter({
   projectId,
   onChanged,
-  note,
 }: {
   projectId: string;
   onChanged: (planId?: string) => void;
-  note?: string;
 }) {
   const [goal, setGoal] = useState("");
   const [busy, setBusy] = useState<"" | "propose" | "write">("");
@@ -278,41 +292,71 @@ function PlanStarter({
   };
   return (
     <div className="plan-starter">
-      {note && <p className="muted">{note}</p>}
       <PlanSubmission projectId={projectId} onAccepted={onChanged} />
       <details className="project-disclosure">
-      <summary>Other ways to prepare a plan</summary>
-      <div className="plan-starter-actions">
-        <button type="button" onClick={propose} disabled={busy !== ""} aria-busy={busy === "propose"}>
-          <i className="ti ti-sparkles" aria-hidden />
-          {busy === "propose" ? "asking hive…" : "have Hive propose a plan"}
-        </button>
-        <form className="plan-starter-manual" onSubmit={write}>
-          <input
-            value={goal}
-            onChange={(e) => setGoal(e.target.value)}
-            placeholder="or state the iteration goal and write it yourself…"
-          />
-          <button type="submit" className="ghost" disabled={!goal.trim() || busy !== ""}>
-            start empty plan
+        <summary>Other ways to prepare a plan</summary>
+        <div className="plan-starter-actions">
+          <button type="button" onClick={propose} disabled={busy !== ""} aria-busy={busy === "propose"}>
+            <i className="ti ti-sparkles" aria-hidden />
+            {busy === "propose" ? "asking hive…" : "have Hive propose a plan"}
           </button>
-        </form>
-      </div>
-      {error && <p className="form-error" role="alert">{error}</p>}
+          <form className="plan-starter-manual" onSubmit={write}>
+            <input
+              value={goal}
+              onChange={(e) => setGoal(e.target.value)}
+              placeholder="or state the iteration goal and write it yourself…"
+            />
+            <button type="submit" className="ghost" disabled={!goal.trim() || busy !== ""}>
+              start empty plan
+            </button>
+          </form>
+        </div>
+        {error && <p className="form-error" role="alert">{error}</p>}
       </details>
     </div>
   );
 }
 
+function PlanValidation({ project, onChanged }: { project: Project; onChanged: () => void }) {
+  const [edited, setEdited] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const command = edited ?? project.validation_command ?? "";
+  return (
+    <details className="project-disclosure plan-validation-settings">
+      <summary>Validation before landing: {project.validation_command || "agent review only"}</summary>
+      <form className="plan-submission" onSubmit={async event => {
+        event.preventDefault();
+        setBusy(true);
+        setError("");
+        try {
+          await api.patchProject(project.id, { validation_command: command.trim() });
+          onChanged();
+          setEdited(null);
+        } catch (error) { setError(String(error)); }
+        finally { setBusy(false); }
+      }}>
+        <label>Validation command
+          <input value={command} onChange={e => setEdited(e.target.value)} placeholder="make check" />
+        </label>
+        <p className="muted">Runs in each target repository after review. A passing check must name the clean, pushed commit that Hive lands. Changes apply to newly queued reviews.</p>
+        {error && <p role="alert" className="form-error">{error}</p>}
+        <button type="submit" disabled={busy || command === (project.validation_command ?? "")}>Save validation command</button>
+      </form>
+    </details>
+  );
+}
+
 export function PlanPanel({
-  projectId,
+  project,
   payload,
   onChanged,
 }: {
-  projectId: string;
+  project: Project;
   payload: PlanPayload | null | undefined;
   onChanged: (planId?: string) => void;
 }) {
+  const projectId = project.id;
   const [expandedId, setExpandedId] = useState("");
   const [view, setView] = useState<"items" | "results" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -321,6 +365,7 @@ export function PlanPanel({
   if (!payload) {
     return (
       <div className="plan-panel plan-panel-empty">
+        <PlanValidation project={project} onChanged={onChanged} />
         <PlanStarter
           projectId={projectId}
           onChanged={onChanged}
@@ -359,7 +404,7 @@ export function PlanPanel({
     ) : plan.status === "approved" ? (
       <span className="chip chip-plan-executing">executing · {landed}/{live.length} landed</span>
     ) : (
-      <span className="chip">{plan.status === "abandoned" ? "abandoned" : "finished"} · {landed} landed · {cancelled} cancelled</span>
+      <span className="chip">{landed} landed · {cancelled} cancelled</span>
     );
 
   return (
@@ -390,6 +435,7 @@ export function PlanPanel({
         })}>Export plan</button>
         <a href={`/p/${projectId}?plan=${encodeURIComponent(plan.id)}`}>Link to this plan</a>
       </nav>
+      {!ended && <PlanValidation project={project} onChanged={onChanged} />}
       {showResults ? <PlanResults key={plan.id} planId={plan.id} /> : <>
       <div className="plan-items">
         {items.map((item, position) => {

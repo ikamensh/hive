@@ -168,15 +168,15 @@ function machineAvailabilityLabel(machine: OverviewMachine): string {
 function NewProjectModal({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const [name, setName] = useState("");
-  const [specText, setSpecText] = useState("");
-  const [repoMode, setRepoMode] = useState<"create" | "existing">("create");
+  const [repoMode, setRepoMode] = useState<"create" | "existing">("existing");
   const [repoUrl, setRepoUrl] = useState("");
+  const [validationCommand, setValidationCommand] = useState("");
+  const [createdId, setCreatedId] = useState("");
+  const [repoCreated, setRepoCreated] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  // One submit does the whole handover (parity with `hive new`): create the
-  // project, wire or create the repo, and launch the intake scout. If a later
-  // step fails the project still exists — finish on its page.
+  // Keep the accepted project ID on partial failure, so retry only finishes setup.
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (repoMode === "existing" && !repoUrl.trim()) {
@@ -185,45 +185,37 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
     }
     setBusy(true);
     setError("");
-    let p;
+    let projectId = createdId;
     try {
-      p = await api.createProject({ name: name.trim(), spec_text: specText.trim() });
-    } catch {
-      setError("create failed — is the chief up?");
-      setBusy(false);
-      return;
-    }
-    try {
-      if (repoMode === "create") {
-        await api.createProjectRepo(p.id, { name: "", private: true });
-      } else {
-        const url = repoUrl.trim();
-        await api.patchProject(p.id, { spec_repo: url, member_repos: [url] });
+      if (!projectId) {
+        const project = await api.createProject({ name: name.trim() });
+        projectId = project.id;
+        setCreatedId(project.id);
       }
-      await api.startIntake(p.id);
-    } catch {
-      // repo or scout hiccup: the project page names the problem and the fix
+      if (repoMode === "create" && !repoCreated) {
+        await api.createProjectRepo(projectId, { name: "", private: true });
+        setRepoCreated(true);
+      }
+      await api.patchProject(projectId, {
+        name: name.trim(), validation_command: validationCommand.trim(),
+        ...(repoMode === "existing" ? { spec_repo: repoUrl.trim(), member_repos: [repoUrl.trim()] } : {}),
+      });
+      navigate(`/p/${projectId}`);
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(false);
     }
-    navigate(`/p/${p.id}`);
   };
 
   return (
     <div className="modal-veil" onClick={onClose}>
       <form className="modal modal-narrow" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
         <h2>New project</h2>
-        <p className="modal-hint">One step: hive takes the spec, wires the repo, and starts intake.</p>
+        <p className="modal-hint">Connect a repository, then submit a plan. Agents start only after you approve the work.</p>
         <label>
           name
           <input value={name} onChange={(e) => setName(e.target.value)} required autoFocus placeholder="atlas" />
-        </label>
-        <label>
-          spec <span className="muted">(paste what you want built)</span>
-          <textarea
-            value={specText}
-            onChange={(e) => setSpecText(e.target.value)}
-            rows={8}
-            placeholder="Mission, the first iteration's outcome, anything you already know…"
-          />
         </label>
         <div className="repo-mode">
           <label className="repo-mode-option">
@@ -245,20 +237,27 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
             use an existing repo
           </label>
           {repoMode === "existing" && (
-            <input
-              value={repoUrl}
-              onChange={(e) => setRepoUrl(e.target.value)}
-              placeholder="https://github.com/org/project.git"
-            />
+            <label>Repository URL
+              <input
+                value={repoUrl}
+                onChange={(e) => setRepoUrl(e.target.value)}
+                placeholder="https://github.com/org/project.git"
+              />
+            </label>
           )}
         </div>
-        {error && <p className="form-error">{error}</p>}
+        <label>Validation command
+          <input value={validationCommand} onChange={e => setValidationCommand(e.target.value)} placeholder="make check" />
+        </label>
+        <p className="modal-hint">Hive runs this after review and before landing each change. Leave blank to rely on agent review.</p>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        {createdId && error && <Link to={`/p/${createdId}`}>Open the created project</Link>}
         <div className="modal-actions">
           <button type="button" className="ghost" onClick={onClose}>
             cancel
           </button>
           <button type="submit" disabled={busy}>
-            {busy ? "starting…" : "create & start intake"}
+            {busy ? "Saving…" : createdId ? "Retry setup" : "Create project"}
           </button>
         </div>
       </form>

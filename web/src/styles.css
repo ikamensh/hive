@@ -1741,16 +1741,6 @@ textarea:focus {
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 88%, transparent);
 }
-.launch-console-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.launch-console-head h2 {
-  margin: 0;
-  font-size: 18px;
-}
 .launch-row {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(220px, 1fr);
@@ -1984,20 +1974,6 @@ textarea:focus {
 }
 .drift-muted {
   color: var(--ink-dim);
-}
-.checkout-env {
-  font-size: 11px;
-}
-.sync-btn {
-  padding: 3px 12px;
-  font-size: 12px;
-}
-.sync-spacer {
-  width: 1px;
-}
-.sync-preview {
-  flex-basis: 100%;
-  font-size: 11px;
 }
 .drill-back {
   align-self: flex-start;

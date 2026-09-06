@@ -12,15 +12,19 @@ export function DirectiveComposer({
 }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const trimmed = text.trim();
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!trimmed || busy) return;
     setBusy(true);
+    setError("");
     try {
       await onSubmit(trimmed);
       setText("");
+    } catch (error) {
+      setError(String(error));
     } finally {
       setBusy(false);
     }
@@ -38,6 +42,7 @@ export function DirectiveComposer({
         </div>
       </div>
       <textarea
+        aria-label="Task request"
         value={text}
         onChange={(e) => setText(e.target.value)}
         rows={3}
@@ -48,6 +53,7 @@ export function DirectiveComposer({
           {busy ? "sending…" : "give to Hive"}
         </button>
       </div>
+      {error && <p className="form-error" role="alert">{error}</p>}
     </form>
   );
 }
@@ -63,8 +69,7 @@ interface JobTile {
   busy?: boolean;
 }
 
-/** One-click launchers beside the directive box. Opening issues/tests reveals
- * their full table as a drill-down; build/sync act in place. */
+/** Open the issue and testing tools from the secondary work disclosure. */
 export function JobTiles({
   tiles,
   onLaunch,

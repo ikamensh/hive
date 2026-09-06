@@ -5,6 +5,12 @@ submit it to an explicitly selected project, authorize execution, and retrieve
 the result by plan ID. Hive's own planner produces the same document structure.
 An imported plan needs neither an intake conversation nor an internal planner.
 
+The web project page follows the same handoff: upload/paste → review and start →
+live work items → Results & evidence. File submission uses the same endpoint as
+the CLI; Export plan and Download result JSON return the shared artifacts.
+Bookmark its `?plan=<id>` link to keep observing that execution after a newer
+plan starts. See [the project workspace](project-launchpad.md).
+
 The chief owns accepted revisions and live execution state. The author owns the
 editable source file. A local chief and a managed chief expose the same API and
 artifact contract; their storage and available machines differ. Editing a file

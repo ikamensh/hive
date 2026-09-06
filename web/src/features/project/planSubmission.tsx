@@ -49,7 +49,9 @@ export function PlanSubmission({ projectId, onAccepted, amendment = false }: {
           onChange={event => setSource(event.target.value)}
           placeholder={'# Goal\nUsers can export CSV data.\n\n## Export rows\nHandle commas, Unicode and empty input. Run make check.'} />
       </label>
-      <p className="muted">TOML or Markdown with a # Goal and one ## heading per task. Submission saves a draft; it does not start agents.</p>
+      <p className="muted">{amendment
+        ? "Submitting an amendment does not approve it or interrupt existing attempts."
+        : "TOML or Markdown with a # Goal and one ## heading per task. Submission saves a draft; it does not start agents."}</p>
       {error && <p className="form-error" role="alert">{error}</p>}
       <button type="submit" disabled={busy || !source.trim()}>
         {busy ? "Reading plan…" : "Submit for review"}

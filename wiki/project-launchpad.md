@@ -1,157 +1,70 @@
-# Project launchpad
+# Project workspace: submit, monitor, inspect
 
-The project page is a **launchpad**: a place to *start work*, not a card of
-settings. It surfaces the jobs available on a project and shows live state
-(running jobs, checkouts, attention queue, activity) around them. See
-`CONTEXT.md` for the glossary (Launchpad, Job, Directive, Checkout, Drift, Sync).
+The project page centers on one handoff: prepare an agreed plan, let Hive execute
+it, and inspect the delivered changes or the decision that stopped progress.
+Planning with Hive is optional; imported plans use the same execution pipeline.
+See [artifact workflow](artifact-workflow.md) for the shared CLI/API contract.
 
-This supersedes the toggle/settings-first project view and folds the
-`work | issues | tests` tabs into launchable job types whose deep tables become
-drill-downs. Policy controls such as budget, guess propensity, deploy posture,
-and workstream toggles live under the project settings subpage so the launchpad
-stays focused on starting work.
+## Primary flow
 
-## Page structure (configured project)
+1. **Connect a project.** Home → New project asks for a name, an existing or new
+   repository, and an optional validation command. Creation does not start an
+   intake scout. A failed setup retains the created project ID for retry.
+2. **Submit.** Upload or paste a TOML/Markdown plan. The browser preserves the
+   source and sends it to `POST /api/projects/:id/plan/submit` with `start=false`.
+   The chief parses it, retains the accepted revision, and handles duplicates.
+   Errors stay beside the editable source. Submission is not approval.
+3. **Review and start.** Inspect and edit the accepted items, check the validation
+   command, and approve the plan. A configured project can use this path without
+   intake, existing tasks, or a planner API key.
+4. **Monitor.** The ordered work list shows building, review, landed, cancelled,
+   and blocked states with reasons. Retry and cancellation stay on the item.
+   The project inbox sits alongside the plan on desktop and below it on mobile.
+5. **Inspect.** Results & evidence reads `/api/plans/:id/result`. When the plan
+   finishes or is abandoned, this becomes the default view. It distinguishes
+   execution ending from goal achievement, preserves cancellations, and shows
+   item commits, attempt reports, review verdicts, validation command/output and
+   the checked commit. The downloaded JSON is the complete captured response.
 
-```text
-Header            name · repo · state badge · pause · Actions
+Every accepted submission selects `?plan=<id>`. “Link to this plan” preserves
+that identity across reloads and newer plans. “Back to current plan” returns to
+the project's latest plan. Result-fetch failures are visible, including when a
+previous snapshot remains on screen.
 
-Start a job       ┌─ Give Hive a task ───────────────┐  [Fix issues]
-(primary)         │  free-form directive box (hero)  │  [Run tests]
-                  └──────────────────────────────────┘  [Advance build]
-                                                         [Sync a machine]
+## Amendments and validation
 
-In flight         running jobs: issue runs, test episodes, directives, syncs
+Export plan downloads the canonical TOML. Edit eligible future work while
+preserving its revision and item keys, then use “Amend from a plan file”. The
+server's revision checks and approval requirements apply unchanged.
 
-Machines &        per machine × this project's repos:
-checkouts           checkout? · HEAD · ahead/behind/dirty · env readiness
-                    drift → [Sync] (stubbed)
+“Validation before landing” shows the current project command and lets the
+operator edit it. Changes apply to newly queued reviews. A blank command means
+agent review only; the result view never invents a successful validation run.
+Completed execution and abandoned execution both retain their evidence and
+provide a secondary “Start the next plan” disclosure.
 
-Needs you         questions · human todos · blockers (unchanged surface)
+## Secondary tools
 
-Activity          unified feed with workstream/job chips
+- “Other ways to prepare a plan” offers Hive drafting and a handwritten plan.
+- “Let Hive help prepare the specification” retains optional intake setup for
+  configured projects that have not yet supplied a plan or completed intake.
+- “Other work” contains direct requests, issue runs and testing episodes. These
+  continue using their existing pipelines; this iteration does not merge their
+  persisted work models into plans.
+- “Diagnostics” contains agent activity and machine checkout facts. It fetches
+  machine metadata only when opened. Checkout drift is informational; no sync
+  action is offered because the sync agent is not implemented.
+- Settings and Decisions retain their dedicated pages.
 
-Settings          subpage: policies · repos · workstream toggles
-```
+## Verification
 
-Unconfigured / `intake` projects keep the existing intake flow as their "first
-job"; the launchpad shape applies once the project is configured.
+`web/tests/plan-workflow.spec.js` exercises the real page and HTTP client using
+API fixtures. It covers rejected submissions retaining source, approval without
+intake, setup retries without duplicate projects, automatic completion updates,
+cancelled items, checked/landed commit evidence, downloads, saved plan links,
+result-fetch errors, and a 390px result layout. Set `HIVE_UI_SCREENSHOTS` to save
+full-page captures while running those tests.
 
-The full issues table ([issues.tsx](../web/src/features/project/issues.tsx)) and
-stories table ([testing.tsx](../web/src/features/project/testing.tsx)) open
-behind their launcher (panel/route), not as always-present tabs.
-
-## Jobs
-
-A **Job** is the operator's word for what you launch here. Concrete forms:
-
-| Job | Backs onto | Semantics |
-| --- | --- | --- |
-| Advance build | orchestrator / iteration workstream | ongoing; gated by pause |
-| Fix issues | `IssueRun` on a `github_issues` workstream | one-shot run (mode opt-in later) |
-| Run tests | `TestEpisode` on a `testing` workstream | one-shot run |
-| Sync a machine | agent sync run on a `Checkout` | one-shot; see Sync below |
-| Give Hive a task | `Directive` | persisted ask; Hive routes it |
-
-Default is a bounded one-shot run you launch and watch. A continuous "mode" that
-keeps a job type going until you stop it is an opt-in per-job toggle, layered on
-later — not the default.
-
-## Directive (general task)
-
-A `Directive` is a persisted, human-authored ask to a project — the hero box on
-the launchpad. It is distinct from the iteration goal (standing strategy, one at
-a time) and from issues authored on GitHub (external origin).
-
-The brain is deliberately **not a new pipeline**: Hive seeds the ask straight
-into the proven resolve → review → merge pipeline as a front-of-queue work
-item (`IssueItem` with `external_ref.origin = "directive"`). No GitHub
-round-trip — GitHub is a source of work in, never hive's internal ledger; the
-first version filed a GitHub issue and re-ingested it, which bought an
-eventual-consistency race (the G19 grace hack) for nothing the store didn't
-already record.
-
-- Submitting a directive seeds the work item ahead of any mirrored backlog
-  (a direct ask outranks ambient issues) and advances the pipeline → status
-  `working`, with the live pipeline state mirrored into `routing_note`.
-- Landing (merge into the default branch) flips the directive to `done`;
-  a blocked resolve or rejected review reads "needs you: …" on the card.
-- When seeding is impossible (no repo, workstream disabled), the directive
-  stays `triaging` with the exact reason in `routing_note` — never a silent
-  dead end.
-
-```python
-class DirectiveStatus(StrEnum):
-    triaging = "triaging"        # received; not yet handed over (see routing_note)
-    working = "working"          # a pipeline work item owns it
-    done = "done"                # landed on the default branch
-    cancelled = "cancelled"      # the operator cancelled the work item
-
-class Directive(BaseModel):
-    id; workspace_id; project_id
-    text: str                    # the human ask
-    status: DirectiveStatus = triaging
-    issue_number: int = 0        # the GitHub issue Hive filed
-    issue_url: str = ""
-    routing_note: str = ""       # one line: where this stands / what it needs
-    created_at: float
-```
-
-## Checkout & drift
-
-A `Checkout` is a project repo's working copy on one machine. One per
-`(machine, repo)`. The remote is authoritative; the checkout is where work can
-accumulate and possibly drift.
-
-This pass: **real read path; stubbed sync; protective reset deferred.**
-
-```python
-class Checkout(BaseModel):
-    id; workspace_id; machine_id; repo
-    exists: bool = False
-    head_sha: str = ""
-    branch: str = ""
-    ahead: int = 0              # local commits not on origin
-    behind: int = 0
-    dirty: bool = False         # uncommitted working-tree changes
-    env_status: str = "unknown" # reserved: dependency-setup readiness
-    last_reported_at: float
-```
-
-- **Read path (this pass):** the runner reports per-repo git facts for the repos
-  it has checked out, piggybacked on its existing 30s heartbeat
-  ([runner daemon register](../hive/runner/_daemon.py)). The chief upserts a
-  `Checkout` per `(machine, repo)`. The launchpad shows drift per machine.
-- **Drift** = `ahead > 0` or `dirty`. It means real work may live only on one
-  machine.
-- **Sync (deferred behavior, stubbed button this pass):** an *agent* job, not a
-  `git push`. The sync agent judges whether the dirty tree is worth committing
-  and whether commits belong on `main` (so other agents build on top), and when
-  unsure raises a `Question` instead of pushing.
-- **Drift safety (fast follow):** before any destructive `reset --hard`/`clean`,
-  the runner pushes drift to a throwaway `hive/backup/<ts>` branch on origin —
-  reusing the existing `fresh_branch` backup pattern
-  ([runner daemon heartbeat](../hive/runner/_daemon.py)) — so a task racing in can never
-  silently destroy machine-local work. The agent sync job does the thoughtful
-  consolidation.
-
-## Build order
-
-1. `Directive` + `Checkout` models; store collections.
-2. API: directive create/list (+ preview routing heuristic); checkout report
-   from runner heartbeat; both folded into `GET /api/projects/{id}`.
-3. Runner: report checkout git facts in the heartbeat payload.
-4. Web: launchpad IA rework — directive box, job tiles, machines panel, drill-down
-   the issues/stories tables.
-5. Fast follow (separate change): protective backup-before-reset + agent sync job.
-
-## Test plan
-
-- Model round-trip (save/load invariance) for `Directive` and `Checkout`.
-- API: create directive → appears in project payload at `triaging` with a preview
-  suggestion; runner checkout report → `Checkout` upserted; drift computed from
-  ahead/dirty.
-- Property: `drift == (ahead > 0 or dirty)`; a checkout that never reported stays
-  `exists=False`.
-- UI: mock project renders launchpad, directive box, job tiles, machines panel
-  with mixed drift states, at desktop and mobile widths (screenshot).
+Backend artifact/result/wait tests and the local Git artifact demo verify the
+underlying contract without live agents or production GitHub changes. Mock UI
+mode only previews saved plans; submission and canonical export need a chief.

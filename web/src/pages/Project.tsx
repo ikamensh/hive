@@ -40,7 +40,6 @@ export default function ProjectPage() {
   const [selectedTestingStreamId, setSelectedTestingStreamId] = useState("");
   const [selectedStoryKeys, setSelectedStoryKeys] = useState<string[]>([]);
   const [launchMessage, setLaunchMessage] = useState("");
-  const [launchError, setLaunchError] = useState("");
   const { data, failed, refresh } = usePoll(() => api.project(id), [id]);
   const selectedPlan = usePoll(() => api.getPlan(selectedPlanId), [id, selectedPlanId], 4000,
     { enabled: !!selectedPlanId });
@@ -128,8 +127,8 @@ export default function ProjectPage() {
   };
 
   const submitDirective = async (text: string) => {
+    setLaunchMessage("");
     await api.createDirective(id, text);
-    setLaunchError("");
     setLaunchMessage("task request saved");
     refresh();
   };
@@ -207,7 +206,7 @@ export default function ProjectPage() {
           <p className="form-error" role="alert">This plan belongs to another project.</p>
         ) : (
           <PlanPanel key={`${id}:${selectedPlanId || data.plan?.plan.id || "new"}`}
-            projectId={id} payload={selectedPlanId ? selectedPlan.data : data.plan}
+            project={project} payload={selectedPlanId ? selectedPlan.data : data.plan}
             onChanged={refreshProjectAndOverview} />
         )}
       </div>
@@ -226,11 +225,7 @@ export default function ProjectPage() {
           <DirectiveComposer onSubmit={submitDirective} />
           <JobTiles tiles={jobTiles} onLaunch={setDrill} />
         </div>
-        {(launchMessage || launchError) && (
-          <p className={launchError ? "form-error launch-status" : "launch-status muted"}>
-            {launchError || launchMessage}
-          </p>
-        )}
+        {launchMessage && <p className="launch-status muted" role="status">{launchMessage}</p>}
       </div>
       {directives.length > 0 && (
         <div className="launch-block">
@@ -335,6 +330,7 @@ export default function ProjectPage() {
         <ProjectActions project={project} onPatch={patch} />
       </div>
       {data.state_reason && <p className="page-state-reason">{data.state_reason}</p>}
+      {failed && <p className="form-error" role="alert">Could not refresh the project. The information below may be out of date.</p>}
 
       {!configured ? (
         setup

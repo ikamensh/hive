@@ -839,6 +839,7 @@ export interface ProjectRepoCreate {
 }
 
 export interface ProjectPatch {
+  validation_command?: string;
   name?: string;
   archived?: boolean;
   spec_repo?: string;
