@@ -535,7 +535,7 @@ export function ProjectSettings({
             <input
               type="number"
               min={0}
-              step={1}
+              step="any"
               value={dailyBudget}
               onChange={(e) => setDailyBudget(e.target.value)}
               placeholder="0"

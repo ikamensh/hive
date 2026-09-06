@@ -164,6 +164,19 @@ test("project allowance can grant OpenCode explicitly on desktop and mobile", as
   expect(state.project.agent_grants).toEqual([]);
 });
 
+// Small experiments use fractional dollar budgets, which the chief supports.
+test("project settings saves a fractional daily budget without rounding it", async ({ page }) => {
+  const state = await setup(page);
+  await page.goto("/p/csv/settings");
+  await page.getByLabel("daily budget (USD)").fill("0.50");
+  await page.getByRole("button", { name: "save repos", exact: true }).click();
+  await expect(page.getByText("saved", { exact: true })).toBeVisible();
+  expect(state.project.daily_budget_usd).toBe(0.5);
+  await page.reload();
+  await expect(page.getByLabel("daily budget (USD)")).toHaveValue("0.5");
+  await capture(page, "project-fractional-budget");
+});
+
 test("completion updates live, preserves cancellation evidence, and remains inspectable after another plan starts", async ({ page }) => {
   const state = await setup(page, { plan: { ...plan, status: "approved" }, items: [
     { ...item, status: "reviewing" }, { ...item, id: "docs", title: "Document usage", status: "cancelled", order: 1 },

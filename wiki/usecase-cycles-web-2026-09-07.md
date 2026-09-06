@@ -59,3 +59,13 @@ The initial browser baseline was 34 passing tests.
 - Verification: the journey passed, including saved/reloaded backend and cap,
   no mobile overflow, and removal. Viewed both desktop and mobile
   `project-opencode-allowance` screenshots.
+
+## Cycle 20 — Cap a small experiment at fifty cents per day
+
+- Scenario: save a `$0.50` daily budget and reload the settings page.
+- Reproduction: `cd web && npm test -- --grep 'fractional daily budget'`
+  failed: the browser's integer-only step validation prevented submission.
+- Cause/fix: the API accepts nonnegative finite fractional budgets; the input
+  now uses `step="any"` to expose that existing capability without rounding.
+- Verification: the same journey passed with a `0.5` payload and reloaded value.
+  Viewed `project-fractional-budget.png`; the small budget remains legible.
