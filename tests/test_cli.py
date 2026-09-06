@@ -956,7 +956,7 @@ class _Recorder:
                 return self
 
             def json(self):
-                if url == "/api/projects":
+                if url.split("?")[0] == "/api/projects":
                     return [{"id": "0123456789ab", "name": "demo"}]
                 return {"task": {"id": "t1"}}
 

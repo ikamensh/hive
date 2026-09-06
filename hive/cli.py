@@ -1581,10 +1581,11 @@ def resolve_project_id(client, token: str) -> str:
     actually sees, so `hive project gleaner` must resolve rather than 404.
     Match real IDs first; a name's shape cannot establish its identity.
     """
-    projects = client.get("/api/projects").raise_for_status().json()
+    projects = client.get("/api/projects?include_archived=true").raise_for_status().json()
     if any(p["id"] == token for p in projects):
         return token
     matches = [p for p in projects if p["name"] == token]
+    matches = [p for p in matches if not p.get("archived")] or matches
     if len(matches) == 1:
         return matches[0]["id"]
     if not matches:

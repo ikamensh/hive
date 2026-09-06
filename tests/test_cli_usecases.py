@@ -50,6 +50,20 @@ def test_id_shaped_project_name_resolves_for_read_and_write(harness):
     assert cli(client, "project", project["id"])["project"]["paused"] is True
 
 
+def test_archived_project_id_remains_accessible_without_shadowing_active_names(harness):
+    """Archived projects keep stable ID access while visible names select current projects."""
+    client, _ = harness
+    archived = client.post("/api/projects", json={"name": "demo"}).raise_for_status().json()
+    client.patch(f"/api/projects/{archived['id']}", json={"archived": True}).raise_for_status()
+    active = client.post("/api/projects", json={"name": "demo"}).raise_for_status().json()
+    assert cli(client, "project", archived["id"])["project"]["archived"] is True
+    assert cli(client, "project", "demo")["project"]["id"] == active["id"]
+    client.patch(f"/api/projects/{active['id']}", json={"archived": True}).raise_for_status()
+    with pytest.raises(SystemExit, match="names 2 projects; pass the id") as error:
+        cli(client, "project", "demo")
+    assert all(project["id"] in str(error.value) for project in (active, archived))
+
+
 @pytest.mark.parametrize("actions", [
     ["-m", "Use PostgreSQL instead", "--proceed"],
     ["-m", "Use PostgreSQL instead", "--approve"],

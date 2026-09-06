@@ -42,6 +42,10 @@ deployments, live project mutations, or user inputs were needed.
 - Self-review: one project listing per scoped command is a deliberate small
   cost for unambiguous resolution. The previous route-recording tests now
   assert writes without coupling their expectations to lookup implementation.
+- Independent review follow-up: the default listing excludes archived
+  projects. A new regression reproduced loss of archived-ID access. Resolution
+  now includes archived records for stable ID access, prefers active matches
+  for names, and lists IDs when several archived names are ambiguous.
 
 ## Cycle 3 — Correct an intake brief while accidentally passing approval flags
 
