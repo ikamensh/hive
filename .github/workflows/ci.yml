@@ -45,5 +45,9 @@ jobs:
         working-directory: web
         run: npm ci
 
+      - name: Install browser for web regressions
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
       - name: Run pre-commit checks
         run: uv run pre-commit run --all-files --show-diff-on-failure

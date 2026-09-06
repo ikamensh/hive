@@ -271,12 +271,15 @@ build for you before starting the API, so the served UI matches `web/src`.
 
 ### Local checks
 
-CI runs the same gates as pre-commit: Ruff, the backend pytest suite, and the web production build.
+CI runs the same gates as pre-commit: Ruff, the backend pytest suite, the web production build, and browser regression tests.
 
 ```bash
+cd web && npx playwright install chromium && cd ..  # once, for browser tests
 uv run pre-commit install
 uv run pre-commit run --all-files
 ```
+
+Run browser regressions alone with `cd web && npm test`. They start an isolated Vite server and use fixture responses, so no chief or credentials are needed.
 
 ---
 

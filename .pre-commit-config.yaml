@@ -21,3 +21,10 @@ repos:
         language: system
         pass_filenames: false
         files: ^web/
+
+      - id: web-tests
+        name: web browser tests
+        entry: bash -c 'cd web && npm test'
+        language: system
+        pass_filenames: false
+        files: ^web/
