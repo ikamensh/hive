@@ -469,6 +469,34 @@ challenge remains queued.
     `evidence/dashboard-landing-and-packaging-start.json` and
     `evidence/dashboard-review-buffer-failure/independent-*.json`.
 
+46. Astra packaging/scaling build `d040370c588a` finished at
+    `1788656089.952081` (1067.67 seconds), pushing
+    `3245eb96d7dcda73b6d170ca33c86dfeafb0b48c`. The workspace was intentionally
+    paused/draining at `1788655795.001405`; the build completed without interruption
+    and fresh review `d016a753c9d9` waited pending. Hive `0010ab7` now fetches the
+    remote default HEAD before review, records its exact SHA in a task artifact,
+    and supplies canonical diff/log commands without changing the working branch.
+    Hive `bd8e13e` prepends the actual checkout path and task-owned PID cleanup
+    instructions at delivery, including for previously queued instructions. This
+    follows the dashboard review's broad `pkill -f "moldsim serve"`, which also
+    stopped the independent test server. The new contract is prompt guidance,
+    not OS isolation. A real Opus runner smoke stopped only its own server and
+    verified the independent same-named sentinel still listened. Its collector
+    then looked for a file at the wrong path; native public tool evidence preserves
+    the successful cleanup and the collector limitation explicitly.
+    Gracefully restarted idle chief 37358 as 64399 on `bd8e13e`, waited for the
+    independent browser gate to release its fixed port, and resumed. Packaging
+    review started at `1788657020.729727`; its fresh native session received the
+    recorded base `ea67466b7893ac6a71b575d59960a171451ccfe4`, current context,
+    and unchanged cached review instructions. The first native Bash command
+    uses that base. Nine independent delivery checks pass. All **708 Hive tests
+    pass (one skip, 125.94 seconds)**. Packaging also passes a clean independent
+    `make setup`/`make check` with 483 Python and eight browser tests, plus all 15
+    prewritten independent shipping/scaling oracles. Review and landing remain
+    pending. Evidence: `evidence/review-baseline-audit/`,
+    `evidence/review-process-cleanup/`, and
+    `evidence/scaling-packaging-independent/runs/3245eb96d7dcda73b6d170ca33c86dfeafb0b48c/`.
+
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
 for all eight landed increments and must continue to hold for every later item. H7
 has substantive Astra, Fable, and Opus work. H8–H9 now have a labeled live fallback
