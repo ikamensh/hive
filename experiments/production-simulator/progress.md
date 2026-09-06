@@ -1,14 +1,12 @@
 # Live experiment progress
 
-The acceptance criteria in `metrics.md` remain the completion contract. Seven of
+The acceptance criteria in `metrics.md` remain the completion contract. Eight of
 ten items have landed, including the independently verified quality/checkpoint
-repair. Muse completed only the dashboard amendment; its fresh Muse reviewer
-correctly rejected the missing frontend. Hive automatically returned to Astra
-after the synthetic cooldown expired and built the full dashboard while
-preserving the API fix. Independent production UI/API checks pass, but its fresh
-Opus review hit the Claude SDK's 1 MiB transport limit and parked visibly.
-The runtime/retry fixes are deployed and a fresh Opus review is now running on
-the preserved branch. Scaling, packaging and the contract challenge remain queued.
+repair and the dashboard. Muse's correct scope rejection triggered an automatic
+Astra repair; after fixing the Claude transport, fresh Opus review and executable
+validation accepted the completed dashboard. Independent browser/API checks pass.
+Hive has automatically started scaling and packaging with Astra; the contract
+challenge remains queued.
 
 ## Install and evidence
 
@@ -454,8 +452,25 @@ the preserved branch. Scaling, packaging and the contract challenge remain queue
     Evidence: `evidence/dashboard-review-buffer-failure/` including native smoke,
     full-suite log, `rollout-and-official-review-retry.json` and `resumed-review.json`.
 
+45. The retried Opus review `1e5e313cfe2c` accepted at `1788655011.960947`
+    after 635.52 seconds. Native session `fdad0f88-8e21-4fdf-af1d-fb9ffcbfd916`
+    is distinct from the failed review, and its completion-time API handle now
+    provides the direct join. It independently probed duplicate-key rejection
+    and unchanged continuation, inspected screenshots, and fixed the CLI error
+    to name `--web-dir` when the frontend directory has no index. Its checked
+    SHA `1ea8136e7ec8afd877bf0506ef19d5b047ef18e9` passes 435 Python and four
+    browser tests. The only review delta is that CLI diagnostic and its test;
+    frontend assets match the independently exercised dashboard. Main merge
+    `ea67466b7893ac6a71b575d59960a171451ccfe4` has the identical reviewed tree.
+    The earlier rejected Muse head remains an ancestor containing the preserved
+    API fix, not an independently accepted dashboard landing. Hive automatically
+    began packaging/scaling build `d040370c588a` with Astra at
+    `1788655022.281704`, after dashboard review and landing. Evidence:
+    `evidence/dashboard-landing-and-packaging-start.json` and
+    `evidence/dashboard-review-buffer-failure/independent-*.json`.
+
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
-for all seven landed increments and must continue to hold for every later item. H7
+for all eight landed increments and must continue to hold for every later item. H7
 has substantive Astra, Fable, and Opus work. H8–H9 now have a labeled live fallback
 dispatch, natural expiry, and return to preferred capacity with preserved partial
 work and the recovered increment's reviewed landing. Full-simulator product criteria
