@@ -176,3 +176,20 @@ def test_rejected_machine_owner_change_preserves_power_settings_and_todo_routing
     client.patch(path, json={"idle_stop_minutes": 25}, headers=alice_headers).raise_for_status()
     current, = client.get("/api/resources", headers=alice_headers).json()["machines"]
     assert current["idle_stop_minutes"] == 25
+
+
+@pytest.mark.parametrize("budget", ["1e999", "-1e999"])
+def test_overflowing_budget_returns_actionable_validation_error_without_saving(client, budget):
+    """Valid JSON can overflow a float; its error must still be valid HTTP JSON."""
+    project = client.post("/api/projects", json={"name": "Catalog migration"}).json()
+    path = f"/api/projects/{project['id']}"
+    rejected = client.patch(path,
+        content='{"name": "Changed", "daily_budget_usd": ' + budget + '}',
+        headers={"content-type": "application/json"},
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"][0]["loc"] == ["body", "daily_budget_usd"]
+    assert "finite" in rejected.json()["detail"][0]["msg"]
+    unchanged = client.get(path).json()["project"]
+    assert unchanged["name"] == project["name"]
+    assert unchanged["daily_budget_usd"] == project["daily_budget_usd"]

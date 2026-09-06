@@ -105,3 +105,17 @@ The existing HTTP seam was sufficient for all five regressions; no new service
 layer or speculative abstraction was needed. Two untyped create requests now
 have explicit input schemas, and the machine fix moves its existing write.
 No model calls, runner processes, cloud writes, or UI changes were required.
+
+Independent review found an additional cycle-11 input: the valid JSON number
+`1e999` overflows Python's float. The new constraint rejected it correctly, but
+FastAPI tried to echo `inf` in the error body and raised a serialization error.
+The HTTP regression reproduced this for positive and negative overflow before
+the fix. Request-validation error encoding now renders nonfinite input as text
+while retaining the field location and explanation; it still returns 422 and
+does not mutate the project. `uv run pytest tests/test_api_operator_workflows.py
+-k overflowing_budget -q --tb=short` is the focused reproducer.
+
+Combined verification before the overflow follow-up: `uv run pytest
+tests/test_api_operator_workflows.py tests/test_api_e2e.py
+tests/test_inbox_api.py tests/test_users_roles.py tests/test_capacity.py
+tests/test_power_management.py tests/test_runner_protocol.py -q` — 99 passed.

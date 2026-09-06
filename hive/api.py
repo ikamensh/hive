@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import hmac
 import logging
+import math
 import os
 import re
 import time
@@ -20,7 +21,9 @@ from typing import Callable
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from hive._integrations.auth import (
@@ -371,6 +374,16 @@ class EnrollExchange(BaseModel):
 
 def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_runner=None) -> FastAPI:
     app = FastAPI(title=f"hive {get_version()}")
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request: Request, exc: RequestValidationError):
+        # JSON numbers such as 1e999 overflow to infinity. Keep that invalid
+        # input printable in the error rather than failing JSON serialization.
+        detail = jsonable_encoder(exc.errors(), custom_encoder={
+            float: lambda value: value if math.isfinite(value) else str(value),
+        })
+        return JSONResponse(status_code=422, content={"detail": detail})
+
     supervisor.orchestration_allowed = (
         lambda project: not project.included_only or included_orchestration(config)
     )
