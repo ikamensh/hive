@@ -1594,10 +1594,18 @@ def resolve_project_id(client, token: str) -> str:
     )
 
 
+def _read_input(path: str) -> str:
+    """Read user-authored UTF-8 input without changing its original newlines."""
+    try:
+        return sys.stdin.read() if path == "-" else Path(path).read_bytes().decode("utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise SystemExit(f"Cannot read input {path!r}: {exc}") from exc
+
+
 def _import_plan(args, client) -> dict:
     from hive._workstreams.plan_document import PlanDocument, parse_plan_document
 
-    text = sys.stdin.read() if args.file == "-" else Path(args.file).read_bytes().decode("utf-8")
+    text = _read_input(args.file)
     document = PlanDocument.model_validate(parse_plan_document(text))
     if not document.items:
         raise ValueError("a submitted plan needs at least one item")
@@ -1637,7 +1645,7 @@ def run(args: argparse.Namespace, client) -> dict | list:
     c = args.command
     if c == "plan-check":
         from hive._workstreams.plan_document import PlanDocument, parse_plan_document
-        source = sys.stdin.read() if args.file == "-" else Path(args.file).read_bytes().decode("utf-8")
+        source = _read_input(args.file)
         document = PlanDocument.model_validate(parse_plan_document(source))
         return {"valid": True, "document": document.model_dump()}
     if c == "plan-ready":
@@ -1677,7 +1685,7 @@ def run(args: argparse.Namespace, client) -> dict | list:
     elif c == "new":
         spec_text = ""
         if args.spec:
-            spec_text = sys.stdin.read() if args.spec == "-" else Path(args.spec).read_text()
+            spec_text = _read_input(args.spec)
         project = client.post(
             "/api/projects",
             json={
