@@ -246,12 +246,13 @@ test("prepared work reaches the shared plan review without starting AI design", 
   await expect(page).toHaveURL(/new=plan/);
   const source =
     "# Goal\nTrack planting dates\n\n## Record planting dates\nUse the existing database.\n";
-  await page.getByLabel("Plan file").setInputFiles({
+  const submission = page.getByRole("region", { name: "Submit prepared work" });
+  await submission.getByLabel("Plan file").setInputFiles({
     name: "garden.md",
     mimeType: "text/markdown",
     buffer: Buffer.from(source),
   });
-  await page
+  await submission
     .getByRole("button", { name: "Submit for review", exact: true })
     .click();
   await expect(

@@ -377,7 +377,7 @@ export default function ProjectPage() {
                   <GoalBanner project={project} onPatch={patch} />
                 )}
                 {newPlan ? (
-                  <section className="plan-panel">
+                  <section className="plan-panel" aria-label="Submit prepared work">
                     <PlanSubmission projectId={id} onAccepted={refreshAll} />
                   </section>
                 ) : (
