@@ -1,3 +1,4 @@
+import { emptyOverview, emptyInbox } from "./fixtures.js";
 import { test, expect } from "playwright/test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -21,12 +22,7 @@ const auth = {
   role: "admin",
   auth_mode: "github",
 };
-const overview = {
-  paused: false, projects: [], live_tasks: [], subscriptions: [],
-  capacity: { machines: [], machines_total: 0, machines_online: 0, agents_total: 0, agents_ready: 0 },
-  attention: { count: 0, offers: [], questions: [], human_todos: [] },
-  totals: { tasks_running: 0, agents_ready: 0, agents_total: 0, machines_online: 0, machines_total: 0, needs_you: 0, spend_today: 0, budget_today: 0 },
-};
+const overview = emptyOverview();
 
 test("Markdown preserves useful formatting while refusing executable issue content", async ({ page }) => {
   await page.goto("/tests/harness.html");
@@ -62,12 +58,13 @@ test("an expired session clears the signed-in screen and offers sign-in", async 
     if (expired && path !== "/api/version") {
       return route.fulfill({ status: 401, json: { detail: "session expired" } });
     }
+    if (path === "/api/inbox") return route.fulfill({ json: emptyInbox() });
     const json = path === "/api/auth/me" ? auth : path === "/api/overview" ? overview : { version: "test" };
     return route.fulfill({ json });
   });
   await page.goto("/");
   await expect(page.getByRole("button", { name: /@operator/ })).toBeVisible();
-  await page.waitForFunction(() => JSON.parse(localStorage.getItem("hive-overview:workspace:operator"))?.projects);
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("hive-overview:v2:workspace:operator"))?.projects);
   expired = true;
   await page.clock.fastForward(4_000);
   await expect.poll(() => !!heldOverview).toBe(true);
@@ -75,11 +72,11 @@ test("an expired session clears the signed-in screen and offers sign-in", async 
   await expect(page.getByRole("link", { name: "Continue with GitHub" })).toBeVisible();
   await expect(page.getByRole("button", { name: /@operator/ })).toHaveCount(0);
   await expect(page.getByRole("alert")).toHaveCount(0);
-  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("hive-overview:workspace:operator")))).toBeNull();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("hive-overview:v2:workspace:operator")))).toBeNull();
   // Even a late successful response from the expired session must stay discarded.
   await heldOverview.fulfill({ json: overview });
   await page.evaluate(() => new Promise(requestAnimationFrame));
-  expect(await page.evaluate(() => localStorage.getItem("hive-overview:workspace:operator"))).toBeNull();
+  expect(await page.evaluate(() => localStorage.getItem("hive-overview:v2:workspace:operator"))).toBeNull();
   await expect(page.getByRole("link", { name: "Continue with GitHub" })).toBeVisible();
   await screenshot(page, "expired-login");
 });

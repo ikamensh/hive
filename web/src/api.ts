@@ -4,16 +4,20 @@ import type {
   AgentConversation,
   CiCheckResult,
   Directive,
+  DeliveriesPayload,
   EnrollToken,
   HumanTodo,
   GithubRepo,
   IntakeMessage,
+  InboxOptions,
+  InboxPayload,
   IssueRun,
   IssueRunResult,
   Overview,
   PlanItem,
   PlanItemPatch,
   PlanPayload,
+  PlanHistory,
   PlanResult,
   PlanReadiness,
   Project,
@@ -98,6 +102,16 @@ async function httpText(path: string, init?: RequestInit): Promise<string> {
 }
 
 const realApi = {
+  deliveries: ({ offset = 0, limit = 20 }: { offset?: number; limit?: number } = {}) =>
+    http<DeliveriesPayload>(`/api/deliveries?offset=${offset}&limit=${limit}`),
+  inbox: (options: InboxOptions = {}) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(options)) {
+      if (value !== undefined && value !== "") params.set(key, String(value));
+    }
+    return http<InboxPayload>(`/api/inbox?${params}`);
+  },
+  projectPlans: (projectId: string) => http<PlanHistory>(`/api/projects/${projectId}/plans`),
   getPlan: (planId: string) => http<PlanPayload>(`/api/plans/${planId}`),
   submitPlan: (projectId: string, source: string) =>
     http<PlanPayload & { accepted_revision: number }>(`/api/projects/${projectId}/plan/submit`, {
@@ -175,10 +189,10 @@ const realApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  startIntake: (id: string, backend = "") =>
+  startIntake: (id: string, backend = "", goal = "") =>
     http<AgentConversation>(`/api/projects/${id}/intake/start`, {
       method: "POST",
-      body: JSON.stringify({ backend }),
+      body: JSON.stringify({ backend, goal }),
     }),
   finalizeIntake: (id: string) =>
     http<{ conversation: AgentConversation }>(`/api/projects/${id}/intake/finalize`, { method: "POST" }),

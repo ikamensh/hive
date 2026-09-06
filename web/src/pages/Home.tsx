@@ -1,504 +1,126 @@
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { api, countdown, duration, money, repoShort } from "../api";
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { IconAlertCircle, IconArrowRight, IconCircleCheck, IconClock, IconCoin, IconDeviceDesktop, IconDeviceLaptop, IconGitCommit, IconPlayerPause, IconPlayerPlay, IconServer } from "@tabler/icons-react";
+import { ago, api, duration, money } from "../api";
 import { useOverview } from "../App";
-import { StateBadge } from "../components/shared";
-import { ProjectActions } from "../features/project/controls";
+import { ProviderName, UsageLimits } from "../features/capacity/UsageLimits";
+import { NewWorkButton } from "../features/work/NewWork";
+import type { Overview, OverviewLiveTask, OverviewMachine, RecentDelivery } from "../types";
 import "./home.css";
-import type {
-  AgentStatus,
-  OverviewAgent,
-  OverviewMachine,
-  OverviewProject,
-  Overview,
-  ProjectPatch,
-} from "../types";
 
-const AGENT_TONE: Record<AgentStatus, "ok" | "warn" | "bad" | "muted"> = {
-  ready: "ok",
-  cooldown: "warn",
-  probing: "warn",
-  probe: "warn",
-  failed: "bad",
-  offline: "muted",
-  disabled: "muted",
+const STAGES: Record<OverviewLiveTask["kind"], string> = {
+  work: "Building", verify: "Reviewing", probe: "Checking access", intake: "Designing", resolve: "Building",
+  review: "Reviewing", preflight: "Checking readiness", test_refresh: "Preparing tests", test_sweep: "Testing",
+  test_reproduce: "Reproducing", test_judge: "Checking finding", testability_draft: "Designing tests", testability_probe: "Checking tests",
 };
 
-const PLAN_OUTCOMES: Record<NonNullable<OverviewProject["plan"]>["outcome"], string> = {
-  pending: "Awaiting approval", running: "Execution in progress", blocked: "Needs attention",
-  stopping: "Stopping · waiting for attempts to finish", done: "All items landed",
-  partial: "Execution ended with cancellations", abandoned: "Plan abandoned",
-};
-
-function agentLabel(agent: OverviewAgent): string {
-  if (agent.status === "cooldown") {
-    const left = countdown(agent.cooldown_until);
-    return left ? `cooldown ${left}` : "cooldown";
+function statusOf(data: Overview, stale: boolean) {
+  if (stale) return { title: "Hive status unavailable", note: "The last observation is out of date. Reconnecting to the chief.", tone: "unknown" };
+  const disconnected = data.execution.disconnected > 0 ? `${data.execution.disconnected} assigned ${data.execution.disconnected === 1 ? "task has" : "tasks have"} lost connection. ` : "";
+  if (data.paused) {
+    const connected = data.execution.working + data.execution.starting;
+    const drain = connected > 0 ? `${connected} connected ${connected === 1 ? "task is" : "tasks are"} finishing. ` : "";
+    return { title: "Hive is paused", note: `${drain}${disconnected}Nothing new will start until you resume.`, tone: "paused" };
   }
-  if (agent.status === "probe") return "probe needed";
-  return agent.status;
+  if (data.execution.working > 0) return { title: "Hive is working", note: `${data.execution.working} ${data.execution.working === 1 ? "task is" : "tasks are"} running on connected machines. ${disconnected}`, tone: "working" };
+  if (data.execution.starting > 0) return { title: "Hive is starting work", note: `${data.execution.starting} ${data.execution.starting === 1 ? "task is" : "tasks are"} assigned and waiting for the runner to pick up. ${disconnected}`, tone: "starting" };
+  if (data.totals.tasks_running > 0) return { title: "Hive needs attention", note: "Assigned work has lost its runner connection. Check the machines below.", tone: "waiting" };
+  const waiting = data.tasks_pending > 0 || data.projects.some(p => ["working", "needs_attention", "blocked_resources", "blocked_budget"].includes(p.state));
+  if (waiting) return { title: "Hive is waiting", note: data.tasks_pending > 0
+    ? `${data.tasks_pending} ${data.tasks_pending === 1 ? "task is" : "tasks are"} queued. Nothing is running yet.`
+    : "Nothing is running. Review project state, capacity, or decisions to continue.", tone: "waiting" };
+  return { title: "Hive is idle", note: data.projects.length > 0 ? "No work is running or queued. Start the next useful change." : "Connect a project and give Hive its first goal or plan.", tone: "idle" };
 }
 
-/** Soonest agent cooldown to expire — shown on blocked_resources project badges. */
-function soonestCooldown(data: Overview): string | undefined {
-  const now = Date.now() / 1000;
-  const times = data.capacity.machines
-    .flatMap((m) => m.agents)
-    .filter((a) => a.status === "cooldown" && a.cooldown_until > now)
-    .map((a) => a.cooldown_until);
-  return times.length ? countdown(Math.min(...times)) : undefined;
+function taskLink(task: OverviewLiveTask) {
+  if (!task.project_id) return `/machines${task.machine_id ? `#${task.machine_id}` : ""}`;
+  const params = new URLSearchParams();
+  if (task.plan_id) params.set("plan", task.plan_id);
+  if (task.work_item_id) params.set("item", task.work_item_id);
+  if (!task.plan_id) params.set("tab", "activity");
+  return `/p/${task.project_id}?${params}`;
 }
 
-function Kpi({
-  icon,
-  label,
-  value,
-  sub,
-  hot,
-  to,
-}: {
-  icon: string;
-  label: string;
-  value: React.ReactNode;
-  sub: string;
-  hot?: boolean;
-  to?: string;
-}) {
-  const cls = `kpi ${hot ? "hot" : ""} ${to ? "link" : ""}`;
-  const inner = (
-    <>
-      <span className="kpi-label">
-        <i className={`ti ti-${icon}`} aria-hidden /> {label}
-      </span>
-      <span className="kpi-value">{value}</span>
-      <span className="kpi-sub">{sub}</span>
-    </>
-  );
-  return to ? (
-    <Link to={to} className={cls}>
-      {inner}
-    </Link>
-  ) : (
-    <div className={cls}>{inner}</div>
-  );
+function MachineRow({ machine, task, stale }: { machine?: OverviewMachine; task?: OverviewLiveTask; stale: boolean }) {
+  const DeviceIcon = machine?.device_kind === "laptop" ? IconDeviceLaptop : IconServer;
+  const online = !stale && (task ? task.runner_online : machine?.online);
+  const name = machine?.name || task?.machine_name || task?.runner_name || "Unassigned runner";
+  const status = stale ? "Unknown" : !online ? task ? "Heartbeat lost" : "Offline" : task ? task.delivered ? "Online · Busy" : "Online · Starting" : machine && machine.runners_busy > 0 ? "Online · Busy" : machine && machine.runners_idle > 0 ? "Online · Idle" : "Online · Unavailable";
+  const kind = stale ? "unknown" : !online ? task ? "waiting" : "offline" : "online";
+  return <tr>
+    <td className="op-machine-cell"><DeviceIcon size={23} stroke={1.5} aria-hidden /><div><Link to={`/machines${machine ? `#${machine.id}` : ""}`}>{name}</Link>{task && machine && machine.runners_total > 1 && <small>{task.runner_name}</small>}</div></td>
+    <td><span className={`op-machine-status status-${kind}`}><span className="status-dot" />{status}</span>{!online && !stale && (task?.runner_last_seen || machine?.last_seen) ? <small className="op-cell-note">Last seen {ago(task?.runner_last_seen || machine!.last_seen)}</small> : null}</td>
+    <td>{task ? <ProviderName backend={task.backend} /> : <span className="op-empty-label">{online && machine && machine.runners_idle > 0 ? "Ready for work" : "—"}</span>}</td>
+    <td className="op-work-cell">{task ? <Link to={taskLink(task)}><span>{task.project_name}</span><strong>{task.title}</strong></Link> : <span className="op-empty-label">{!online ? "No connected runner" : machine && machine.runners_busy > 0 ? `${machine.runners_busy} active — open project details` : machine && machine.runners_idle > 0 ? "No active task" : "Check agent access or limits"}</span>}</td>
+    <td>{task ? <span className={`op-stage ${!online ? "op-stage-waiting" : ""}`}>{stale ? "Last known: " : ""}{!online && !stale ? "Connection lost" : !task.delivered ? "Starting" : STAGES[task.kind]}</span> : <Link className="op-row-action" to="/machines">View capacity</Link>}</td>
+    <td className="op-duration">{task ? duration(task.started_at, 0) : "—"}</td>
+  </tr>;
 }
 
-function ProjectRow({
-  p,
-  cooldownHint,
-  onPatch,
-}: {
-  p: OverviewProject;
-  cooldownHint?: string;
-  onPatch: (p: ProjectPatch) => Promise<void>;
-}) {
-  const { counts, plan } = p;
-  const isIdle = p.state === "idle" || p.state === "idle_goal_complete";
-  const actionLabel = !plan ? "Submit a plan" : plan.outcome === "pending"
-    ? "Review plan" : ["done", "partial", "abandoned"].includes(plan.outcome)
-      ? "Inspect results" : "View progress";
-  const bits = [
-    counts.running ? `${counts.running} running` : null,
-    counts.blockers ? `${counts.blockers} blocked` : null,
-    counts.questions ? `${counts.questions} questions` : null,
-  ].filter(Boolean);
-  return (
-    <article className="home-project home-plan-project">
-      <Link to={`/p/${p.id}${plan ? `?plan=${encodeURIComponent(plan.id)}` : ""}`} className="hp-content">
-        <div className="hp-main">
-          <div className="hp-title">
-            <span className="hp-name">{p.name}</span>
-            {p.spec_repo ? (
-              <span className="hp-repo">{repoShort(p.spec_repo)}</span>
-            ) : (
-              <span className="chip chip-setup">setup needed</span>
-            )}
-            {p.paused && <span className="chip chip-paused">paused</span>}
-          </div>
-          {plan ? <>
-            <h3 className="hp-goal">{plan.goal}</h3>
-            <p className={`hp-outcome hp-outcome-${plan.outcome}`}>{PLAN_OUTCOMES[plan.outcome]}</p>
-            <div className="hp-progress" aria-label="Plan progress">
-              <strong>{plan.counts.done} landed</strong>
-              <span>{plan.counts.cancelled} cancelled</span>
-              <span>{plan.counts.remaining} remaining</span>
-            </div>
-          </> : <p className="hp-no-plan">No plan yet. {p.spec_repo
-            ? "Submit a plan to start an iteration."
-            : "Connect a repository to submit your first plan."}</p>}
-          {bits.length > 0 && <div className="hp-stats">{bits.join(" · ")}</div>}
-          {p.state_reason && !isIdle && (
-            <div className="hp-reason">{p.state_reason}</div>
-          )}
-        </div>
-        <div className="hp-footer">
-          <span className="hp-open">{actionLabel} →</span>
-          {!isIdle && <StateBadge
-            state={p.state}
-            attentionCount={counts.questions + counts.blockers}
-            cooldownHint={p.state === "blocked_resources" ? cooldownHint : undefined}
-          />}
-          {p.spend_today > 0 && <span className="hp-spend">{money(p.spend_today)} today</span>}
-        </div>
-      </Link>
-      <ProjectActions project={p} onPatch={onPatch} compact />
-    </article>
-  );
-}
-
-function NewProjectRow({ onClick }: { onClick: () => void }) {
-  return (
-    <button type="button" className="home-project home-project-new" onClick={onClick}>
-      <span className="hp-new-icon" aria-hidden>
-        +
-      </span>
-      <span className="hp-main">
-        <span className="hp-name">new project</span>
-        <span className="hp-stats">create a project and configure its repos</span>
-      </span>
-    </button>
-  );
-}
-
-function MachineCard({ m }: { m: OverviewMachine }) {
-  return (
-    <Link to="/machines" className={`cap-machine ${m.online ? "online" : "offline"}`}>
-      <span className="cap-head">
-        <i className={`dot ${m.online ? "" : "off"}`} />
-        <span className="cap-name">{m.name}</span>
-        <span className="cap-kind">{machineAvailabilityLabel(m)}</span>
-      </span>
-      <span className="cap-agents">
-        {m.agents.length === 0 && <span className="muted">no agents discovered</span>}
-        {m.agents.map((a) => (
-          <span key={a.id} className={`agent-pill ${AGENT_TONE[a.status]}`}>
-            <span className="mono">{a.backend}</span> {agentLabel(a)}
-          </span>
-        ))}
-      </span>
-    </Link>
-  );
-}
-
-function machineAvailabilityLabel(machine: OverviewMachine): string {
-  if (machine.device_kind === "server") return "cloud server";
-  if (machine.device_kind === "laptop") return "personal computer";
-  if (machine.id.startsWith("runner:") || machine.kind === "unlinked") return "unlinked machine";
-  return "availability unknown";
-}
-
-function NewProjectModal({ onClose }: { onClose: () => void }) {
-  const navigate = useNavigate();
-  const [name, setName] = useState("");
-  const [repoMode, setRepoMode] = useState<"create" | "existing">("existing");
-  const [repoUrl, setRepoUrl] = useState("");
-  const [validationCommand, setValidationCommand] = useState("");
-  const [createdId, setCreatedId] = useState("");
-  const [repoCreated, setRepoCreated] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  // Keep the accepted project ID on partial failure, so retry only finishes setup.
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (repoMode === "existing" && !repoUrl.trim()) {
-      setError("paste the repo URL, or switch to 'create one for me'");
-      return;
-    }
-    setBusy(true);
-    setError("");
-    let projectId = createdId;
-    try {
-      if (!projectId) {
-        const project = await api.createProject({ name: name.trim() });
-        projectId = project.id;
-        setCreatedId(project.id);
-      }
-      if (repoMode === "create" && !repoCreated) {
-        await api.createProjectRepo(projectId, { name: "", private: true });
-        setRepoCreated(true);
-      }
-      await api.patchProject(projectId, {
-        name: name.trim(), validation_command: validationCommand.trim(),
-        ...(repoMode === "existing" ? { spec_repo: repoUrl.trim(), member_repos: [repoUrl.trim()] } : {}),
-      });
-      navigate(`/p/${projectId}`);
-    } catch (error) {
-      setError(String(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="modal-veil" onClick={onClose}>
-      <form className="modal modal-narrow" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
-        <h2>New project</h2>
-        <p className="modal-hint">Connect a repository, then submit a plan. Agents start only after you approve the work.</p>
-        <label>
-          name
-          <input value={name} onChange={(e) => setName(e.target.value)} required autoFocus placeholder="atlas" />
-        </label>
-        <div className="repo-mode">
-          <label className="repo-mode-option">
-            <input
-              type="radio"
-              name="repo-mode"
-              checked={repoMode === "create"}
-              onChange={() => setRepoMode("create")}
-            />
-            create a private repo for me
-          </label>
-          <label className="repo-mode-option">
-            <input
-              type="radio"
-              name="repo-mode"
-              checked={repoMode === "existing"}
-              onChange={() => setRepoMode("existing")}
-            />
-            use an existing repo
-          </label>
-          {repoMode === "existing" && (
-            <label>Repository URL
-              <input
-                value={repoUrl}
-                onChange={(e) => setRepoUrl(e.target.value)}
-                placeholder="https://github.com/org/project.git"
-              />
-            </label>
-          )}
-        </div>
-        <label>Validation command
-          <input value={validationCommand} onChange={e => setValidationCommand(e.target.value)} placeholder="make check" />
-        </label>
-        <p className="modal-hint">Hive runs this after review and before landing each change. Leave blank to rely on agent review.</p>
-        {error && <p className="form-error" role="alert">{error}</p>}
-        {createdId && error && <Link to={`/p/${createdId}`}>Open the created project</Link>}
-        <div className="modal-actions">
-          <button type="button" className="ghost" onClick={onClose}>
-            cancel
-          </button>
-          <button type="submit" disabled={busy}>
-            {busy ? "Saving…" : createdId ? "Retry setup" : "Create project"}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-function HomeSkeleton() {
-  return (
-    <div className="home-skeleton" aria-hidden>
-      <div className="home-grid">
-        <div className="panel skeleton tall" />
-        <div className="panel skeleton tall" />
-      </div>
-    </div>
-  );
+function Delivery({ item }: { item: RecentDelivery }) {
+  const labels = { passed: "Checks passed", failed: "Check failed", not_recorded: "Review evidence", different_commit: "Review evidence" };
+  const VerdictIcon = item.validation.status === "passed" ? IconCircleCheck : item.validation.status === "failed" ? IconAlertCircle : IconGitCommit;
+  return <Link className="op-delivery" to={`/p/${item.project_id}?plan=${encodeURIComponent(item.plan_id)}&tab=work&item=${encodeURIComponent(item.work_item_id)}&evidence=1`}>
+    <div className="op-delivery-text"><strong>{item.project_name}</strong><span>{item.title}</span></div>
+    <span className="op-delivery-age">{ago(item.merged_at)}</span>
+    <span className={`op-delivery-verdict ${item.validation.status === "passed" ? "is-passed" : ""}`}><VerdictIcon size={15} aria-hidden />{labels[item.validation.status]}</span>
+  </Link>;
 }
 
 export default function Home() {
-  const { data, failed, refresh } = useOverview();
-  const [showNew, setShowNew] = useState(false);
-
-  if (!data) {
-    return (
-      <div className="page page-home">
-        {failed ? <p className="muted">chief unreachable</p> : <HomeSkeleton />}
-      </div>
-    );
-  }
-
-  const t = data.totals;
-  const cooldownHint = soonestCooldown(data);
-  const activePlans = data.projects.filter(p => p.plan?.status === "approved").length;
-  const draftPlans = data.projects.filter(p => p.plan?.status === "draft").length;
-  const summary = [
-    activePlans ? `${activePlans} ${activePlans === 1 ? "plan" : "plans"} in progress` : null,
-    draftPlans ? `${draftPlans} awaiting approval` : null,
-    t.needs_you > 0 ? `${t.needs_you} ${t.needs_you === 1 ? "action needs you" : "actions need you"}` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  const togglePause = async () => {
-    await api.setFleetPaused(!data.paused);
-    refresh();
+  const { data, failed, refresh, inboxCount } = useOverview();
+  const [pauseBusy, setPauseBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [now, setNow] = useState(Date.now() / 1000);
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now() / 1000), 10000); return () => clearInterval(timer); }, []);
+  if (!data) return <div className="page page-operations"><h1>Overview</h1><p className="empty-copy">{failed ? "Waiting for the chief connection." : "Checking Hive’s current state…"}</p></div>;
+  const stale = failed || now - data.observed_at > 30;
+  const status = statusOf(data, stale);
+  const StatusIcon = status.tone === "working" ? IconCircleCheck : status.tone === "paused" ? IconPlayerPause : status.tone === "waiting" || status.tone === "unknown" ? IconAlertCircle : IconClock;
+  const machines = [...data.capacity.machines].sort((a, b) => b.runners_busy - a.runners_busy || Number(b.online) - Number(a.online) || a.name.localeCompare(b.name));
+  const visibleMachines = machines.slice(0, 6);
+  const attachedTasks = new Set<string>();
+  const machineRows = visibleMachines.flatMap(machine => {
+    const live = data.live_tasks.filter(task => task.machine_id === machine.id || (!task.machine_id && machine.agents.some(agent => agent.runner_id === task.runner_id)));
+    live.forEach(task => attachedTasks.add(task.id));
+    return live.length ? live.map(task => <MachineRow key={task.id} machine={machine} task={task} stale={stale} />) : [<MachineRow key={machine.id} machine={machine} stale={stale} />];
+  });
+  const unassigned = data.live_tasks.filter(task => !attachedTasks.has(task.id) && !machines.some(machine => machine.id === task.machine_id));
+  const readings = machines.flatMap(machine => machine.agents.map(agent => ({ ...agent, machineName: machine.name })));
+  const pause = async () => {
+    setPauseBusy(true); setError("");
+    try { await api.setFleetPaused(!data.paused); await refresh(); }
+    catch (err) { setError(String(err)); }
+    finally { setPauseBusy(false); }
   };
-
-  return (
-    <div className="page page-home">
-      <div className="home-head">
-        <div className="home-heading">
-          <h1>{data.paused ? "Hive is paused" : "Project work"}</h1>
-          <p>{summary || "Submit a plan, follow its progress, and inspect the results."}</p>
-        </div>
-        <button
-          type="button"
-          className={data.paused ? "" : "ghost"}
-          title="Nothing new starts anywhere; running tasks finish and report."
-          onClick={togglePause}
-        >
-          {data.paused ? "Resume hive" : "Pause hive"}
-        </button>
-      </div>
-
-      {data.paused ? (
-        <div className="fleet-paused-banner">
-          <i className="ti ti-player-pause" aria-hidden />{" "}
-          Hive is paused — no new tasks, scans, or agent sessions start anywhere.
-          Running tasks finish and report. Resume to let queued work continue.
-        </div>
-      ) : null}
-
-      <div className="home-grid">
-        <section className="panel">
-          <div className="panel-head">
-            <h2>projects</h2>
-          </div>
-          {data.projects.length === 0 ? (
-            <p className="muted">No projects yet.</p>
-          ) : null}
-          <div className="home-project-list">
-            {data.projects.map((p) => (
-              <ProjectRow
-                key={p.id}
-                p={p}
-                cooldownHint={cooldownHint}
-                onPatch={async (patch) => {
-                  await api.patchProject(p.id, patch);
-                  refresh();
-                }}
-              />
-            ))}
-            <NewProjectRow onClick={() => setShowNew(true)} />
-          </div>
-        </section>
-
-        <div className="home-rail">
-          <section className="panel">
-            <div className="panel-head">
-              <h2>
-                <i className="ti ti-hand-stop" aria-hidden /> needs you
-              </h2>
-              {data.attention.count > 0 && <span className="badge hot">{data.attention.count}</span>}
-              <Link to="/needs-you" className="panel-link">
-                view all →
-              </Link>
-            </div>
-            {data.attention.count === 0 && <p className="muted">nothing needs you right now</p>}
-            {data.attention.questions.map((q) => (
-              <Link key={q.id} to="/needs-you" className="rail-item">
-                <span className="rail-tag">{q.project_name || "project"} · question</span>
-                <span className="rail-text">{q.text}</span>
-              </Link>
-            ))}
-            {data.attention.human_todos.map((todo) => (
-              <Link key={todo.id} to="/needs-you" className="rail-item">
-                <span className="rail-tag">{todo.project_name || "org-wide"} · todo</span>
-                <span className="rail-text">{todo.title}</span>
-              </Link>
-            ))}
-            {(data.attention.offers ?? []).map((offer) => (
-              <Link key={offer.workstream_id} to={`/p/${offer.project_id}`} className="rail-item">
-                <span className="rail-tag">{offer.project_name} · hive offers</span>
-                <span className="rail-text">{offer.offer}</span>
-              </Link>
-            ))}
-          </section>
-
-          <section className="panel">
-            <div className="panel-head">
-              <h2>
-                <i className="ti ti-bolt" aria-hidden /> live now
-              </h2>
-            </div>
-            {data.live_tasks.length === 0 && <p className="muted">no tasks running</p>}
-            {data.live_tasks.map((task) => (
-              <Link key={task.id} to={`/p/${task.project_id}`} className="live-item">
-                <i className="dot live" />
-                <span className="live-text">
-                  {task.project_name} · <span className="mono">{task.backend}</span> {task.kind}
-                  {task.issue_number ? ` #${task.issue_number}` : ""}
-                </span>
-                <span className="live-age">{duration(task.started_at, 0)}</span>
-              </Link>
-            ))}
-          </section>
-        </div>
-      </div>
-
-      <details className="home-diagnostics">
-        <summary>
-          <span>Capacity &amp; activity</span>
-          <span>{t.agents_ready} {t.agents_ready === 1 ? "agent" : "agents"} ready · {money(t.spend_today)} today</span>
-        </summary>
-        <div className="kpi-row">
-          <Kpi icon="bolt" label="running" value={t.tasks_running} sub="tasks now" />
-          <Kpi
-            icon="robot"
-            label="agents"
-            value={<>{t.agents_ready}<span> / {t.agents_total}</span></>}
-            sub="ready"
-            to="/machines"
-          />
-          <Kpi
-            icon="server"
-            label="machines"
-            value={<>{t.machines_online}<span> / {t.machines_total}</span></>}
-            sub="online"
-            to="/machines"
-          />
-          <Kpi
-            icon="alert-circle"
-            label="needs you"
-            value={t.needs_you}
-            sub={`${data.attention.questions.length} q · ${data.attention.human_todos.length} todo`}
-            hot={t.needs_you > 0}
-            to="/needs-you"
-          />
-          <Kpi
-            icon="currency-dollar"
-            label="spend"
-            value={money(t.spend_today)}
-            sub={t.budget_today > 0 ? `of ${money(t.budget_today)} today` : "today"}
-          />
-        </div>
-
-        <section className="panel">
-          <div className="panel-head">
-            <h2>
-              <i className="ti ti-cpu" aria-hidden /> capacity · machines &amp; agents
-            </h2>
-            <Link to="/machines" className="panel-link">
-              manage →
-            </Link>
-          </div>
-          {data.capacity.machines.length === 0 ? (
-            <p className="muted">No machines enrolled. Enroll a machine on the machines page.</p>
-          ) : (
-            <div className="cap-list">
-              {data.capacity.machines.map((m) => (
-                <MachineCard key={m.id} m={m} />
-              ))}
-            </div>
-          )}
-          {data.subscriptions.length > 0 && (
-            <div className="cap-subs">
-              <span className="muted">subscriptions</span>
-              {data.subscriptions.map((s) => (
-                <span key={s.id} className="chip">
-                  {s.provider}
-                  {s.plan ? ` · ${s.plan}` : ""}
-                </span>
-              ))}
-            </div>
-          )}
-        </section>
-      </details>
-
-      {showNew && <NewProjectModal onClose={() => setShowNew(false)} />}
+  return <div className="page page-operations">
+    <h1>Overview</h1>
+    <header className={`op-status-header status-${status.tone}`}>
+      <div className="op-state"><StatusIcon className="op-state-icon" size={41} stroke={1.7} aria-hidden /><div><h2>{status.title}</h2><p>{status.note}</p><small>Updated {ago(data.observed_at)}</small></div></div>
+      <div className="op-header-actions"><NewWorkButton onStarted={refresh} /><button className="ghost" disabled={pauseBusy || stale} onClick={pause}>{data.paused ? <IconPlayerPlay size={18} aria-hidden /> : <IconPlayerPause size={18} aria-hidden />}{pauseBusy ? "Updating…" : data.paused ? "Resume Hive" : "Pause Hive"}</button></div>
+    </header>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <section className="op-summary" aria-label="Current capacity">
+      <Link to="/machines"><IconDeviceDesktop size={24} stroke={1.6} aria-hidden /><span><strong>{stale ? "—" : `${data.capacity.machines_online} of ${data.capacity.machines_total}`}</strong> machines online</span></Link>
+      <div><IconPlayerPlay size={23} stroke={1.6} aria-hidden /><span><strong>{stale ? "—" : data.capacity.runners_busy}</strong> busy</span></div>
+      <Link to="/machines"><IconDeviceDesktop size={24} stroke={1.6} aria-hidden /><span><strong>{stale ? "—" : data.capacity.runners_idle}</strong> idle &amp; usable</span></Link>
+      <div title="Recorded task and planner spend. In-flight costs may not yet be reported."><IconCoin size={24} stroke={1.6} aria-hidden /><span>Recorded spend <strong>{money(data.totals.spend_today)}</strong> today</span></div>
+    </section>
+    <section className="op-machine-section">
+      <div className="op-section-head"><h2>Where work is running</h2><Link to="/machines">View capacity</Link></div>
+      <p className="op-section-note">One task at a time per runner. Agent CLIs on the same machine share that capacity.</p>
+      {machineRows.length === 0 && unassigned.length === 0 ? <div className="op-empty"><IconServer size={28} stroke={1.5} aria-hidden /><div><strong>No machines connected</strong><p>Enroll a machine to give Hive somewhere to run work.</p><Link to="/machines">Connect a machine <IconArrowRight size={15} aria-hidden /></Link></div></div> :
+      <div className="op-table-wrap"><table className="op-machine-table"><thead><tr><th>Machine</th><th>Status</th><th>Agent</th><th>Project / work</th><th>Stage</th><th>Elapsed</th></tr></thead><tbody>{machineRows}{unassigned.map(task => <MachineRow key={task.id} task={task} stale={stale} />)}</tbody></table></div>}
+      {machines.length > visibleMachines.length && <Link className="op-more" to="/machines">View all {machines.length} machines</Link>}
+    </section>
+    <div className="op-support-grid">
+      <section className="op-results"><div className="op-section-head"><h2>Recent results</h2><Link to="/results">View all</Link></div>
+        {data.recent_deliveries.items.length === 0 ? <p className="empty-copy">Landed changes and their evidence will appear here.</p> : data.recent_deliveries.items.slice(0, 3).map(item => <Delivery key={item.work_item_id} item={item} />)}
+        {data.recent_deliveries.count > 3 && <p className="op-section-note">Latest 3 of {data.recent_deliveries.count} delivered changes</p>}
+      </section>
+      <section className="op-limits"><div className="op-section-head"><h2>Subscription limits</h2><Link to="/machines?tab=limits">View all</Link></div><UsageLimits readings={readings} compact /></section>
     </div>
-  );
+    {inboxCount !== null && inboxCount > 0 && <Link className="op-attention" to="/needs-you"><IconAlertCircle size={21} aria-hidden /><span><strong>{inboxCount} {inboxCount === 1 ? "action" : "actions"} waiting</strong><span>Open Inbox</span></span><IconArrowRight size={18} aria-hidden /></Link>}
+    {import.meta.env.VITE_MOCK === "1" && <p className="op-demo-note">Sample data · Local design preview</p>}
+  </div>;
 }

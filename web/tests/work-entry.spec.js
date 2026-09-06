@@ -1,3 +1,4 @@
+import { emptyOverview, emptyInbox } from "./fixtures.js";
 import { test, expect } from "playwright/test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -51,24 +52,8 @@ async function fixture(page) {
       });
     if (path === "/api/version") return json({ version: "test" });
     if (path === "/api/github/repos") return json([]);
-    if (path === "/api/overview")
-      return json({
-        projects: [],
-        live_tasks: [],
-        subscriptions: [],
-        totals: {
-          needs_you: 0,
-          tasks_running: 0,
-          agents_ready: 0,
-          agents_total: 0,
-          machines_online: 0,
-          machines_total: 0,
-          spend_today: 0,
-          budget_today: 0,
-        },
-        attention: { offers: [], questions: [], human_todos: [] },
-        capacity: { machines: [] },
-      });
+    if (path === "/api/overview") return json(emptyOverview());
+    if (path === "/api/inbox") return json(emptyInbox());
     if (path === "/api/projects")
       return json(
         request.method() === "POST" ? state.project : [state.project],

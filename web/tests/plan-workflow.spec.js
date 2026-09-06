@@ -1,3 +1,4 @@
+import { emptyOverview, emptyInbox } from "./fixtures.js";
 import { test, expect } from "playwright/test";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -35,7 +36,7 @@ const item = {
 
 async function setup(page, initial = null) {
   const state = { payload: initial, requests: [], rejectSubmit: false, result: null, failResult: false,
-    project: { ...project }, projectPlan: null, failWiring: false, failReadiness: false,
+    project: { ...project }, projectPlan: null, questions: [], workItems: [], failWiring: false, failReadiness: false,
     readiness: { plan_id: plan.id, revision: 1, observed_at: 1, ready: true, checks: [
       { key: "build", label: "Build capacity", status: "ready", detail: "claude on laptop", action: "" },
       { key: "review", label: "Review capacity", status: "ready", detail: "codex on laptop", action: "" },
@@ -47,13 +48,9 @@ async function setup(page, initial = null) {
     if (path === "/api/auth/me") return route.fulfill({ json: {
       user: { id: "owner", github_login: "owner" }, workspace: { id: "workspace" }, role: "admin", auth_mode: "github",
     } });
-    if (path === "/api/overview") return route.fulfill({ json: {
-      projects: [], live_tasks: [], subscriptions: [],
-      totals: { needs_you: 0, tasks_running: 0, agents_ready: 0, agents_total: 0,
-        machines_online: 0, machines_total: 0, spend_today: 0, budget_today: 0 },
-      attention: { offers: [], questions: [], human_todos: [] },
-      capacity: { machines: [] },
-    } });
+    if (path === "/api/overview") return route.fulfill({ json: emptyOverview() });
+    if (path === "/api/inbox") return route.fulfill({ json: emptyInbox() });
+    if (path === "/api/projects" && request.method() === "GET") return route.fulfill({ json: [] });
     if (path === "/api/version") return route.fulfill({ json: { version: "test" } });
     if (path === "/api/resources") return route.fulfill({ json: { cards: [] } });
     if (path === "/api/projects" && request.method() === "POST") return route.fulfill({ json: state.project });
@@ -63,7 +60,7 @@ async function setup(page, initial = null) {
         Object.assign(state.project, request.postDataJSON());
         return route.fulfill({ json: state.project });
       }
-      return route.fulfill({ json: { ...detail, project: state.project, plan: state.projectPlan ?? state.payload } });
+      return route.fulfill({ json: { ...detail, project: state.project, plan: state.projectPlan ?? state.payload, questions: state.questions, work_items: state.workItems } });
     }
     if (path === "/api/projects/csv/plan/submit") {
       if (state.rejectSubmit) return route.fulfill({ status: 400, json: { detail: "A plan must contain at least one item" } });
@@ -111,13 +108,13 @@ test("submit a file, correct a rejected submission, and start without intake", a
 test("new project goes to submission and a setup retry does not create another project", async ({ page }) => {
   const state = await setup(page);
   await page.goto("/");
-  await page.getByRole("button", { name: /new project create a project/ }).click();
-  await page.getByLabel("name", { exact: true }).fill("CSV tools");
+  await page.getByRole("button", { name: "New work", exact: true }).click();
+  await page.getByLabel("Project name", { exact: true }).fill("CSV tools");
   await page.getByLabel("Repository URL").fill(project.spec_repo);
   await page.getByLabel("Validation command").fill("make check");
   await capture(page, "new-plan-project");
   state.failWiring = true;
-  await page.getByRole("button", { name: "Create project", exact: true }).click();
+  await page.getByRole("button", { name: "Continue to plan", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Repository access denied");
   state.failWiring = false;
   await page.getByRole("button", { name: "Retry setup" }).click();
@@ -188,7 +185,7 @@ test("readiness shows fixes before approval and never presents stale checks as c
   await page.goto("/p/csv");
   const readiness = page.getByRole("region", { name: "Execution readiness" });
   await expect(readiness.getByText("2 checks need attention")).toBeVisible();
-  await expect(readiness.getByRole("link", { name: "Manage agents" })).toHaveAttribute("href", "/resources");
+  await expect(readiness.getByRole("link", { name: "Manage agents" })).toHaveAttribute("href", "/machines");
   await expect(page.getByRole("button", { name: "Approve all 1 & queue" })).toBeEnabled();
   await capture(page, "plan-readiness-blocked");
   await page.setViewportSize({ width: 390, height: 844 });
@@ -221,4 +218,49 @@ test("a plan with only cancelled items never claims delivery", async ({ page }) 
   await expect(page.getByText("0 landed", { exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "Execution readiness" })).toHaveCount(0);
   await capture(page, "plan-all-cancelled");
+});
+
+// The project summary must lead to this project's actions, retain the filter on
+// reload, and let the operator return to the whole workspace explicitly.
+test("project attention opens a filtered Inbox and recovery links use real routes", async ({ page }) => {
+  const state = await setup(page, { plan: { ...plan }, items: [{ ...item }] });
+  const question = { id: "csv-decision", project_id: project.id, text: "Choose CSV encoding", status: "open", created_at: 1 };
+  state.questions = [question];
+  state.workItems = [{ id: "issue-42", issue_number: 42, title: "Fix import ambiguity", status: "blocked_clarity" }];
+  const action = { id: "question:csv-decision", kind: "question", title: question.text, body: "Choose UTF-8 or ASCII.",
+    project_id: project.id, project_name: project.name, created_at: 1, can_act: true, waiting_on_other: false,
+    assignee_user_id: "", assignee_name: "", question };
+  const other = { ...action, id: "question:other", title: "Another project's decision", project_id: "other-project", project_name: "Other project" };
+  const projectsRequested = [];
+  await page.route("**/api/inbox?**", route => {
+    const selectedProject = new URL(route.request().url()).searchParams.get("project_id");
+    projectsRequested.push(selectedProject);
+    const items = [action, other].filter(row => !selectedProject || row.project_id === selectedProject);
+    return route.fulfill({ json: { ...emptyInbox(), items, total: items.length,
+      counts: { ...emptyInbox().counts, all: 2, question: 2, yours: 2 } } });
+  });
+  await page.goto("/p/csv");
+  await expect(page.getByRole("link", { name: /Issue #42/ })).toHaveAttribute("href", "/p/csv?tab=issues");
+  await expect(page.getByRole("link", { name: "Open Inbox", exact: true })).toHaveAttribute("href", "/needs-you?project=csv");
+  await page.getByRole("link", { name: "Open Inbox", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Choose CSV encoding", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Another project's decision/ })).toHaveCount(0);
+  expect(projectsRequested).toContain("csv");
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Choose CSV encoding", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Inbox 1", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Next inbox page" })).toBeInViewport();
+  await expect(page.getByRole("button", { name: /Another project's decision/ })).toHaveCount(0);
+  await capture(page, "project-filtered-inbox");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect(page.getByRole("button", { name: "Show all projects", exact: true })).toBeInViewport();
+  await capture(page, "project-filtered-inbox-mobile");
+  await page.getByRole("button", { name: "Show all projects", exact: true }).click();
+  await expect(page.getByRole("button", { name: /Another project's decision/ })).toBeVisible();
+  state.payload = null; state.workItems = []; state.questions = [];
+  await page.goto("/p/csv?tab=conversation");
+  await expect(page.getByRole("link", { name: "capacity", exact: true })).toHaveAttribute("href", "/machines");
+  await page.getByRole("link", { name: "capacity", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Capacity", exact: true })).toBeVisible();
 });

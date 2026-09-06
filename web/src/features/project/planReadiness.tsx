@@ -42,7 +42,7 @@ export function PlanReadiness({ plan, project, onChanged, onReviewItems }: {
             <li key={check.key} className={`readiness-${check.status}`}>
               <span aria-hidden>{check.status === "ready" ? "✓" : "!"}</span>
               <div><strong>{check.label}</strong><p>{check.detail}</p></div>
-              {check.action === "resources" && <Link to="/resources">Manage agents</Link>}
+              {check.action === "resources" && <Link to="/machines">Manage agents</Link>}
               {check.action === "settings" && <Link to={`/p/${project.id}/settings`}>Project settings</Link>}
               {check.action === "items" && <button type="button" className="ghost" onClick={onReviewItems}>Review items</button>}
               {(check.action === "resume_project" || check.action === "resume_fleet") &&

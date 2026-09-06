@@ -726,7 +726,7 @@ function machineTypeTitle(machine: MachineInfo): string {
 function deviceKindLabel(kind: string): string {
   if (kind === "server") return "cloud server";
   if (kind === "laptop") return "personal computer";
-  return "availability unknown";
+  return "device role not set";
 }
 
 function deviceKindTitle(kind: string): string {

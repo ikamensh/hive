@@ -280,6 +280,10 @@ export interface PlanPayload {
   items: PlanItem[];
 }
 
+export interface PlanHistory {
+  plans: Plan[];
+}
+
 /** Observed execution prerequisites; no reservations or validation evidence. */
 export interface PlanReadiness {
   plan_id: string;
@@ -614,6 +618,14 @@ export interface MachineInfo {
   last_seen: number;
 }
 
+export interface UsageWindow {
+  kind: string;
+  model_scope: string;
+  used_percent: number;
+  window_minutes: number;
+  resets_at: number;
+}
+
 export interface ResourceInfo {
   id: string;
   workspace_id?: string;
@@ -639,6 +651,11 @@ export interface ResourceInfo {
   available: boolean;
   enabled?: boolean;
   disabled_reason?: string;
+  usage_plan?: string;
+  usage_source?: string;
+  usage_captured_at?: number;
+  usage_windows?: UsageWindow[];
+  model_cooldowns?: Record<string, number>;
 }
 
 /** A machine with its runners and agents, grouped server-side. */
@@ -710,6 +727,42 @@ export interface HumanTodo {
 
 export type HumanTask = HumanTodo;
 
+export type InboxKind = "all" | "question" | "todo" | "approval" | "blocked";
+export type InboxScope = "all" | "yours" | "others";
+export interface InboxOptions {
+  kind?: InboxKind;
+  scope?: InboxScope;
+  project_id?: string;
+  q?: string;
+  offset?: number;
+  limit?: number;
+}
+export interface InboxItem {
+  id: string;
+  kind: Exclude<InboxKind, "all">;
+  title: string;
+  body: string;
+  project_id: string;
+  project_name: string;
+  created_at: number;
+  can_act: boolean;
+  waiting_on_other: boolean;
+  assignee_user_id: string;
+  assignee_name: string;
+  question?: Question;
+  todo?: HumanTodo;
+  plan?: Plan;
+  plan_item?: PlanItem;
+}
+export interface InboxPayload {
+  items: InboxItem[];
+  total: number;
+  offset: number;
+  limit: number;
+  counts: Record<InboxKind | "yours" | "others", number>;
+  observed_at: number;
+}
+
 // ---- home dashboard (mirrors hive/control/overview.py) ---------------------
 
 export interface OverviewProject {
@@ -754,6 +807,11 @@ export interface OverviewAgent {
   available: boolean;
   cooldown_until: number;
   runner_id: string;
+  usage_plan?: string;
+  usage_source?: string;
+  usage_captured_at?: number;
+  usage_windows?: UsageWindow[];
+  model_cooldowns?: Record<string, number>;
 }
 
 export interface OverviewMachine {
@@ -765,6 +823,11 @@ export interface OverviewMachine {
   online: boolean;
   last_seen: number;
   agents: OverviewAgent[];
+  runners_online: number;
+  runners_total: number;
+  runners_busy: number;
+  runners_idle: number;
+  runners_usable: number;
 }
 
 export interface OverviewCapacity {
@@ -773,6 +836,11 @@ export interface OverviewCapacity {
   machines_online: number;
   agents_total: number;
   agents_ready: number;
+  runners_online: number;
+  runners_total: number;
+  runners_busy: number;
+  runners_idle: number;
+  runners_usable: number;
 }
 
 export interface OverviewLiveTask {
@@ -784,6 +852,42 @@ export interface OverviewLiveTask {
   kind: Task["kind"];
   started_at: number;
   issue_number: number;
+  title: string;
+  runner_id: string;
+  runner_name: string;
+  machine_id: string;
+  machine_name: string;
+  runner_online: boolean;
+  runner_last_seen: number;
+  delivered: boolean;
+  plan_id: string;
+  work_item_id: string;
+  repo: string;
+}
+
+export interface RecentDelivery {
+  project_id: string;
+  project_name: string;
+  plan_id: string;
+  work_item_id: string;
+  title: string;
+  repo: string;
+  merged_commit_sha: string;
+  merged_at: number;
+  validation: {
+    status: "passed" | "failed" | "not_recorded" | "different_commit";
+    command: string;
+    task_id: string;
+    commit_sha: string;
+  };
+}
+
+export interface DeliveriesPayload {
+  observed_at: number;
+  count: number;
+  offset: number;
+  limit: number;
+  items: RecentDelivery[];
 }
 
 export interface OverviewQuestion {
@@ -836,6 +940,10 @@ export interface OverviewTotals {
 }
 
 export interface Overview {
+  execution: { working: number; starting: number; disconnected: number };
+  observed_at: number;
+  tasks_pending: number;
+  recent_deliveries: { count: number; items: RecentDelivery[] };
   /** Fleet-wide pause: nothing new starts anywhere; running tasks finish. */
   paused: boolean;
   projects: OverviewProject[];

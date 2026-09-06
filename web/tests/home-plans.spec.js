@@ -1,3 +1,4 @@
+import { emptyOverview, emptyInbox } from "./fixtures.js";
 import { test, expect } from "playwright/test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -26,23 +27,18 @@ async function setup(page, projects = [project]) {
       user: { id: "owner", github_login: "owner" }, workspace: { id: "workspace" }, role: "admin", auth_mode: "github",
     } });
     if (path === "/api/version") return route.fulfill({ json: { version: "test" } });
-    if (path === "/api/overview") return route.fulfill({ json: {
-      paused: false, projects, live_tasks: [], subscriptions: [],
-      totals: { needs_you: 0, tasks_running: 1, agents_ready: 1, agents_total: 2,
-        machines_online: 1, machines_total: 1, spend_today: 0, budget_today: 0 },
-      attention: { count: 0, offers: [], questions: [], human_todos: [] },
-      capacity: { machines: [] },
-    } });
+    if (path === "/api/overview") return route.fulfill({ json: { ...emptyOverview(), projects } });
+    if (path === "/api/inbox") return route.fulfill({ json: emptyInbox() });
     return route.fulfill({ status: 404, json: { detail: `Unexpected endpoint: ${path}` } });
   });
   return paths;
 }
 
-test("home shows the plan goal and honest progress with a link to that exact iteration", async ({ page }) => {
+test("portfolio shows the plan goal and honest progress with a link to that exact iteration", async ({ page }) => {
   const paths = await setup(page);
-  await page.goto("/");
-  const card = page.getByRole("article").filter({ hasText: project.name });
-  await expect(card.getByRole("heading", { name: project.plan.goal })).toBeVisible();
+  await page.goto("/projects");
+  const card = page.getByRole("row").filter({ hasText: project.name });
+  await expect(card.getByText(project.plan.goal, { exact: true })).toBeVisible();
   await expect(card.getByText("1 landed", { exact: true })).toBeVisible();
   await expect(card.getByText("1 cancelled", { exact: true })).toBeVisible();
   await expect(card.getByText("1 remaining", { exact: true })).toBeVisible();
@@ -51,7 +47,7 @@ test("home shows the plan goal and honest progress with a link to that exact ite
   await capture(page, "home-plan-progress");
 });
 
-test("finished and new projects stay actionable while fleet details are secondary", async ({ page }) => {
+test("portfolio keeps partial results and new projects actionable on desktop and mobile", async ({ page }) => {
   const cancelled = { ...project, id: "docs", name: "Documentation", state: "idle", state_reason: "",
     counts: { running: 0, questions: 0, blockers: 0 },
     plan: { id: "docs-plan", goal: "Publish a deployment guide", status: "complete", outcome: "partial",
@@ -59,23 +55,18 @@ test("finished and new projects stay actionable while fleet details are secondar
   const empty = { ...project, id: "reports", name: "Reports", state: "idle", state_reason: "", plan: null,
     counts: { running: 0, questions: 0, blockers: 0 } };
   await setup(page, [project, cancelled, empty]);
-  await page.goto("/");
-  const finishedCard = page.getByRole("article").filter({ hasText: cancelled.name });
+  await page.goto("/projects");
+  const finishedCard = page.getByRole("row").filter({ hasText: cancelled.name });
   await expect(finishedCard.getByText("Execution ended with cancellations", { exact: true })).toBeVisible();
   await expect(finishedCard.getByText("0 landed", { exact: true })).toBeVisible();
   await expect(finishedCard.getByText("2 cancelled", { exact: true })).toBeVisible();
   await expect(finishedCard.getByRole("link", { name: /Inspect results/ })).toHaveAttribute("href", "/p/docs?plan=docs-plan");
-  const newCard = page.getByRole("article").filter({ hasText: empty.name });
-  await expect(newCard.getByText("No plan yet. Submit a plan to start an iteration.")).toBeVisible();
-  await expect(newCard.getByRole("link", { name: /Submit a plan/ })).toHaveAttribute("href", "/p/reports");
-  const capacity = page.getByRole("heading", { name: "capacity · machines & agents" });
-  await expect(capacity).toBeHidden();
+  const newCard = page.getByRole("row").filter({ hasText: empty.name });
+  await expect(newCard.getByText("No plan yet")).toBeVisible();
+  await expect(newCard.getByRole("link", { name: /Start work/ })).toHaveAttribute("href", "/p/reports");
   await capture(page, "home-plans-desktop");
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(finishedCard.getByText("2 cancelled", { exact: true })).toBeVisible();
   await capture(page, "home-plans-mobile");
-  await page.getByText("Capacity & activity", { exact: true }).click();
-  await expect(capacity).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

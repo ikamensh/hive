@@ -10,6 +10,7 @@
     "test": "playwright test"
   },
   "dependencies": {
+    "@tabler/icons-react": "^3.46.0",
     "dompurify": "^3.4.14",
     "marked": "^18.0.5",
     "react": "^19.2.7",
