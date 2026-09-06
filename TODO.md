@@ -3,6 +3,24 @@
 Deferred gap-closing work. Captured, not yet started — see wiki/ideal-ux.md
 for the gap list these tie back to.
 
+## Next: switch this Mac between remote and local chief (2026-09-06)
+
+Follow-up to the Spotlight launcher and PATH installation. Make disconnecting
+this Mac from the remote chief and starting a local chief a clear operator
+flow, with a way to switch back. Captured only; do not switch the live install
+until this work is taken up.
+
+- Drain/pause this Mac's remote runner before switching; leave the remote
+  chief and other machines running.
+- Start a local chief with `hive run --local` and its managed local runner.
+  Local state is separate; existing remote projects are not automatically
+  copied. Make that distinction clear before choosing any data transfer.
+- Route the CLI, menu bar status/controls, and Open dashboard to the selected
+  chief together. `hive --local whoami` already explicitly targets localhost,
+  but the installed menu bar still reads the remote runner's environment.
+- Preserve remote settings for switching back, and verify that the Mac takes
+  work only from the selected chief, including after restart/login.
+
 ## Round 3 structural simplifications (validated priorities, 2026-07-13)
 
 Ordered by the 2026-07-13 lab-tally live run. Each is a deep refactor that
