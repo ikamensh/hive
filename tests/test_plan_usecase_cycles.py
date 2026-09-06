@@ -48,3 +48,24 @@ def test_editing_queued_instructions_waits_for_renewed_approval(app, monkeypatch
     assert resumed["work_item_id"] == second
     assert resumed["plan_revision"] == revision
     assert "selected date range" in resumed["instructions"]
+
+
+def test_repeated_cancellation_preserves_the_reason_in_the_result(app):
+    """Retrying a cancellation after a lost response must preserve the owner's
+    explanation and timestamp in the durable execution receipt."""
+    client, _ = app
+    project = _api_project(client)
+    created = client.post(f"/api/projects/{project}/plan", json={
+        "goal": "Ship exports", "items": [{"title": "CSV export"}, {"title": "PDF export"}],
+    }).raise_for_status().json()
+    item_id = created["items"][1]["id"]
+    cancelled = client.post(f"/api/plan-items/{item_id}/cancel", json={
+        "reason": "PDF export is deferred until customers request it.",
+    }).raise_for_status().json()
+
+    duplicate = client.post(f"/api/plan-items/{item_id}/cancel").raise_for_status().json()
+
+    assert duplicate == cancelled
+    result = client.get(f"/api/plans/{created['plan']['id']}/result").raise_for_status().json()
+    assert result["items"][1]["status"] == "cancelled"
+    assert result["items"][1]["parked_reason"] == cancelled["parked_reason"]

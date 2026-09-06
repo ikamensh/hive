@@ -23,3 +23,16 @@ No live services, repositories or agents are changed by these scenarios.
   tests/test_plans.py tests/test_plan_artifacts.py -q` → **54 passed**.
 - **Self-review:** Kept the rule at the shared item-edit boundary; no route or
   UI-specific approval logic was added.
+
+## Cycle 7 — retry a cancellation after an uncertain response
+
+- **Scenario:** Cancel the PDF item in a CSV/PDF plan with a deferral reason;
+  repeat the cancellation without a body and retrieve the plan result.
+- **Initial observation:** `uv run pytest tests/test_plan_usecase_cycles.py::test_repeated_cancellation_preserves_the_reason_in_the_result -q`
+  failed: the repeated POST erased `parked_reason` and changed `updated_at`.
+- **Decision/fix:** Cancellation of an already-cancelled item is idempotent.
+  Its terminal reason and timestamp remain evidence of the original decision.
+- **Verification:** The same regression passes; the result retains the PDF
+  deferral reason. The focused plan/edit/result suite passes (recorded below).
+- **Self-review:** A terminal-state early return avoids rewriting history and
+  adds no extra state or retry mechanism.

@@ -325,6 +325,8 @@ def approve_all(store, plan: Plan) -> int:
 @synchronized
 def cancel_item(store, item: PlanItem, reason: str = "") -> PlanItem:
     item = _current(store, item)
+    if item.status == PlanItemStatus.cancelled:
+        return item
     if item.status in PLAN_ITEM_IN_FLIGHT:
         raise ValueError("an agent is working on this item; cancel its task first")
     if item.status == PlanItemStatus.done:
