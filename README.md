@@ -310,7 +310,7 @@ If the planner routes a task to a backend only your laptop has, that task parks 
 
 **What is *not* automatic yet.** Iteration work is autonomous, but new GitHub issues are only picked up when you trigger a scan (`hive scan`) — there's no scheduled sync. Since the CLI now drives the remote, you can trigger one from any machine (or phone over SSH); a scheduled scan would remove even that step.
 
-> **Rough edges (tracked in [TODO.md](TODO.md)).** Today's remote uses a single shared basic-auth password, so per-user `hive login` and a minted token would be smoother than copying a secret; there's one client target rather than named local/remote contexts; and the always-on backend coverage is on you to arrange. These are convenience gaps, not blockers — the workflow above works as written.
+GitHub-authenticated chiefs support personal CLI tokens through `hive connect <url>`. A Caddy basic-auth perimeter may still require `HIVE_BASIC_AUTH`. There is one client target rather than named local/remote contexts, and the always-on backend coverage is on you to arrange.
 
 For the concrete deployed instance (URL, password, runner attach), see [The deployed instance](#the-deployed-instance-maintainer-notes).
 
@@ -327,13 +327,13 @@ The iteration goal is always set *through hive* (`hive iterate` / the UI), which
 - `OPENAI_API_KEY` uses OpenAI's API; `HIVE_OPENAI_BASE_URL` can point at an OpenAI-compatible endpoint. `GEMINI_API_KEY` uses Gemini.
 - In `auto`, an explicit model prefix picks the provider; otherwise OpenAI is used when `OPENAI_API_KEY` exists, then Gemini.
 
-**Persisting state across restarts.** Runtime state requires Firestore and GCS:
+**Persisting state across restarts.** Managed mode uses Firestore and GCS:
 
 ```bash
 HIVE_GCP_PROJECT=<gcp-project> HIVE_GCS_BUCKET=<bucket> uv run hive run
 ```
 
-For a legacy local file store, migrate it explicitly while chiefs are stopped:
+Explicit local mode (`uv run hive run --local`) persists files and blobs in `~/.local/share/hive` by default and keeps them separate from cloud state. To move a local store to managed storage, migrate it while chiefs are stopped:
 
 ```bash
 uv run hive migrate-local-state \

@@ -1,8 +1,9 @@
 """FastAPI chief: web API + runner protocol + app wiring.
 
-Build with `create_app()` for production (env config) or pass explicit pieces
-in tests. Web endpoints are unauthenticated (the service sits behind
-Tailscale); runner endpoints require the shared runner token.
+`production_app()` wires environment config; `create_app()` also accepts
+explicit pieces for tests. Web endpoints use workspace-scoped authentication
+(GitHub sessions or CLI bearer tokens; automatic identity in dev mode).
+Runner endpoints require the shared runner token.
 """
 
 from __future__ import annotations

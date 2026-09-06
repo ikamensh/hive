@@ -138,11 +138,11 @@ GEPA-style prompt optimization (reflective mutation from execution traces + natu
 
 ## 11. Deployment & stack
 
-- **Chief: one small always-on GCE VM** running docker-compose. That cloud server is also enrolled for API-key backends; the user's personal computer is enrolled for subscription-bound backends (e.g. Claude Max). Access via Tailscale (no public exposure, works from phone); no IAP/load-balancer ceremony in MVP.
-- **State lives off-VM from day one**: **Firestore** for structured state (projects, tasks, questions, resources, episode index), **GCS** for blobs (orchestrator session backups, traces, archives). The VM is disposable: a fresh one re-attaches and resumes, losing at most an in-flight task. Secret Manager from day one.
-- **Monorepo** (`hive`): `chief/` (Python/FastAPI — supervisor, orchestrator invocations, Firestore/GCS, GitHub ops), `runner-agent/` (small Python daemon), `web/` (React + Vite + TypeScript SPA), `deploy/` (compose, VM bootstrap).
+- **Chief: an always-on Scaleway VM** running `hive-chief` and `hive-runner` via systemd. Caddy serves the public HTTPS endpoints. The app supports GitHub sessions and personal CLI bearer tokens with workspace roles; runner requests use a shared token. Personal computers can register additional runners for their available agents.
+- **Managed state lives off-VM**: **Firestore** for structured state and **GCS** for blobs, both in GCP project `hive-ikamen`; Scaleway Secret Manager supplies credentials. The VM is disposable: a fresh one re-attaches and resumes, recovering interrupted tasks. Explicit local mode (`hive run --local`) instead uses files and blobs in the local data directory, isolated from managed state.
+- **Monorepo** (`hive`): `hive/api.py` and `hive/_control/` compose the chief; `hive/runner/` composes agent execution over `hive/worker/`; `web/` contains the React + Vite + TypeScript SPA; `deploy/` contains provisioning and service scripts. See `code-map.md` for the full layout.
 - **Kodo is reused as a library, not as the orchestration**: its raw primitives — backend sessions (Claude Code / Cursor / Codex / Gemini CLI wrappers with session persistence, token/cost parsing, malformed-output hardening), agent = prompt + session + budget, JSONL trace format. Hive builds its own supervisor, planning, distribution, inbox, and UI on top.
-- Migration path when product time comes: chief container → Cloud Run (min-instances 1), runners → real fleet, `gh` login → GitHub App, Tailscale → proper auth. All mechanical because everything is containerized and state is already in managed services.
+- `deploy/push.sh` ships the working tree and restarts the systemd services; add `--web` to rebuild and ship the frontend or `--deps` after dependency changes. Reboot startup pulls the tracked git ref. Docker files remain available, but are outside the active deployment loop. See `AGENTS.md` for commands and coordinates.
 
 ## 12. Open questions
 
