@@ -1824,6 +1824,8 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if not question or question.workspace_id != ctx.workspace_id:
             raise HTTPException(404)
         project = require_project(question.project_id, ctx)
+        if not body.answer.strip():
+            raise HTTPException(400, "answer cannot be empty")
         answered = clarifications.apply_answer(
             store, supervisor, config, project, question, body.answer
         )

@@ -21,4 +21,19 @@ HTTP. System-generated records may be seeded as initial scenario fixtures.
   atomic rejection of a rename plus invalid budget, valid zero budget, archive,
   explicit archived listing, and restore.
 - Verified: `uv run pytest tests/test_api_operator_workflows.py
-  tests/test_api_e2e.py tests/test_users_roles.py -q` passes.
+  tests/test_api_e2e.py tests/test_users_roles.py -q` — 60 passed.
+
+## Cycle 12 — Answer an Inbox clarification, correcting empty input
+
+- Tried: open a system-generated question, submit whitespace as the answer,
+  inspect Inbox, submit a real multiline answer, and read project history.
+- Initial observation: the blank answer returned 200 with `status: answered`;
+  the question disappeared from Inbox, whose question total fell from 1 to 0.
+- Fix: reject whitespace-only answers with 400 before any logging, question
+  update, or planner wake. Valid answers retain their exact original text.
+- Evidence: `uv run pytest tests/test_api_operator_workflows.py -q` initially
+  failed at the new blank-answer assertion (`assert 200 == 400`).
+- Verified: `uv run pytest tests/test_api_operator_workflows.py
+  tests/test_inbox_api.py tests/test_api_e2e.py -k 'question or answer or
+  project_setup' -q` — passes; the invalid answer remains open, a valid answer
+  clears Inbox, and project history retains the answer.

@@ -2,6 +2,7 @@
 
 import pytest
 
+from hive.models import Question
 from hive.persistence import MemoryStore
 from tests.test_inbox_api import client_for
 
@@ -35,3 +36,29 @@ def test_project_setup_rejects_blank_names_and_negative_budgets_before_archiving
     assert [row["id"] for row in client.get("/api/projects?include_archived=true").json()] == [project["id"]]
     assert client.patch(path, json={"archived": False}).status_code == 200
     assert [row["id"] for row in client.get("/api/projects").json()] == [project["id"]]
+
+
+def test_blank_answer_keeps_question_in_inbox_until_operator_answers(client):
+    """Whitespace is not a decision and must not clear the outstanding question."""
+    project = client.post("/api/projects", json={"name": "Search semantics"}).json()
+    path = f"/api/projects/{project['id']}"
+    client.patch(path, json={"spec_repo": "https://example.com/search.git"}).raise_for_status()
+    question = client.app.state.store.put(
+        Question(project_id=project["id"], text="Should matching ignore case?")
+    )
+    answer_path = f"/api/questions/{question.id}/answer"
+    rejected = client.post(answer_path, json={"answer": " \n "})
+    assert rejected.status_code == 400
+    outstanding = client.get("/api/inbox?kind=question").json()
+    assert outstanding["total"] == 1
+    assert outstanding["items"][0]["question"]["status"] == "open"
+    assert outstanding["items"][0]["question"]["answer"] == ""
+
+    answer = "  Ignore case,\nbut preserve accents.  "
+    accepted = client.post(answer_path, json={"answer": answer})
+    assert accepted.status_code == 200
+    assert accepted.json()["status"] == "answered"
+    assert accepted.json()["answer"] == answer
+    assert client.get("/api/inbox?kind=question").json()["total"] == 0
+    history = client.get(path).json()["questions"]
+    assert history[0]["answer"] == answer
