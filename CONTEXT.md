@@ -58,6 +58,14 @@ _Avoid_: push, pull, backup
 
 ## Launchpad
 
+**Project**:
+A mission and iteration goal spanning one or more repositories. The project is the scope of work regardless of which repository the operator is currently visiting.
+_Avoid_: repository, checkout
+
+**Spec home**:
+The project's designated repository for shared goals, plans, and project knowledge. It may also contain implementation code; other member repositories remain part of the same project.
+_Avoid_: project, only repository
+
 **Iteration goal**:
 The outcome the human wants the next iteration to deliver. Completing one goal does not authorize the planner to invent another.
 _Avoid_: task, directive, planner suggestion
@@ -65,6 +73,14 @@ _Avoid_: task, directive, planner suggestion
 **Pending iteration goal**:
 A human-selected [[Iteration goal]] still awaiting its draft plan. It remains pending until a plan is drafted, even if Hive stops and restarts.
 _Avoid_: unfinished goal, completion verdict
+
+**Plan**:
+An ordered set of intended changes serving an [[Iteration goal]], which may be prepared with the operator's agent or by Hive. Its meaning is independent of who authored it and which machine will execute it.
+_Avoid_: subscription, task, execution attempt
+
+**Plan item**:
+One intended change within a [[Plan]], with its target repository, instructions, constraints, and expected outcome. Building, reviewing, or retrying that change may require several execution attempts.
+_Avoid_: task, execution attempt
 
 **Launchpad**:
 What a project page is for: a place to *start work*, not a card of settings. It offers the [[Job]]s available on this project and shows live state (running jobs, [[Checkout]]s, attention queue, activity) around them.
