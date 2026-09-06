@@ -233,15 +233,17 @@ export default function ProjectPage() {
   const attention = [
     ...vm.openQs.map((question) => ({
       id: question.id,
+      tab: "conversation" as const,
       text:
         question.text
           .replace(/[#*`]/g, "")
           .split("\n")
           .find((line) => line.trim()) || "Question needs an answer",
     })),
-    ...vm.openTodos.map((todo) => ({ id: todo.id, text: todo.title })),
+    ...vm.openTodos.map((todo) => ({ id: todo.id, text: todo.title, tab: "conversation" as const })),
     ...vm.issueNeeds.map((item) => ({
       id: item.id,
+      tab: "issues" as const,
       text: `Issue #${item.issue_number}: ${item.title}`,
     })),
   ];
@@ -347,12 +349,12 @@ export default function ProjectPage() {
                         Needs your attention{" "}
                         <span className="muted">{vm.inboxCount}</span>
                       </h2>
-                      <Link to={`/inbox?project=${id}`}>Open Inbox</Link>
+                      <Link to={`/needs-you?project=${encodeURIComponent(id)}`}>Open Inbox</Link>
                     </header>
                     <ul>
                       {attention.slice(0, 3).map((item) => (
                         <li key={item.id}>
-                          <Link to={tabUrl("conversation")}>{item.text}</Link>
+                          <Link to={tabUrl(item.tab)}>{item.text}</Link>
                         </li>
                       ))}
                     </ul>

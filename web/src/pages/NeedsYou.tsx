@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState, type FormEvent } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { IconArrowRight, IconCheck, IconChevronLeft, IconChevronRight, IconInbox, IconSearch } from "@tabler/icons-react";
 import { useOverview } from "../App";
 import { ago, api, usePoll } from "../api";
@@ -89,15 +89,21 @@ function ItemDetail({ item, stale, onResolved }: { item: InboxItem; stale: boole
 
 export default function NeedsYou() {
   const overview = useOverview();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const projectId = searchParams.get("project") ?? "";
   const [kind, setKind] = useState<InboxKind>("all");
   const [scope, setScope] = useState<InboxScope>("all");
   const [query, setQuery] = useState("");
   const [offset, setOffset] = useState(0);
   const [selectedId, setSelectedId] = useState("");
-  const inbox = usePoll(() => api.inbox({ kind, scope, q: query, offset, limit: PAGE_SIZE }), [kind, scope, query, offset]);
+  const inbox = usePoll(() => api.inbox({ kind, scope, project_id: projectId, q: query, offset, limit: PAGE_SIZE }), [kind, scope, projectId, query, offset]);
   const selected = inbox.data?.items.find(item => item.id === selectedId) ?? inbox.data?.items[0];
   const total = inbox.data?.total ?? 0;
   const resetPage = () => { setOffset(0); setSelectedId(""); };
+  useEffect(() => { setOffset(0); setSelectedId(""); }, [projectId]);
+  const projectName = overview.data?.projects.find(project => project.id === projectId)?.name
+    ?? inbox.data?.items[0]?.project_name ?? "Selected project";
+  const unfiltered = kind === "all" && scope === "all" && !query && !projectId;
   const refresh = () => {
     // Refill a shortened last page after resolving its final item.
     if (inbox.data?.items.length === 1 && offset > 0) setOffset(Math.max(0, offset - PAGE_SIZE));
@@ -108,15 +114,23 @@ export default function NeedsYou() {
 
   return (
     <div className="page page-inbox">
-      <div className="page-head"><div><h1>Inbox <span className="inbox-total">{inbox.data?.counts.all ?? "—"}</span></h1><p className="muted">Decisions and actions that help Hive move forward.</p></div></div>
+      <div className="page-head"><div><h1>Inbox <span className="inbox-total">{(projectId ? inbox.data?.total : inbox.data?.counts.all) ?? "—"}</span></h1><p className="muted">Decisions and actions that help Hive move forward.</p></div>
+      {projectId && <div className="inbox-project-filter" aria-label="Project filter">
+        <span>Project: <strong>{projectName}</strong></span>
+        <button type="button" className="ghost" onClick={() => {
+          const params = new URLSearchParams(searchParams);
+          params.delete("project"); setSearchParams(params); resetPage();
+        }}>Show all projects</button>
+      </div>}
+      </div>
       <div className="inbox-toolbar">
         <label className="inbox-search"><IconSearch size={18} /><input aria-label="Search inbox" type="search" placeholder="Search inbox" value={query} onChange={event => { setQuery(event.target.value); resetPage(); }} /></label>
         <label className="inbox-scope"><span>Assigned to</span><select aria-label="Inbox ownership" value={scope} onChange={event => { setScope(event.target.value as InboxScope); resetPage(); }}><option value="all">Everyone</option><option value="yours">You</option><option value="others">Others</option></select></label>
       </div>
-      <div className="inbox-filters" role="group" aria-label="Filter inbox by kind">{(Object.keys(LABELS) as InboxKind[]).map(value => <button key={value} className={kind === value ? "inbox-filter active" : "inbox-filter"} aria-pressed={kind === value} onClick={() => { setKind(value); resetPage(); }}>{LABELS[value]}<span>{inbox.data?.counts[value] ?? "—"}</span></button>)}</div>
+      <div className="inbox-filters" role="group" aria-label="Filter inbox by kind">{(Object.keys(LABELS) as InboxKind[]).map(value => <button key={value} className={kind === value ? "inbox-filter active" : "inbox-filter"} aria-pressed={kind === value} onClick={() => { setKind(value); resetPage(); }}>{LABELS[value]}{!projectId && <span>{inbox.data?.counts[value] ?? "—"}</span>}</button>)}</div>
       {inbox.failed && <div className="inbox-error" role="alert"><span>Inbox could not be refreshed. {inbox.data ? "These items may be out of date." : "Check the chief connection and retry."}</span><button className="ghost" onClick={inbox.refresh}>Retry</button></div>}
       {!inbox.data && !inbox.failed && <p className="inbox-loading" role="status">Loading inbox…</p>}
-      {inbox.data && !inbox.failed && total === 0 && <div className="inbox-empty"><IconInbox size={32} /><h2>{kind === "all" && scope === "all" && !query ? "You're all caught up" : "No matching items"}</h2><p>{kind === "all" && scope === "all" && !query ? "There are no open questions, approvals, blocked plan items or human tasks." : "Try another filter or search."}</p></div>}
+      {inbox.data && !inbox.failed && total === 0 && <div className="inbox-empty"><IconInbox size={32} /><h2>{unfiltered ? "You're all caught up" : "No matching items"}</h2><p>{unfiltered ? "There are no open questions, approvals, blocked plan items or human tasks." : "Try another filter or search."}</p></div>}
       {inbox.data && total > 0 && <>
         <div className="inbox-workspace">
           <section className="inbox-list" aria-label="Inbox items">{inbox.data.items.map(item => <button key={item.id} className={selected?.id === item.id ? "inbox-row selected" : "inbox-row"} aria-pressed={selected?.id === item.id} onClick={() => setSelectedId(item.id)}>

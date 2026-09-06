@@ -38,6 +38,10 @@ Project settings and decision history remain at `/p/:id/settings` and
 its work-item detail. These links continue to identify the same evidence after
 newer plans are created.
 
+Delivery links add `&evidence=1` to select Results & evidence and open the matching
+receipt immediately. Project attention opens `/needs-you?project=<id>`, which
+filters the Inbox by that exact project and offers **Show all projects**.
+
 The project Work tab contains the selected plan, a bounded attention preview
 and direct requests. Conversation owns intake and project questions. Activity
 contains attempts and checkout diagnostics; History lists plans newest first.

@@ -1,6 +1,8 @@
 .page-inbox { max-width: 1500px; }
 .page-inbox .page-head h1 { display: flex; align-items: center; gap: 10px; }
 .inbox-total { color: #64748b; background: #e8edf2; font-size: 14px; padding: 3px 8px; border-radius: 6px; }
+.inbox-project-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-left: auto; font-size: 13px; }
+.inbox-project-filter > span { max-width: 220px; overflow-wrap: anywhere; }
 .inbox-toolbar { display: flex; align-items: center; gap: 18px; margin: 22px 0 16px; }
 .inbox-search { display: flex; align-items: center; gap: 8px; border: 1px solid #d9dee7; border-radius: 7px; background: #fff; color: #64748b; padding: 0 12px; width: min(420px, 100%); }
 .inbox-search input { border: none; background: transparent; padding: 11px 0; box-shadow: none; min-width: 0; width: 100%; }

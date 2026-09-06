@@ -180,7 +180,7 @@ export function ProjectSetup({
             </p>
           ) : (
             <p className="scout-status scout-blocked">
-              No eligible agent is available. Check project settings or <Link to="/capacity">capacity</Link>.
+              No eligible agent is available. Check project settings or <Link to="/machines">capacity</Link>.
             </p>
           )
         )}
@@ -196,7 +196,7 @@ export function ProjectSetup({
             </header>
             {intakeFailed && (
               <p className="form-error">
-                Design with {scoutLabel(conversation)} could not complete. Retry below or repair the agent in <Link to="/capacity">Capacity</Link>.
+                Design with {scoutLabel(conversation)} could not complete. Retry below or repair the agent in <Link to="/machines">Capacity</Link>.
               </p>
             )}
             {transcript.length > 0 ? (
