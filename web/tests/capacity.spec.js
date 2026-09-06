@@ -23,7 +23,7 @@ async function setup(page) {
     machine_type: "", device_kind: "laptop", owner_user_id: "owner", last_seen: now };
   const runner = { id: "runner", name: "Runner", machine_id: "laptop", online: true, last_seen: now,
     backends: ["codex", "claude"] };
-  const state = { requests: [], denyProbe: true };
+  const state = { requests: [], denyProbe: true, failResources: false, overviewAge: 0 };
   await page.route("**/api/**", async route => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -36,7 +36,7 @@ async function setup(page) {
     if (path === "/api/projects" || path === "/api/subscriptions") return route.fulfill({ json: [] });
     if (path === "/api/org-context") return route.fulfill({ json: { text: "Workspace conventions" } });
     if (path === "/api/overview") return route.fulfill({ json: {
-      observed_at: now, tasks_pending: 1, paused: false, projects: [], subscriptions: [],
+      observed_at: now - state.overviewAge, tasks_pending: 1, paused: false, projects: [], subscriptions: [],
       execution: { working: 1, starting: 0, disconnected: 0 },
       live_tasks: [{ id: "task", title: "Export rows", project_id: "exports", project_name: "Exports",
         backend: "codex", kind: "resolve", runner_id: "runner", machine_id: "laptop", delivered: true,
@@ -50,6 +50,7 @@ async function setup(page) {
         machines: [{ ...machine, online: true, agents: resources,
           runners_total: 1, runners_online: 1, runners_busy: 1, runners_usable: 1, runners_idle: 0 }] },
     } });
+    if (path === "/api/resources" && state.failResources) return route.fulfill({ status: 503, json: { detail: "Resources unavailable" } });
     if (path === "/api/resources") return route.fulfill({ json: {
       cards: [{ machine, online: true, last_seen: now, runners: [runner], resources }],
       machines: [machine], runners: [runner], resources, subscription_candidates: [],
@@ -112,4 +113,47 @@ test("provider-limit links survive reload and do not turn missing readings into 
   await page.getByRole("button", { name: "Machines", exact: true }).click();
   await expect(page.getByRole("article", { name: "Laptop", exact: true })).toBeVisible();
   await expect(page).not.toHaveURL(/tab=limits/);
+});
+
+test("a failed refresh shows last known capacity until retry restores a current observation", async ({ page }) => {
+  await page.clock.install();
+  const state = await setup(page);
+  await page.goto("/machines");
+  const machine = page.getByRole("article", { name: "Laptop", exact: true });
+  await expect(machine.getByText("Heartbeat active", { exact: true })).toBeVisible();
+
+  state.failResources = true;
+  await page.clock.fastForward(4100);
+  const stale = page.getByRole("alert").filter({ hasText: "Capacity status is unknown" });
+  await expect(stale).toBeVisible();
+  await expect(page.getByLabel("Last known capacity", { exact: true })).toContainText("1 / 1");
+  await expect(machine.getByText("Status unknown", { exact: true })).toBeVisible();
+  await expect(machine.getByText("Last known: 2 usable agents", { exact: true })).toBeVisible();
+  await expect(machine.getByText("Heartbeat active", { exact: true })).toHaveCount(0);
+  await expect(machine.getByText("Usable", { exact: true })).toHaveCount(0);
+  await machine.getByRole("button", { name: "Manage agents" }).click();
+  const codex = page.getByRole("article", { name: "codex on Laptop", exact: true });
+  await expect(codex.getByRole("button", { name: "Check access" })).toBeDisabled();
+  await expect(codex.getByRole("button", { name: "Disable", exact: true })).toBeEnabled();
+  await capture(page, "capacity-stale.png");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await capture(page, "capacity-stale-mobile.png");
+
+  state.failResources = false;
+  await stale.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(stale).toHaveCount(0);
+  await expect(machine.getByText("Heartbeat active", { exact: true })).toBeVisible();
+  await expect(codex.getByRole("button", { name: "Check access" })).toBeEnabled();
+});
+
+test("an old observation cannot claim current capacity even when both requests succeed", async ({ page }) => {
+  const state = await setup(page);
+  state.overviewAge = 60;
+  await page.goto("/machines");
+  await expect(page.getByRole("alert").filter({ hasText: "Capacity status is unknown" })).toBeVisible();
+  const machine = page.getByRole("article", { name: "Laptop", exact: true });
+  await expect(machine.getByText("Status unknown", { exact: true })).toBeVisible();
+  await expect(machine.getByText("Availability unknown", { exact: true })).toHaveCount(2);
+  await expect(page.getByText("Chief unreachable", { exact: false })).toHaveCount(0);
 });

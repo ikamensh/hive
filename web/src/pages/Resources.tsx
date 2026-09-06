@@ -51,7 +51,8 @@ function providerLiveness(cards: MachineGroup[]): Map<string, ProviderLiveness> 
   return map;
 }
 
-function liveStatus(live: ProviderLiveness | undefined) {
+function liveStatus(live: ProviderLiveness | undefined, stale: boolean) {
+  if (stale) return <span className="avail wait">Availability unknown</span>;
   if (live?.availableMachines.length) {
     return (
       <span className="avail ok" title="Usable on an online runner. Running work may occupy that runner.">
@@ -84,11 +85,13 @@ function licensingChip(mode: LicensingMode) {
 function Subscriptions({
   candidates,
   cards,
+  stale,
   loginById,
   onChanged,
 }: {
   candidates: SubscriptionCandidate[];
   cards: MachineGroup[];
+  stale: boolean;
   loginById: Map<string, string>;
   onChanged: () => void;
 }) {
@@ -144,7 +147,7 @@ function Subscriptions({
                 <td className="muted">
                   {s.owner_user_id ? `@${loginById.get(s.owner_user_id) ?? s.owner_user_id}` : "shared"}
                 </td>
-                <td>{liveStatus(live.get(s.provider))}</td>
+                <td>{liveStatus(live.get(s.provider), stale)}</td>
                 <td className="muted">{s.notes || "—"}</td>
                 <td className="num">
                   <button
@@ -344,7 +347,9 @@ export default function Resources() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = searchParams.get("tab") === "limits" ? "limits" : "machines";
   const setTab = (tab: "machines" | "limits") => setSearchParams(tab === "limits" ? { tab } : {});
-  const { data, failed, refresh } = usePoll(() => api.resources(), []);
+  const { data, failed, refresh } = usePoll(async () => ({
+    ...await api.resources(), receivedAt: Date.now() / 1000,
+  }), []);
   const { hash } = useLocation();
   const targetMachineId = tab === "machines" ? data?.cards.find(card => `#${card.machine.id}` === hash)?.machine.id : undefined;
   useEffect(() => {
@@ -359,9 +364,9 @@ export default function Resources() {
   const [runnerError, setRunnerError] = useState("");
   const [enrolling, setEnrolling] = useState(false);
   // 1s ticker so cooldown countdowns feel live between polls.
-  const [, setTick] = useState(0);
+  const [now, setNow] = useState(Date.now() / 1000);
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    const id = setInterval(() => setNow(Date.now() / 1000), 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -448,7 +453,9 @@ export default function Resources() {
   const loginById = new Map((members ?? []).map((m) => [m.user.id, m.user.github_login]));
   const myId = auth?.user.id ?? "";
   const isAdmin = auth?.role !== "resource_provider";
-  const capacity = overview.failed ? undefined : overview.data?.capacity;
+  const stale = failed || overview.failed || (!!data && now - data.receivedAt > 30)
+    || (!!overview.data && now - overview.data.observed_at > 30);
+  const capacity = overview.data?.capacity;
   const readings = machineCards.flatMap(card => card.resources.map(resource => ({
     ...resource, machineName: card.machine.name,
   })));
@@ -467,13 +474,19 @@ export default function Resources() {
           onAutostart={updateLocalRunnerAutostart} />}
         <AddLaptop />
       </section>}
-      {failed && <p className="form-error" role="alert">Could not refresh machines. {data ? "The details below may be out of date." : "Retrying…"}</p>}
+      {stale && <div className="capacity-stale" role="alert">
+        <div><strong>Capacity status is unknown.</strong>
+          <p>{data ? `Showing last known values. Last complete observation ${ago(Math.min(data.receivedAt, overview.data?.observed_at ?? data.receivedAt))}.` : "Could not load the machine observation."}</p>
+        </div>
+        <button type="button" className="ghost" onClick={() => { void Promise.all([refresh(), overview.refresh()]); }}>Retry</button>
+      </div>}
       {runnerError && <p className="form-error runner-error" role="alert">{runnerError}</p>}
       {!data && !failed && <p className="muted">Loading capacity…</p>}
 
       {data && (
         <>
-          <div className="capacity-summary">
+          {stale && <p className="capacity-summary-label muted">Last known capacity</p>}
+          <div className="capacity-summary" aria-label={stale ? "Last known capacity" : "Current capacity"}>
             <div><span>Machines online</span><strong>{capacity ? `${capacity.machines_online} / ${capacity.machines_total}` : "—"}</strong></div>
             <div><span>Busy runners</span><strong>{capacity?.runners_busy ?? "—"}</strong></div>
             <div aria-label="Spare execution capacity"><span>Spare runners</span><strong>{capacity?.runners_idle ?? "—"}</strong></div>
@@ -509,6 +522,7 @@ export default function Resources() {
               <MachineCard
                 key={card.machine.id}
                 card={card}
+                stale={stale}
                 activity={capacity?.machines.find(machine => machine.id === card.machine.id)}
                 probing={probing}
                 updatingResource={updatingResource}
@@ -526,7 +540,7 @@ export default function Resources() {
           <details className="capacity-administration">
             <summary>Manage subscriptions</summary>
             <div className="capacity-admin-content"><Subscriptions candidates={data.subscription_candidates}
-              cards={machineCards} loginById={loginById} onChanged={refresh} /></div>
+              cards={machineCards} stale={stale} loginById={loginById} onChanged={refresh} /></div>
           </details>
         </>
       )}
@@ -596,10 +610,11 @@ function MachineOwner({
 }
 
 function MachineCard({
-  card, activity, probing, updatingResource, runnerOnline, members, myId, isAdmin,
+  card, activity, stale, probing, updatingResource, runnerOnline, members, myId, isAdmin,
   onProbe, onSetEnabled, onForget, onSetOwner,
 }: {
   card: MachineGroup;
+  stale: boolean;
   activity?: OverviewMachine;
   probing: string | null;
   updatingResource: string | null;
@@ -615,7 +630,7 @@ function MachineCard({
   const [expanded, setExpanded] = useState(false);
   const usable = card.resources.filter(resource => resource.available).length;
   const canManage = isAdmin || card.machine.owner_user_id === myId;
-  const status = !card.online ? card.machine.asleep ? "Asleep" : "Offline"
+  const status = stale ? "Status unknown" : !card.online ? card.machine.asleep ? "Asleep" : "Offline"
     : activity?.runners_busy ? `${activity.runners_busy} running`
     : activity?.runners_idle ? "Ready" : "Online";
   const runnerNames = new Map(card.runners.map(runner => [runner.id, runner.name]));
@@ -627,9 +642,9 @@ function MachineCard({
         <div className="capacity-machine-name"><h2>{card.machine.name}</h2>
           <p className="muted" title={machineTypeTitle(card.machine)}>{machineTypeLabel(card.machine)} · {deviceKindLabel(card.machine.device_kind)}</p>
         </div>
-        <span className={`capacity-status ${card.online ? "online" : "offline"}`}><i aria-hidden />{status}</span>
-        <div className="capacity-machine-count"><strong>{usable} usable {usable === 1 ? "agent" : "agents"}</strong>
-          <span className="muted">{card.online ? "Heartbeat active" : card.last_seen > 0 ? `Last seen ${ago(card.last_seen)}` : "No heartbeat recorded"}</span>
+        <span className={`capacity-status ${!stale && card.online ? "online" : "offline"}`}><i aria-hidden />{status}</span>
+        <div className="capacity-machine-count"><strong>{stale ? "Last known: " : ""}{usable} usable {usable === 1 ? "agent" : "agents"}</strong>
+          <span className="muted">{card.online && !stale ? "Heartbeat active" : card.last_seen > 0 ? `Last seen ${ago(card.last_seen)}` : "No heartbeat recorded"}</span>
         </div>
         <button type="button" className="ghost" aria-expanded={expanded}
           aria-controls={`agents-${card.machine.id}`} onClick={() => setExpanded(!expanded)}>
@@ -638,7 +653,7 @@ function MachineCard({
       </header>
       {!expanded && card.resources.length > 0 && <div className="capacity-agent-preview">
         {card.resources.map(resource => <span key={resource.id}><strong>{resource.backend}</strong>
-          {availability(resource, runnerOnline(resource.runner_id))}</span>)}
+          {availability(resource, runnerOnline(resource.runner_id), stale)}</span>)}
       </div>}
       {expanded && <div className="capacity-machine-content" id={`agents-${card.machine.id}`}>
         <div className="capacity-machine-settings">
@@ -650,6 +665,7 @@ function MachineCard({
               myId={myId} isAdmin={isAdmin} onSetOwner={onSetOwner} /> : <span>Unlinked machine</span>}
           </div>
           {!card.online && canManage && !isUnlinkedMachine(card.machine) && <button type="button" className="ghost"
+            disabled={stale}
             onClick={() => { if (confirm(`Forget ${card.machine.name}? Its agents are removed. A running runner will re-register.`)) onForget(card.machine.id); }}>
             Forget machine
           </button>}
@@ -662,12 +678,12 @@ function MachineCard({
               <div><strong className="capacity-agent-name">{resource.backend}</strong>
                 {card.runners.length > 1 && <span className="muted"> · {runnerNames.get(resource.runner_id)}</span>}
               </div>
-              {availability(resource, runnerOnline(resource.runner_id))}
+              {availability(resource, runnerOnline(resource.runner_id), stale)}
               {canManage && <div className="capacity-agent-actions">
                 {isResourceEnabled(resource) ? <>
                   <button type="button" className="ghost" onClick={() => onProbe(resource.id)}
-                    disabled={!runnerOnline(resource.runner_id) || resource.usability_status === "probing" || probing === resource.id}>
-                    {probing === resource.id || resource.usability_status === "probing" ? "Checking…" : "Check access"}
+                    disabled={stale || !runnerOnline(resource.runner_id) || resource.usability_status === "probing" || probing === resource.id}>
+                    {!stale && (probing === resource.id || resource.usability_status === "probing") ? "Checking…" : "Check access"}
                   </button>
                   <button type="button" className="ghost" onClick={() => onSetEnabled(resource, false)}
                     disabled={updatingResource === resource.id || resource.usability_status === "probing"}>Disable</button>
@@ -687,7 +703,7 @@ function MachineCard({
             </details>
           </article>)}
         </div>
-        {activity && <p className="capacity-accounting muted">{activity.runners_busy} busy · {activity.runners_idle} spare usable runners on this machine.</p>}
+        {activity && <p className="capacity-accounting muted">{stale ? "Last known: " : ""}{activity.runners_busy} busy · {activity.runners_idle} spare usable runners on this machine.</p>}
       </div>}
     </article>
   );
@@ -753,7 +769,8 @@ function exhaustionTitle(res: ResourceInfo): string {
   return parts.join("\n\n");
 }
 
-function availability(res: ResourceInfo, online: boolean) {
+function availability(res: ResourceInfo, online: boolean, stale: boolean) {
+  if (stale) return <span className="avail wait">Availability unknown</span>;
   if (!isResourceEnabled(res)) {
     return <span className="avail wait" title={res.disabled_reason || "resource is disabled"}>Disabled</span>;
   }
