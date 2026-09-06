@@ -2,6 +2,9 @@
 
 Continuous autonomous software development. You give hive a project — a mission and a concrete iteration goal — and it keeps AI coding agents (Claude Code, Cursor, Codex, Gemini CLI, OpenCode) productively working toward that goal: planning, building, and verifying each change with a second agent, **asking you when the spec is genuinely ambiguous**, and never making a mess.
 
+See the [current workflow guide](wiki/hive-workflow-guide.md) for scenario diagrams,
+definitions, steps and outputs, or open the [formatted Word document](wiki/hive-workflow-guide.docx).
+
 The point isn't just "an agent writes code." It's the loop around it: hive decomposes the goal into workstreams, runs at most one agent per repo so there are no merge conflicts, gates every change behind independent verification (with an anti-bloat check), and parks work to batch up questions for you instead of guessing on things that are expensive to get wrong. Your answers accumulate into an ever-sharper spec.
 
 **Good for:** medium-running, spec-driven work you'd otherwise babysit — building out an iteration of a side project, a greenfield service from a written spec, multi-repo features. **Not (yet) for:** one-off "fix this line" edits (just use the agent CLI directly), or work with no written goal to aim at.
