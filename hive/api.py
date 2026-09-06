@@ -21,7 +21,7 @@ from typing import Callable
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, PlainTextResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from hive._integrations.auth import (
     ENROLL_TTL_S,
@@ -201,7 +201,7 @@ class ProjectPatch(BaseModel):
     ci_autofix: bool | None = None
     testing_auto: bool | None = None
     paused: bool | None = None
-    daily_budget_usd: float | None = None
+    daily_budget_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     agent_grants: list[AgentGrant] | None = None  # [] clears (back to unlimited)
     member_repos: list[str] | None = None
     required_capabilities: list[str] | None = None  # [] clears (any machine)
@@ -769,10 +769,13 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
 
     @app.post("/api/projects")
     def create_project(body: ProjectCreate, ctx: AuthContext = Depends(editor)):
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(400, "name cannot be empty")
         project = store.put(
             Project(
                 workspace_id=ctx.workspace_id,
-                name=body.name.strip(),
+                name=name,
                 initial_spec=body.spec_text.strip(),
                 required_capabilities=body.required_capabilities,
             )
