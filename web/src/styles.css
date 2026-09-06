@@ -1137,6 +1137,17 @@ textarea:focus {
 }
 
 @media (max-width: 620px) {
+  .page-project-settings .page-head {
+    flex-wrap: wrap;
+  }
+  .page-project-settings .page-head > div:first-child {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+  .page-project-settings .head-repo {
+    display: block;
+    margin-left: 0;
+  }
   .page-head .project-head-links {
     order: 3;
     width: 100%;

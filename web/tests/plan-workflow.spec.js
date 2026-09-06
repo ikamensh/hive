@@ -141,6 +141,29 @@ test("project settings explains a rejected save and retains edits for retry", as
   expect(state.project.daily_budget_usd).toBe(5);
 });
 
+// All supported runner backends must be selectable without falling back to "any".
+test("project allowance can grant OpenCode explicitly on desktop and mobile", async ({ page }) => {
+  const state = await setup(page);
+  await page.goto("/p/csv/settings");
+  await page.getByRole("button", { name: "add grant", exact: true }).click();
+  await page.getByRole("button", { name: "opencode", exact: true }).click();
+  await page.getByLabel("sessions per day").fill("3");
+  await page.getByRole("button", { name: "save allowance", exact: true }).click();
+  await expect(page.getByText("saved", { exact: true })).toBeVisible();
+  expect(state.project.agent_grants).toEqual([{ backends: ["opencode"], models: [], sessions_per_day: 3 }]);
+  await page.reload();
+  await expect(page.getByRole("button", { name: "opencode", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await capture(page, "project-opencode-allowance");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("heading", { name: /Project settings/ }).click();
+  await capture(page, "project-opencode-allowance-mobile");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole("button", { name: "Remove grant", exact: true }).click();
+  await page.getByRole("button", { name: "save allowance", exact: true }).click();
+  await expect(page.getByText("saved", { exact: true })).toBeVisible();
+  expect(state.project.agent_grants).toEqual([]);
+});
+
 test("completion updates live, preserves cancellation evidence, and remains inspectable after another plan starts", async ({ page }) => {
   const state = await setup(page, { plan: { ...plan, status: "approved" }, items: [
     { ...item, status: "reviewing" }, { ...item, id: "docs", title: "Document usage", status: "cancelled", order: 1 },

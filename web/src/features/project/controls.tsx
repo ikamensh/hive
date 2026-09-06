@@ -8,7 +8,7 @@ import type { AgentGrant, Allowance, Project, ProjectPatch, ProjectWorkstream } 
 type ProjectPatchHandler = (p: ProjectPatch) => void | Promise<void>;
 
 // Mirrors hive.agents.BACKEND_NAMES; the server rejects unknown names.
-const GRANT_BACKENDS = ["claude", "codex", "cursor", "gemini-cli"];
+const GRANT_BACKENDS = ["claude", "codex", "cursor", "gemini-cli", "opencode"];
 
 /** Editable form row for one grant: models as comma text, blank cap = unlimited. */
 interface GrantRow {
@@ -146,8 +146,8 @@ function AllowanceEditor({
               title="sessions per day (blank = unlimited)"
             />
             <span className="muted grant-remaining">{remaining(i)}</span>
-            <button type="button" className="ghost grant-remove" onClick={() => removeRow(i)} title="remove grant">
-              <i className="ti ti-x" aria-hidden />
+            <button type="button" className="ghost grant-remove" onClick={() => removeRow(i)} aria-label="Remove grant">
+              Remove
             </button>
           </div>
         ))}

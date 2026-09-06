@@ -43,3 +43,19 @@ The initial browser baseline was 34 passing tests.
 - Verification: the journey passed with the exact budget saved on retry and no
   remaining alert. Viewed `project-settings-save-error.png`; the explanation is
   adjacent to the edited field and save control.
+
+## Cycle 19 — Assign and remove an explicit OpenCode allowance
+
+- Scenario: add a three-session OpenCode grant, save, reload, inspect on a
+  390px-wide phone, then remove and save the grant.
+- Reproduction: `cd web && npm test -- --grep 'grant OpenCode explicitly'`
+  first failed because the supported backend had no selector. After adding it,
+  the same journey exposed horizontal overflow in the settings header.
+- Cause/fix: updated the selector to include the existing backend, allowed the
+  mobile header to wrap, and replaced a blank obsolete-font remove icon with a
+  visible, accessible Remove button.
+- Design check: discussed a backend-catalog API with the API subagent; a new
+  endpoint was unnecessary for this bounded parity fix.
+- Verification: the journey passed, including saved/reloaded backend and cap,
+  no mobile overflow, and removal. Viewed both desktop and mobile
+  `project-opencode-allowance` screenshots.
