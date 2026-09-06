@@ -69,3 +69,31 @@ def test_repeated_cancellation_preserves_the_reason_in_the_result(app):
     result = client.get(f"/api/plans/{created['plan']['id']}/result").raise_for_status().json()
     assert result["items"][1]["status"] == "cancelled"
     assert result["items"][1]["parked_reason"] == cancelled["parked_reason"]
+
+
+def test_markdown_goal_links_survive_import_and_export(app):
+    """A hand-authored Markdown goal may link its reference design before the
+    task headings; the source and executable instructions must survive import."""
+    from hive._workstreams.plan_document import parse_plan_document
+
+    client, _ = app
+    project = _api_project(client)
+    source = (
+        "# Publish an accessible export guide\n\n"
+        "[Design reference](https://example.invalid/export-design)\n\n"
+        "## Write the guide\nInclude a copyable Markdown example:\n\n"
+        "```markdown\n## This is example content, not another task\n```\n"
+        "\n## Link the guide\nLink it from the export command's help.\n"
+    )
+
+    response = client.post(f"/api/projects/{project}/plan/submit", json={"source": source})
+
+    assert response.status_code == 200, response.text
+    accepted = response.json()
+    assert [item["title"] for item in accepted["items"]] == ["Write the guide", "Link the guide"]
+    assert "[Design reference]" in accepted["plan"]["goal"]
+    plan_id = accepted["plan"]["id"]
+    assert client.get(f"/api/plans/{plan_id}/input").raise_for_status().text == source
+    exported = parse_plan_document(client.get(f"/api/plans/{plan_id}/document").raise_for_status().text)
+    assert "## This is example content, not another task" in exported["items"][0]["notes"]
+    assert len(exported["items"]) == 2

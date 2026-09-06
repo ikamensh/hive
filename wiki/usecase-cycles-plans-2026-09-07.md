@@ -33,6 +33,25 @@ No live services, repositories or agents are changed by these scenarios.
 - **Decision/fix:** Cancellation of an already-cancelled item is idempotent.
   Its terminal reason and timestamp remain evidence of the original decision.
 - **Verification:** The same regression passes; the result retains the PDF
-  deferral reason. The focused plan/edit/result suite passes (recorded below).
+  deferral reason. `uv run pytest tests/test_plan_usecase_cycles.py
+  tests/test_plans.py tests/test_plan_results.py tests/test_plan_edit_atomicity.py -q`
+  → **51 passed**.
 - **Self-review:** A terminal-state early return avoids rewriting history and
   adds no extra state or retry mechanism.
+
+## Cycle 8 — import a Markdown goal with a design link and fenced examples
+
+- **Scenario:** Submit a documentation plan whose goal links a reference design
+  before its two task headings; the first task contains a fenced `##` example.
+  Retrieve both the original source and canonical export.
+- **Initial observation:** `uv run pytest tests/test_plan_usecase_cycles.py::test_markdown_goal_links_survive_import_and_export -q`
+  failed with HTTP 400: the link's opening `[` was treated as a TOML table.
+- **Decision/fix:** Format detection recognizes a complete TOML table declaration,
+  rather than every line beginning with `[`. Markdown links remain Markdown.
+- **Verification:** Submission returns two tasks, the goal retains its link,
+  source export is byte-for-byte unchanged, and fenced headings stay inside task
+  notes. `uv run pytest tests/test_plan_usecase_cycles.py
+  tests/test_plan_document.py tests/test_plan_document_format.py
+  tests/test_plan_artifacts.py -q` → **44 passed**.
+- **Self-review:** Kept the existing strict parsers and changed only format
+  selection; invalid TOML is still rejected rather than silently repaired.

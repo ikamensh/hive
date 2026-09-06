@@ -111,7 +111,7 @@ def parse_plan_document(text: str) -> dict:
             break  # A task heading establishes the simple Markdown convention.
         statement = line.strip()
         if statement and not statement.startswith("#"):
-            if re.match(r'(?:[\w"\']+\s*=|\[)', statement):
+            if re.match(r'(?:[\w"\']+\s*=|\[\[?.+\]\]?\s*(?:#.*)?$)', statement):
                 return PlanDocument.model_validate(tomllib.loads(text)).model_dump()
             break
 
