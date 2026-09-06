@@ -19,6 +19,7 @@ import type {
   PlanItem,
   PlanItemPatch,
   PlanPayload,
+  PlanResult,
   Project,
   ProjectCreate,
   ProjectDetail,
@@ -1573,6 +1574,34 @@ export const api = {
       }),
     );
     return structuredClone(planPayload(projectId)!);
+  },
+  getPlan: async (planId: string): Promise<PlanPayload> => {
+    const plan = plans.find(p => p.id === planId);
+    if (!plan) throw new Error("Plan not found");
+    return structuredClone({ plan, items: planItems.filter(i => i.plan_id === planId) });
+  },
+  submitPlan: async (_projectId: string, _source: string): Promise<PlanPayload & { accepted_revision: number }> => {
+    throw new Error("Plan file submission needs a running chief. Mock mode only previews saved plans.");
+  },
+  planDocument: async (_planId: string): Promise<string> => {
+    throw new Error("Plan export needs a running chief.");
+  },
+  planResult: async (planId: string): Promise<PlanResult> => {
+    const { plan, items } = await api.getPlan(planId);
+    const done = items.filter(i => i.status === "done").length;
+    const cancelled = items.filter(i => i.status === "cancelled").length;
+    const terminal = plan.status === "complete" || plan.status === "abandoned";
+    return {
+      schema_version: 1, kind: "plan_result", project_id: plan.project_id, plan_id: planId,
+      revision: plan.revision ?? 1, input_digest: "mock", goal: plan.goal, status: plan.status, terminal,
+      outcome: plan.status === "abandoned" ? "abandoned" : terminal ? (cancelled ? "partial" : "done")
+        : items.some(i => ["rejected", "blocked_clarity"].includes(i.status)) ? "blocked"
+        : plan.status === "draft" ? "pending" : "running",
+      counts: { total: items.length, done, cancelled, remaining: items.length - done - cancelled },
+      items: items.map(i => ({ ...i, repo: i.repo || projects.find(p => p.id === plan.project_id)!.spec_repo,
+        merged_commit_sha: "", merged_at: 0, attempts: [] })),
+      questions: [], todos: [], captured_at: Date.now() / 1000,
+    };
   },
   proposePlan: async (_projectId: string) => ({ ok: true }),
   addPlanItem: async (planId: string, item: PlanItemPatch & { title: string }): Promise<PlanItem> => {

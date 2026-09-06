@@ -1705,7 +1705,7 @@ textarea:focus {
   grid-template-columns: minmax(420px, 1.5fr) minmax(280px, 0.85fr) minmax(340px, 1fr);
 }
 .columns-launchpad {
-  grid-template-columns: minmax(440px, 1.7fr) minmax(280px, 0.95fr) minmax(320px, 1fr);
+  grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
 }
 /* Empty per-project inbox: drop its track so main + activity get the room. */
 .columns.no-inbox {
@@ -1715,12 +1715,13 @@ textarea:focus {
   grid-template-columns: minmax(420px, 1.6fr) minmax(340px, 1fr);
 }
 .columns-launchpad.no-inbox {
-  grid-template-columns: minmax(440px, 1.8fr) minmax(320px, 1fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 @media (max-width: 1100px) {
   .columns,
   .columns-issues,
-  .columns-launchpad {
+  .columns-launchpad,
+  .columns.no-inbox {
     grid-template-columns: 1fr;
   }
 }
@@ -3822,9 +3823,7 @@ a.needs-scope:hover { color: var(--accent); }
   min-width: 16px;
 }
 .plan-item-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   font-size: 13.5px;
 }
 .plan-item-struck { text-decoration: line-through; color: var(--ink-faint); }
@@ -3942,3 +3941,43 @@ a.needs-scope:hover { color: var(--accent); }
 }
 .plan-starter-manual input { flex: 1; }
 .plan-item-move { padding: 3px 7px; color: var(--ink-faint); }
+
+/* The plan is the primary project surface; tools and diagnostics are disclosures. */
+.project-disclosure { border: 1px solid var(--line-soft); border-radius: var(--r-md); padding: 14px; }
+.project-disclosure > summary { cursor: pointer; color: var(--ink-dim); font-size: 14px; }
+.project-disclosure[open] > summary { margin-bottom: 16px; color: var(--ink); }
+.plan-submission { display: flex; flex-direction: column; gap: 14px; }
+.plan-submission h3 { margin: 0; }
+.plan-submission label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.plan-submission input, .plan-submission textarea { width: 100%; min-width: 0; box-sizing: border-box; }
+.plan-submission textarea { font-family: var(--mono); font-size: 13px; line-height: 1.6; }
+.plan-submission > button { align-self: flex-start; }
+.plan-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 0; border-block: 1px solid var(--line-soft); }
+.plan-navigation a { font-size: 13px; }
+.plan-navigation a, .plan-results a { color: var(--accent); }
+.plan-results { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.result-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.result-head h3 { margin: 0 0 6px; }
+.result-head p { color: var(--ink-dim); font-size: 13px; margin: 0; }
+.result-counts { display: flex; flex-wrap: wrap; gap: 20px; padding: 12px 0; }
+.result-counts strong { color: var(--green); }
+.result-item { border: 1px solid var(--line-soft); border-radius: var(--r-sm); padding: 14px; overflow-wrap: anywhere; }
+.result-item > summary { cursor: pointer; line-height: 1.6; }
+.result-item > summary .chip { margin-left: 12px; }
+.result-attempt { border-top: 1px solid var(--line-soft); margin-top: 14px; padding-top: 4px; }
+.result-attempt h4 { margin: 12px 0 6px; }
+.result-validation { background: var(--surface-inset); border: 1px solid var(--line-soft); padding: 12px; border-radius: var(--r-sm); margin-block: 12px; }
+.result-validation pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
+.result-provenance { font-size: 12px; color: var(--ink-dim); overflow-wrap: anywhere; }
+.plan-goal h3 { font-size: 18px; line-height: 1.4; }
+.plan-item-main { min-height: 44px; flex-wrap: wrap; }
+.plan-item-title { flex: 1 1 180px; }
+@media (max-width: 600px) {
+  .plan-head, .result-head { flex-direction: column; }
+  .plan-item-row { flex-wrap: wrap; }
+  .plan-item-main { flex-basis: calc(100% - 24px); }
+  .plan-item-actions { margin-left: 24px; }
+  .plan-footer { flex-wrap: wrap; }
+  .plan-add-item, .plan-starter-manual { flex-direction: column; min-width: 0; }
+  .plan-add-item input { min-width: 0; }
+}

@@ -52,7 +52,7 @@ export function DirectiveComposer({
   );
 }
 
-type JobKind = "issues" | "tests" | "build" | "sync";
+type JobKind = "issues" | "tests";
 
 interface JobTile {
   kind: JobKind;
@@ -138,11 +138,8 @@ interface MachineCheckouts {
   rows: { repo: string; checkout: Checkout | null }[];
 }
 
-/** Where this project physically lives. Per machine, the project's repos and
- * whether local work has drifted from the remote. Sync is an agent job that is
- * not wired yet — the button shows a preview note. */
+/** Read-only checkout diagnostics; changes are made on the owning machine. */
 export function MachinesPanel({ groups }: { groups: MachineCheckouts[] }) {
-  const [previewFor, setPreviewFor] = useState("");
 
   if (groups.length === 0) {
     return <p className="muted">No machine has reported a checkout of this project's repos yet.</p>;
@@ -160,7 +157,6 @@ export function MachinesPanel({ groups }: { groups: MachineCheckouts[] }) {
           </header>
           {g.rows.map(({ repo, checkout }) => {
             const drift = checkout ? driftLabel(checkout) : { text: "not checked out", tone: "muted" as const };
-            const hasDrift = checkout?.exists && (checkout.ahead > 0 || checkout.dirty);
             return (
               <div className="checkout-row" key={repo}>
                 <div className="checkout-repo">
@@ -173,21 +169,6 @@ export function MachinesPanel({ groups }: { groups: MachineCheckouts[] }) {
                   )}
                 </div>
                 <span className={`drift-badge drift-${drift.tone}`}>{drift.text}</span>
-                <span className="checkout-env muted" title="dependency-setup readiness (reserved)">
-                  env: {checkout?.env_status ?? "unknown"}
-                </span>
-                {hasDrift ? (
-                  <button type="button" className="ghost sync-btn" onClick={() => setPreviewFor(checkout!.id)}>
-                    Sync
-                  </button>
-                ) : (
-                  <span className="sync-spacer" />
-                )}
-                {previewFor === checkout?.id && (
-                  <span className="sync-preview muted">
-                    preview — sync agent would consolidate this to main or ask you; not wired yet
-                  </span>
-                )}
               </div>
             );
           })}

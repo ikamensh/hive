@@ -14,6 +14,7 @@ import type {
   PlanItem,
   PlanItemPatch,
   PlanPayload,
+  PlanResult,
   Project,
   ProjectCreate,
   ProjectDetail,
@@ -96,6 +97,13 @@ async function httpText(path: string, init?: RequestInit): Promise<string> {
 }
 
 const realApi = {
+  getPlan: (planId: string) => http<PlanPayload>(`/api/plans/${planId}`),
+  submitPlan: (projectId: string, source: string) =>
+    http<PlanPayload & { accepted_revision: number }>(`/api/projects/${projectId}/plan/submit`, {
+      method: "POST", body: JSON.stringify({ source, start: false }),
+    }),
+  planDocument: (planId: string) => httpText(`/api/plans/${planId}/document`),
+  planResult: (planId: string) => http<PlanResult>(`/api/plans/${planId}/result`),
   version: () => http<VersionInfo>("/api/version"),
   me: () => http<AuthInfo>("/api/auth/me"),
   logout: async () => {

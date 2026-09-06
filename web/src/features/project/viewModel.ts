@@ -53,7 +53,7 @@ export function projectViewModel(
   const nonIntakeTasks = tasks.filter((t) => !["intake", "probe", "preflight", "resolve", "review"].includes(t.kind));
   const intakeDone = intakeConversation?.status === "done";
   const hasProjectWork = issueWorkItems.length > 0 || testingStories.length > 0 || nonIntakeTasks.length > 0;
-  const needsSetup = !configured || (!hasProjectWork && !intakeDone);
+  const needsSetup = !configured || (!data.plan && !hasProjectWork && !intakeDone);
   // The chief owns model scopes, grants, and ordering. A retry selects a backend;
   // show its first eligible model, matching the chief's choice for that backend.
   const availableScouts = data.intake_scouts.filter((scout, index, scouts) =>

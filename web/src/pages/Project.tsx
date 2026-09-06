@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useOverview } from "../App";
 import { api, repoKey, repoShort, usePoll } from "../api";
 import { Markdown, StateBadge } from "../components/shared";
@@ -21,7 +21,6 @@ import {
   JobTiles,
   MachinesPanel,
   groupCheckouts,
-  type JobKind,
   type JobTile,
 } from "../features/project/launchpad";
 import { ProjectSetup } from "../features/project/setup";
@@ -32,6 +31,9 @@ import type { ProjectPatch } from "../types";
 export default function ProjectPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedPlanId = searchParams.get("plan") ?? "";
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [drill, setDrill] = useState<"none" | "issues" | "tests">("none");
   const [selectedIssueStreamId, setSelectedIssueStreamId] = useState("");
   const [selectedIssueNumbers, setSelectedIssueNumbers] = useState<number[]>([]);
@@ -40,7 +42,9 @@ export default function ProjectPage() {
   const [launchMessage, setLaunchMessage] = useState("");
   const [launchError, setLaunchError] = useState("");
   const { data, failed, refresh } = usePoll(() => api.project(id), [id]);
-  const { data: resources } = usePoll(() => api.resources(), [], 8000);
+  const selectedPlan = usePoll(() => api.getPlan(selectedPlanId), [id, selectedPlanId], 4000,
+    { enabled: !!selectedPlanId });
+  const { data: resources } = usePoll(() => api.resources(), [], 8000, { enabled: diagnosticsOpen });
   const overview = useOverview();
 
   if (!data) {
@@ -85,7 +89,9 @@ export default function ProjectPage() {
     refresh();
   };
 
-  const refreshProjectAndOverview = () => {
+  const refreshProjectAndOverview = (planId?: string) => {
+    if (planId) setSearchParams({ plan: planId });
+    selectedPlan.refresh();
     refresh();
     overview.refresh();
   };
@@ -128,7 +134,6 @@ export default function ProjectPage() {
     refresh();
   };
 
-  const needsStart = false;
   const showInbox = inboxCount > 0;
   const toggleIssueSelection = (issueNumber: number) => {
     setSelectedIssueNumbers((numbers) =>
@@ -166,7 +171,6 @@ export default function ProjectPage() {
     return { name: card?.machine.name ?? machineId.slice(0, 6), online: card?.online ?? false };
   };
   const checkoutGroups = groupCheckouts(projectRepos, checkouts, machineMeta, repoKey);
-  const driftCount = checkouts.filter((c) => c.exists && (c.ahead > 0 || c.dirty)).length;
 
   const jobTiles: JobTile[] = [
     {
@@ -181,28 +185,35 @@ export default function ProjectPage() {
       label: "Run tests",
       hint: testingStories.length > 0 ? `${testingStories.length} stories` : "set up testing",
     },
-    {
-      kind: "sync",
-      icon: "ti-git-merge",
-      label: "Sync a machine",
-      hint: driftCount > 0 ? `${driftCount} drifted` : "all in sync",
-      disabled: driftCount === 0,
-    },
   ];
 
-  const onLaunch = (kind: JobKind) => {
-    if (kind === "sync") {
-      document.getElementById("machines-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      return;
-    }
-    if (kind === "issues" || kind === "tests") setDrill(kind);
-  };
+  const setup = <ProjectSetup project={project} conversation={intakeConversation}
+    availableScouts={availableScouts} onSave={saveSetup} onCreateRepo={createRepo}
+    onStartIntake={startIntake} onFinalizeIntake={finalizeIntake}
+    onConversationMessage={sendIntakeMessage} />;
 
   const launchpadHome = (
     <section className="col col-launchpad">
-      <div className="launch-console">
-        <div className="launch-console-head">
-          <h2>Start work</h2>
+      <div className="launch-block">
+        <h2 className="col-title">Plan &amp; results</h2>
+        {selectedPlanId && selectedPlanId !== data.plan?.plan.id && (
+          <Link to={`/p/${id}`}>Back to current plan</Link>
+        )}
+        {selectedPlanId && selectedPlan.failed ? (
+          <p className="form-error" role="alert">Could not load this plan: {String(selectedPlan.error)}</p>
+        ) : selectedPlanId && !selectedPlan.data ? (
+          <p className="muted">Loading plan…</p>
+        ) : selectedPlan.data && selectedPlan.data.plan.project_id !== id ? (
+          <p className="form-error" role="alert">This plan belongs to another project.</p>
+        ) : (
+          <PlanPanel key={`${id}:${selectedPlanId || data.plan?.plan.id || "new"}`}
+            projectId={id} payload={selectedPlanId ? selectedPlan.data : data.plan}
+            onChanged={refreshProjectAndOverview} />
+        )}
+      </div>
+      <details className="project-disclosure">
+        <summary>Other work · requests, issues &amp; tests</summary>
+        <div className="launch-console">
           {data.allowance?.limited && (
             <span
               className="muted allowance-line"
@@ -211,11 +222,9 @@ export default function ProjectPage() {
               <i className="ti ti-ticket" aria-hidden /> {data.allowance.summary}
             </span>
           )}
-          <span className="muted">{project.paused ? "paused" : "ready"}</span>
-        </div>
         <div className="launch-row">
           <DirectiveComposer onSubmit={submitDirective} />
-          <JobTiles tiles={jobTiles} onLaunch={onLaunch} />
+          <JobTiles tiles={jobTiles} onLaunch={setDrill} />
         </div>
         {(launchMessage || launchError) && (
           <p className={launchError ? "form-error launch-status" : "launch-status muted"}>
@@ -223,32 +232,34 @@ export default function ProjectPage() {
           </p>
         )}
       </div>
-      <div className="launch-block">
-        <h2 className="col-title">
-          iteration plan
-        </h2>
-        <PlanPanel projectId={id} payload={data.plan} onChanged={refreshProjectAndOverview} />
-      </div>
       {directives.length > 0 && (
         <div className="launch-block">
           <h2 className="col-title">
-            directives <span className="col-count">{directives.length}</span>
+            other requests <span className="col-count">{directives.length}</span>
           </h2>
           <DirectivesList directives={directives} />
         </div>
       )}
-      <div className="launch-block" id="machines-panel">
-        <h2 className="col-title">
-          machines &amp; checkouts <span className="col-count">{checkoutGroups.length}</span>
-        </h2>
+      </details>
+      <details className="project-disclosure" onToggle={event => setDiagnosticsOpen(event.currentTarget.open)}>
+        <summary>Diagnostics · activity &amp; checkouts</summary>
         <MachinesPanel groups={checkoutGroups} />
-      </div>
+        <h3>Agent activity</h3>
+        {sortedTasks.length === 0 && <p className="muted">No attempts yet.</p>}
+        {sortedTasks.map(t => <TaskCard key={t.id} task={t} projectId={id} onChanged={refresh} />)}
+      </details>
+      {needsSetup && (
+        <details className="project-disclosure">
+          <summary>Let Hive help prepare the specification</summary>
+          {setup}
+        </details>
+      )}
     </section>
   );
 
   const drillBackBar = (
     <button type="button" className="ghost drill-back" onClick={() => setDrill("none")}>
-      <i className="ti ti-arrow-left" aria-hidden /> start work
+      ← Back to plan
     </button>
   );
 
@@ -325,17 +336,8 @@ export default function ProjectPage() {
       </div>
       {data.state_reason && <p className="page-state-reason">{data.state_reason}</p>}
 
-      {needsSetup || needsStart ? (
-        <ProjectSetup
-          project={project}
-          conversation={intakeConversation}
-          availableScouts={availableScouts}
-          onSave={saveSetup}
-          onCreateRepo={createRepo}
-          onStartIntake={startIntake}
-          onFinalizeIntake={finalizeIntake}
-          onConversationMessage={sendIntakeMessage}
-        />
+      {!configured ? (
+        setup
       ) : (
         <>
           {project.state === "idle_goal_complete" && <GoalBanner project={project} onPatch={patch} />}
@@ -416,7 +418,7 @@ export default function ProjectPage() {
               launchpadHome
             )}
             {showInbox && needsYouCol}
-            {activityCol}
+            {drill !== "none" && activityCol}
           </div>
         </>
       )}

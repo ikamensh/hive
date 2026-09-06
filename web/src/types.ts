@@ -46,6 +46,7 @@ export interface Project {
   agent_grants?: AgentGrant[];
   agent_preferences?: { backend: string; model: string }[];
   included_only?: boolean;
+  validation_command?: string;
   required_capabilities?: string[];
   goal_complete: boolean;
   goal_complete_note: string;
@@ -250,6 +251,8 @@ export interface Plan {
   status: PlanStatus;
   proposed_by: "agent" | "human" | string;
   spec_ref: string;
+  revision?: number;
+  input_digest?: string;
   created_at: number;
   approved_at: number;
   finished_at: number;
@@ -275,6 +278,34 @@ export interface PlanItem {
 export interface PlanPayload {
   plan: Plan;
   items: PlanItem[];
+}
+
+/** Read-only execution evidence from /api/plans/:id/result. */
+export interface PlanResult {
+  schema_version: number;
+  kind: "plan_result";
+  project_id: string;
+  plan_id: string;
+  revision: number;
+  input_digest: string;
+  goal: string;
+  status: PlanStatus;
+  terminal: boolean;
+  outcome: "pending" | "running" | "blocked" | "stopping" | "done" | "partial" | "abandoned";
+  counts: { total: number; done: number; cancelled: number; remaining: number };
+  items: {
+    id: string; title: string; order: number; repo: string; status: PlanItemStatus;
+    parked_reason: string; merged_commit_sha: string; merged_at: number;
+    attempts: {
+      task_id: string; kind: Task["kind"]; status: Task["status"];
+      backend: string; model: string; verdict: Task["verdict"]; result_text: string;
+      trace_blob: string; artifact_blobs: string[];
+      validation: { command: string; exit_code: number; output: string; commit_sha: string } | null;
+    }[];
+  }[];
+  questions: Question[];
+  todos: HumanTodo[];
+  captured_at: number;
 }
 
 export interface PlanItemPatch {

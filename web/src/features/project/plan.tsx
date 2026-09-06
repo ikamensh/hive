@@ -2,6 +2,8 @@ import { useState, type FormEvent } from "react";
 import { api } from "../../api";
 import { Markdown } from "../../components/shared";
 import type { PlanItem, PlanItemStatus, PlanPayload } from "../../types";
+import { PlanSubmission } from "./planSubmission";
+import { downloadText, PlanResults } from "./planResults";
 
 /** The iteration plan panel (wiki/iteration-plan.md).
  *
@@ -241,17 +243,21 @@ function PlanStarter({
   note,
 }: {
   projectId: string;
-  onChanged: () => void;
+  onChanged: (planId?: string) => void;
   note?: string;
 }) {
   const [goal, setGoal] = useState("");
   const [busy, setBusy] = useState<"" | "propose" | "write">("");
+  const [error, setError] = useState("");
   const propose = async () => {
     if (busy) return;
     setBusy("propose");
+    setError("");
     try {
       await api.proposePlan(projectId);
       onChanged();
+    } catch (error) {
+      setError(String(error));
     } finally {
       setBusy("");
     }
@@ -260,9 +266,12 @@ function PlanStarter({
     e.preventDefault();
     if (!goal.trim() || busy) return;
     setBusy("write");
+    setError("");
     try {
-      await api.createPlan(projectId, goal.trim());
-      onChanged();
+      const accepted = await api.createPlan(projectId, goal.trim());
+      onChanged(accepted.plan.id);
+    } catch (error) {
+      setError(String(error));
     } finally {
       setBusy("");
     }
@@ -270,10 +279,9 @@ function PlanStarter({
   return (
     <div className="plan-starter">
       {note && <p className="muted">{note}</p>}
-      <p className="muted">
-        An ordered list of work items; nothing runs until you approve it. Approve blind for
-        max autonomy, or inspect and rewrite every item.
-      </p>
+      <PlanSubmission projectId={projectId} onAccepted={onChanged} />
+      <details className="project-disclosure">
+      <summary>Other ways to prepare a plan</summary>
       <div className="plan-starter-actions">
         <button type="button" onClick={propose} disabled={busy !== ""} aria-busy={busy === "propose"}>
           <i className="ti ti-sparkles" aria-hidden />
@@ -290,6 +298,8 @@ function PlanStarter({
           </button>
         </form>
       </div>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      </details>
     </div>
   );
 }
@@ -301,18 +311,19 @@ export function PlanPanel({
 }: {
   projectId: string;
   payload: PlanPayload | null | undefined;
-  onChanged: () => void;
+  onChanged: (planId?: string) => void;
 }) {
   const [expandedId, setExpandedId] = useState("");
+  const [view, setView] = useState<"items" | "results" | null>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
-  if (!payload || payload.plan.status === "abandoned") {
+  if (!payload) {
     return (
       <div className="plan-panel plan-panel-empty">
         <PlanStarter
           projectId={projectId}
           onChanged={onChanged}
-          note={payload ? "The previous plan was abandoned." : undefined}
         />
       </div>
     );
@@ -324,13 +335,19 @@ export function PlanPanel({
   const approvedCount = items.filter((i) => i.status === "approved").length;
   const pendingCount = items.filter((i) => i.status === "proposed").length;
   const landed = items.filter((i) => i.status === "done").length;
+  const cancelled = items.length - live.length;
+  const ended = plan.status === "complete" || plan.status === "abandoned";
+  const showResults = (view ?? (ended ? "results" : "items")) === "results";
 
   const run = (fn: () => Promise<unknown>) => async () => {
     if (busy) return;
     setBusy(true);
+    setError("");
     try {
       await fn();
       onChanged();
+    } catch (error) {
+      setError(String(error));
     } finally {
       setBusy(false);
     }
@@ -342,7 +359,7 @@ export function PlanPanel({
     ) : plan.status === "approved" ? (
       <span className="chip chip-plan-executing">executing · {landed}/{live.length} landed</span>
     ) : (
-      <span className="chip chip-plan-done">complete · {landed} landed</span>
+      <span className="chip">{plan.status === "abandoned" ? "abandoned" : "finished"} · {landed} landed · {cancelled} cancelled</span>
     );
 
   return (
@@ -358,13 +375,22 @@ export function PlanPanel({
                 ? " — approve items one by one, or all at once; every field is yours to rewrite"
                 : plan.status === "approved"
                   ? " — items land in order; each merge passed a fresh-agent review"
-                  : " — hive will propose the next iteration"}
+                  : " — inspect the evidence before assessing the goal"}
             </p>
           </div>
         </div>
         {statusChip}
       </header>
-
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <nav className="plan-navigation" aria-label="Plan views">
+        <button type="button" className={showResults ? "ghost" : ""} aria-pressed={!showResults} onClick={() => setView("items")}>Work items</button>
+        <button type="button" className={showResults ? "" : "ghost"} aria-pressed={showResults} onClick={() => setView("results")}>Results &amp; evidence</button>
+        <button type="button" className="ghost" disabled={busy} onClick={run(async () => {
+          downloadText(`${plan.id}.toml`, await api.planDocument(plan.id), "text/plain");
+        })}>Export plan</button>
+        <a href={`/p/${projectId}?plan=${encodeURIComponent(plan.id)}`}>Link to this plan</a>
+      </nav>
+      {showResults ? <PlanResults key={plan.id} planId={plan.id} /> : <>
       <div className="plan-items">
         {items.map((item, position) => {
           const previous = items[position - 1];
@@ -423,8 +449,15 @@ export function PlanPanel({
           </button>
         </footer>
       )}
-      {plan.status === "complete" && (
+      {!ended && <details className="project-disclosure">
+        <summary>Amend from a plan file</summary>
+        <PlanSubmission projectId={projectId} onAccepted={onChanged} amendment />
+      </details>}
+      </>}
+      {ended && (
+        <details className="project-disclosure"><summary>Start the next plan</summary>
         <PlanStarter projectId={projectId} onChanged={onChanged} />
+        </details>
       )}
     </div>
   );
