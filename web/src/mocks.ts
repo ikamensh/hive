@@ -11,6 +11,11 @@ import type {
   GithubRepo,
   HumanTodo,
   IntakeMessage,
+  InboxItem,
+  InboxOptions,
+  InboxPayload,
+  DeliveriesPayload,
+  RecentDelivery,
   IssueRun,
   LicensingMode,
   MachineGroup,
@@ -124,7 +129,8 @@ const plans: Plan[] = [
   },
 ];
 
-const planItems: PlanItem[] = [
+type MockPlanItem = PlanItem & { merged_commit_sha?: string; merged_at?: number };
+const planItems: MockPlanItem[] = [
   {
     id: "pi-a1", plan_id: "plan-atlas-1", order: 0, repo: "",
     title: "Responsive layout for the project page",
@@ -179,9 +185,9 @@ const planItems: PlanItem[] = [
 ];
 
 function planPayload(projectId: string): PlanPayload | null {
-  const candidates = plans.filter((p) => p.project_id === projectId);
+  const candidates = plans.filter((p) => p.project_id === projectId).sort((a, b) => b.created_at - a.created_at);
   const active = candidates.find((p) => p.status === "draft" || p.status === "approved");
-  const plan = active ?? candidates[candidates.length - 1];
+  const plan = active ?? candidates[0];
   if (!plan) return null;
   return {
     plan,
@@ -819,7 +825,8 @@ const questions: Question[] = [
   },
 ];
 
-const tasks: Task[] = [
+type MockTask = Task & { validation_result?: { command: string; exit_code: number; output: string; commit_sha: string } };
+const tasks: MockTask[] = [
   {
     id: "t-intake-1",
     project_id: "p-atlas",
@@ -1171,7 +1178,7 @@ export const api = {
       last_seen: Date.now() / 1000,
     },
     workspace: { id: "default", name: "ikamen", created_at: now - 86400 },
-    role: "admin",
+    role: workspaceMembers.find(member => member.is_you)?.role ?? "admin",
     auth_mode: "dev",
     storage: {
       backend: "file",
@@ -1190,110 +1197,93 @@ export const api = {
 
   setFleetPaused: async (paused: boolean): Promise<{ paused: boolean }> => {
     fleetPaused = paused;
+    if (!paused) plans.forEach(advanceMockPlan);
     return { paused };
   },
 
+  inbox: async (options: InboxOptions = {}): Promise<InboxPayload> => structuredClone(mockInbox(options)),
+  projectPlans: async (projectId: string) => ({ plans: structuredClone(plans.filter(plan => plan.project_id === projectId).sort((a, b) => b.created_at - a.created_at)) }),
+  deliveries: async ({ offset = 0, limit = 20 }: { offset?: number; limit?: number } = {}): Promise<DeliveriesPayload> => {
+    const items = mockDeliveries();
+    return structuredClone({ observed_at: Date.now() / 1000, count: items.length, offset, limit, items: items.slice(offset, offset + limit) });
+  },
   overview: async (): Promise<Overview> => {
-    const projectName = (id: string) => projects.find((p) => p.id === id)?.name ?? "";
-    const openQuestions = questions
-      .filter((q) => q.status === "open")
-      .sort((a, b) => b.created_at - a.created_at)
-      .map((q) => ({
-        id: q.id,
-        project_id: q.project_id,
-        project_name: projectName(q.project_id),
-        text: q.text,
-        created_at: q.created_at,
+    refreshMockResources();
+    const observed_at = Date.now() / 1000;
+    const inbox = mockInbox({ limit: Number.MAX_SAFE_INTEGER });
+    const projectName = (id: string) => projects.find(project => project.id === id)?.name ?? "";
+    const busy = new Set(tasks.filter(task => task.status === "running").map(task => task.runner_id));
+    const machines: Overview["capacity"]["machines"] = groupCards().map(card => {
+      const online = card.runners.filter(runner => runner.online);
+      const agents: Overview["capacity"]["machines"][number]["agents"] = card.resources.map(resource => ({
+        id: resource.id, backend: resource.backend, runner_id: resource.runner_id,
+        available: resource.available, cooldown_until: resource.cooldown_until,
+        status: resource.enabled === false ? "disabled" : !online.some(runner => runner.id === resource.runner_id) ? "offline"
+          : resource.usability_status === "failed" ? "failed" : resource.usability_status === "probing" ? "probing"
+          : resource.cooldown_until > observed_at ? "cooldown" : resource.available ? "ready" : "probe",
+        usage_plan: resource.usage_plan, usage_source: resource.usage_source,
+        usage_captured_at: resource.usage_captured_at, usage_windows: resource.usage_windows,
+        model_cooldowns: resource.model_cooldowns,
       }));
-    const openTodos = structuredClone(humanTodos)
-      .filter((t) => t.status === "open")
-      .map((t) => ({
-        id: t.id,
-        project_id: t.project_id,
-        project_name: projectName(t.project_id),
-        assignee_user_id: t.assignee_user_id,
-        title: t.title,
-        instructions: t.instructions,
-        created_at: t.created_at,
-      }));
-
-    const planSummaries: Record<string, Overview["projects"][number]["plan"]> = {};
-    for (const project of projects) {
-      const payload = planPayload(project.id);
-      if (!payload) continue;
-      const result = await api.planResult(payload.plan.id);
-      planSummaries[project.id] = {
-        id: result.plan_id, goal: result.goal, status: result.status,
-        outcome: result.outcome, counts: result.counts,
-      };
-    }
-
-    return structuredClone({
-      paused: fleetPaused,
-      projects: [
-        { id: "p-relay", plan: planSummaries["p-relay"] ?? null, name: "relay", spec_repo: "git@github.com:acme/relay.git", state: "working", state_reason: "1 task(s) running: resolve on claude", paused: false, created_at: now - 86400 * 5, daily_budget_usd: 40, spend_today: 8.2, counts: { running: 1, questions: 0, blockers: 0 } },
-        { id: "p-atlas", plan: planSummaries["p-atlas"] ?? null, name: "atlas", spec_repo: "git@github.com:acme/atlas-spec.git", state: "needs_attention", state_reason: "needs you: 1 question(s) to answer; 1 issue(s) blocked on your call (#41)", paused: false, created_at: now - 86400 * 9, daily_budget_usd: 25, spend_today: 3.1, counts: { running: 0, questions: 1, blockers: 1 } },
-        { id: "p-probe", plan: planSummaries["p-probe"] ?? null, name: "probe", spec_repo: "git@github.com:acme/probe.git", state: "blocked_resources", state_reason: "waiting for capacity: no online machine offers codex — wake or log in a machine on the machines page", paused: false, created_at: now - 86400 * 2, daily_budget_usd: 15, spend_today: 0, counts: { running: 0, questions: 0, blockers: 0 } },
-        { id: "p-beacon", plan: planSummaries["p-beacon"] ?? null, name: "beacon", spec_repo: "git@github.com:acme/beacon.git", state: "needs_attention", state_reason: "needs you: 1 question(s) to answer", paused: false, created_at: now - 86400, daily_budget_usd: 0, spend_today: 1.4, counts: { running: 0, questions: 1, blockers: 0 } },
-        { id: "p-ledger", plan: planSummaries["p-ledger"] ?? null, name: "ledger", spec_repo: "git@github.com:acme/ledger-spec.git", state: "idle_goal_complete", state_reason: "iteration complete — read the completion note and set the next goal", paused: false, created_at: now - 86400 * 20, daily_budget_usd: 0, spend_today: 0, counts: { running: 0, questions: 0, blockers: 0 } },
-      ],
-      capacity: {
-        machines_total: 2,
-        machines_online: 1,
-        agents_total: 4,
-        agents_ready: 1,
-        machines: [
-          {
-            id: "m-hex1", name: "hex-1", hostname: "hex-1", kind: "runner", device_kind: "server", online: true, last_seen: now - 12,
-            agents: [
-              { id: "res-1", backend: "claude", status: "ready", available: true, cooldown_until: 0, runner_id: "r-hex1" },
-              { id: "res-2", backend: "codex", status: "cooldown", available: false, cooldown_until: now + 2700, runner_id: "r-hex1" },
-            ],
-          },
-          {
-            id: "m-hex2", name: "hex-2", hostname: "hex-2", kind: "runner", device_kind: "laptop", online: false, last_seen: now - 60 * 47,
-            agents: [
-              { id: "res-3", backend: "cursor", status: "offline", available: false, cooldown_until: 0, runner_id: "r-hex2" },
-              { id: "res-4", backend: "gemini-cli", status: "offline", available: false, cooldown_until: 0, runner_id: "r-hex2" },
-            ],
-          },
-        ],
-      },
-      live_tasks: [
-        { id: "t-relay-1", project_id: "p-relay", project_name: "relay", backend: "claude", model: "", kind: "work", started_at: now - 95, issue_number: 0 },
-      ],
-      attention: {
-        count: openQuestions.length + openTodos.length,
-        offers: [
-          {
-            project_id: "p-beacon",
-            project_name: "beacon",
-            workstream_id: "stream-beacon-testing",
-            repo: "https://github.com/acme/beacon.git",
-            state: "missing" as const,
-            summary: "No acceptance stories yet.",
-            offer: "Hive can draft user stories with acceptance criteria autonomously from the spec (mission, iteration, wiki) — run a story refresh.",
-            action: "refresh" as const,
-          },
-        ],
-        questions: openQuestions,
-        human_todos: openTodos,
-      },
-      subscriptions: structuredClone(subscriptions),
-      totals: {
-        tasks_running: 1,
-        agents_ready: 1,
-        agents_total: 4,
-        machines_online: 1,
-        machines_total: 2,
-        needs_you: openQuestions.length + openTodos.length,
-        spend_today: 12.7,
-        budget_today: 80,
-      },
+      const usable = online.filter(runner => agents.some(agent => agent.runner_id === runner.id && agent.available));
+      return { id: card.machine.id, name: card.machine.name, hostname: card.machine.hostname,
+        kind: card.machine.kind, device_kind: card.machine.device_kind, online: card.online, last_seen: card.last_seen, agents,
+        runners_total: card.runners.length, runners_online: online.length,
+        runners_busy: online.filter(runner => busy.has(runner.id)).length,
+        runners_idle: usable.filter(runner => !busy.has(runner.id)).length, runners_usable: usable.length };
     });
+    const sum = (key: "runners_total" | "runners_online" | "runners_busy" | "runners_idle" | "runners_usable") => machines.reduce((total, machine) => total + machine[key], 0);
+    const capacity: Overview["capacity"] = { machines, machines_total: machines.length, machines_online: machines.filter(machine => machine.online).length,
+      agents_total: machines.reduce((total, machine) => total + machine.agents.length, 0),
+      agents_ready: machines.reduce((total, machine) => total + machine.agents.filter(agent => agent.available).length, 0),
+      runners_total: sum("runners_total"), runners_online: sum("runners_online"), runners_busy: sum("runners_busy"), runners_idle: sum("runners_idle"), runners_usable: sum("runners_usable") };
+    const live_tasks = tasks.filter(task => task.status === "running").map(task => {
+      const runner = resourcesPayload.runners.find(runner => runner.id === task.runner_id);
+      const machine = resourcesPayload.machines?.find(machine => machine.id === runner?.machine_id);
+      const item = planItems.find(item => item.id === task.work_item_id);
+      const issue = workItems.find(item => item.id === task.work_item_id || item.id === task.workstream_id);
+      return { id: task.id, project_id: task.project_id, project_name: projectName(task.project_id), backend: task.backend, model: task.model,
+        kind: task.kind, started_at: task.started_at, issue_number: task.issue_number ?? issue?.issue_number ?? 0,
+        title: item?.title ?? issue?.title ?? task.instructions.split("\n")[0], runner_id: task.runner_id,
+        runner_name: runner?.name ?? "", machine_id: machine?.id ?? "", machine_name: machine?.name ?? "",
+        runner_online: runner?.online ?? false, runner_last_seen: runner?.last_seen ?? 0,
+        delivered: task.delivered, plan_id: item?.plan_id ?? "", work_item_id: item?.id ?? issue?.id ?? "", repo: task.repo };
+    });
+    const projectRows: Overview["projects"] = await Promise.all(projects.filter(project => !project.archived).map(async project => {
+      const payload = planPayload(project.id);
+      const result = payload ? await api.planResult(payload.plan.id) : null;
+      const running = live_tasks.filter(task => task.project_id === project.id).length;
+      const open = questions.filter(question => question.project_id === project.id && question.status === "open").length;
+      const blockers = inbox.items.filter(item => item.project_id === project.id && item.kind === "blocked").length;
+      const state: Project["state"] = project.paused ? project.state : running ? "working" : open || blockers || payload?.plan.status === "draft" ? "needs_attention" : project.goal_complete ? "idle_goal_complete" : project.state === "working" ? "idle" : project.state;
+      return { id: project.id, name: project.name, spec_repo: project.spec_repo, state,
+        state_reason: project.paused ? "Project paused" : running ? `${running} task${running === 1 ? "" : "s"} running`
+          : open ? `${open} question${open === 1 ? "" : "s"} waiting for an answer` : blockers ? "A plan item needs your decision"
+          : payload?.plan.status === "draft" ? "Plan ready for review" : project.goal_complete ? "Iteration complete" : "Ready for the next work",
+        paused: project.paused, created_at: project.created_at, daily_budget_usd: project.daily_budget_usd,
+        spend_today: tasks.filter(task => task.project_id === project.id && task.finished_at >= Math.floor(observed_at / 86400) * 86400).reduce((total, task) => total + task.cost_usd, 0),
+        plan: result ? { id: result.plan_id, goal: result.goal, status: result.status, outcome: result.outcome, counts: result.counts } : null,
+        counts: { running, questions: open, blockers } };
+    }));
+    const deliveries = mockDeliveries();
+    return structuredClone({ observed_at, paused: fleetPaused, projects: projectRows, capacity, live_tasks,
+      execution: { working: live_tasks.filter(task => task.runner_online && task.delivered).length,
+        starting: live_tasks.filter(task => task.runner_online && !task.delivered).length,
+        disconnected: live_tasks.filter(task => !task.runner_online).length },
+      tasks_pending: tasks.filter(task => task.status === "pending").length,
+      recent_deliveries: { count: deliveries.length, items: deliveries.slice(0, 3) },
+      attention: { count: inbox.counts.all, offers: [],
+        questions: questions.filter(question => question.status === "open").slice(0, 3).map(question => ({ ...question, project_name: projectName(question.project_id) })),
+        human_todos: humanTodos.filter(todo => todo.status === "open").slice(0, 3).map(todo => ({ ...todo, project_name: projectName(todo.project_id) })) },
+      subscriptions, totals: { tasks_running: live_tasks.length, agents_ready: capacity.agents_ready, agents_total: capacity.agents_total,
+        machines_online: capacity.machines_online, machines_total: capacity.machines_total, needs_you: inbox.counts.all,
+        spend_today: projectRows.reduce((total, project) => total + project.spend_today, 0), budget_today: projectRows.reduce((total, project) => total + project.daily_budget_usd, 0) } });
   },
 
-  projects: async (): Promise<Project[]> => structuredClone(projects),
+  projects: async (): Promise<Project[]> => {
+    const snapshot = await api.overview();
+    return structuredClone(projects.map(project => ({ ...project, state: snapshot.projects.find(row => row.id === project.id)?.state ?? project.state })));
+  },
 
   createProject: async (body: ProjectCreate): Promise<Project> => {
     const p: Project = {
@@ -1314,6 +1304,7 @@ export const api = {
       created_at: Date.now() / 1000,
     };
     projects.push(p);
+    initialGoals[p.id] = body.spec_text?.trim() ?? "";
     return structuredClone(p);
   },
 
@@ -1337,7 +1328,7 @@ export const api = {
     return structuredClone({ project, repo });
   },
 
-  startIntake: async (id: string, backend = ""): Promise<AgentConversation> => {
+  startIntake: async (id: string, backend = "", goal = ""): Promise<AgentConversation> => {
     const project = projects.find((p) => p.id === id);
     if (!project) throw new Error("not found");
     if (!project.spec_repo.trim()) throw new Error("spec_repo required");
@@ -1345,7 +1336,11 @@ export const api = {
     const existing = conversations.find(
       (c) => c.id === project.intake_conversation_id && active.includes(c.status),
     );
-    if (existing) return structuredClone(existing);
+    if (existing) {
+      if (goal.trim() && !existing.transcript.some(turn => turn.role === "user" && turn.text === goal.trim())) throw new Error("A design conversation is already active. Continue it before starting a different goal.");
+      return structuredClone(existing);
+    }
+    const briefGoal = goal.trim() || initialGoals[project.id] || "Define the next useful iteration";
     const scouts = project.agent_preferences?.length
       ? project.agent_preferences : [{ backend: "claude", model: "opus" }];
     const scout = scouts.find((candidate) => candidate.backend === backend) ?? scouts[0];
@@ -1356,10 +1351,10 @@ export const api = {
       repo: project.spec_repo,
       backend: scout.backend,
       model: scout.model,
-      status: "running",
-      session_handle: "",
-      latest_brief: "",
-      transcript: [],
+      status: "open",
+      session_handle: "mock-design-session",
+      latest_brief: `## Goal\n\n${briefGoal}\n\n## Proposed scope\n\nInspect the current implementation, agree the acceptance behavior, then implement and validate the smallest complete change.\n\n## Decision\n\nWhat behavior would prove this goal is complete?`,
+      transcript: [{ role: "user", text: briefGoal }],
       last_task_id: "",
       created_at: Date.now() / 1000,
       updated_at: Date.now() / 1000,
@@ -1367,7 +1362,8 @@ export const api = {
     conversations.push(conversation);
     project.intake_conversation_id = conversation.id;
     project.state = "intake";
-    const task = makeIntakeTask(project, conversation, "initial", "running", "Inspect the project and produce an intake brief.");
+    conversation.transcript.push({ role: "assistant", text: conversation.latest_brief });
+    const task = makeIntakeTask(project, conversation, "initial", "done", briefGoal);
     conversation.last_task_id = task.id;
     return structuredClone(conversation);
   },
@@ -1415,7 +1411,12 @@ export const api = {
     const action = body.action || "message";
     if (action === "approve") {
       conversation.status = "done";
-      project.state = "idle";
+      project.state = "needs_attention";
+      if (!plans.some(plan => plan.project_id === project.id && ["draft", "approved"].includes(plan.status))) {
+        await api.createPlan(project.id, conversation.transcript.find(turn => turn.role === "user")?.text || "Implement the agreed goal", [
+          { title: "Implement the agreed behavior", story: conversation.latest_brief, constraints: "Validate the acceptance behavior before landing." },
+        ]);
+      }
       return structuredClone({ conversation });
     }
     const turn = action === "proceed" ? "proceed" : "message";
@@ -1616,9 +1617,18 @@ export const api = {
         : items.some(i => ["rejected", "blocked_clarity"].includes(i.status)) ? "blocked"
         : plan.status === "draft" ? "pending" : "running",
       counts: { total: items.length, done, cancelled, remaining: items.length - done - cancelled },
-      items: items.map(i => ({ ...i, repo: i.repo || projects.find(p => p.id === plan.project_id)!.spec_repo,
-        merged_commit_sha: "", merged_at: 0, attempts: [] })),
-      questions: [], todos: [], captured_at: Date.now() / 1000,
+      items: items.map(i => {
+        const stored = planItems.find(item => item.id === i.id)!;
+        return { ...i, repo: i.repo || projects.find(p => p.id === plan.project_id)!.spec_repo,
+          merged_commit_sha: stored.merged_commit_sha ?? "", merged_at: stored.merged_at ?? 0,
+          attempts: tasks.filter(task => task.work_item_id === i.id && task.run_id === planId).map(task => ({
+            task_id: task.id, kind: task.kind, status: task.status, backend: task.backend, model: task.model,
+            verdict: task.verdict, result_text: task.result_text, trace_blob: task.trace_blob,
+            artifact_blobs: task.artifact_blobs ?? [], validation: task.validation_result ?? null,
+          })) };
+      }),
+      questions: questions.filter(question => question.project_id === plan.project_id && question.status === "open"),
+      todos: humanTodos.filter(todo => todo.project_id === plan.project_id && todo.status === "open"), captured_at: Date.now() / 1000,
     };
   },
   proposePlan: async (_projectId: string) => ({ ok: true }),
@@ -1644,6 +1654,7 @@ export const api = {
     const item = planItems.find((i) => i.id === itemId)!;
     const plan = plans.find((p) => p.id === item.plan_id)!;
     item.status = plan.status === "approved" ? "queued" : "approved";
+    advanceMockPlan(plan);
     return structuredClone(item);
   },
   unapprovePlanItem: async (itemId: string): Promise<PlanItem> => {
@@ -1655,12 +1666,17 @@ export const api = {
     const item = planItems.find((i) => i.id === itemId)!;
     item.status = "cancelled";
     item.parked_reason = reason;
+    tasks.filter(task => task.work_item_id === itemId && ["pending", "running"].includes(task.status)).forEach(task => {
+      task.status = "cancelled"; task.finished_at = Date.now() / 1000;
+    });
+    advanceMockPlan(plans.find(plan => plan.id === item.plan_id)!);
     return structuredClone(item);
   },
   retryPlanItem: async (itemId: string): Promise<PlanItem> => {
     const item = planItems.find((i) => i.id === itemId)!;
-    item.status = "resolving";
+    item.status = "queued";
     item.parked_reason = "";
+    advanceMockPlan(plans.find(plan => plan.id === item.plan_id)!);
     return structuredClone(item);
   },
   approvePlan: async (planId: string) => {
@@ -1670,17 +1686,17 @@ export const api = {
         item.status = "queued";
       }
     }
-    const first = planItems
-      .filter((i) => i.plan_id === planId && i.status === "queued")
-      .sort((a, b) => a.order - b.order)[0];
-    if (first) first.status = "resolving";
     plan.status = "approved";
     plan.approved_at = Date.now() / 1000;
+    advanceMockPlan(plan);
     return structuredClone({ notes: ["plan approved"], ...planPayload(plan.project_id)! });
   },
   abandonPlan: async (planId: string) => {
     const plan = plans.find((p) => p.id === planId)!;
     plan.status = "abandoned";
+    tasks.filter(task => task.run_id === planId && ["pending", "running"].includes(task.status)).forEach(task => {
+      task.status = "cancelled"; task.finished_at = Date.now() / 1000;
+    });
     plan.finished_at = Date.now() / 1000;
     for (const item of planItems.filter((i) => i.plan_id === planId)) {
       if (item.status !== "done" && item.status !== "cancelled") item.status = "cancelled";
@@ -1711,6 +1727,7 @@ export const api = {
       project.goal_complete = false;
       project.goal_complete_note = "";
     }
+    if (patch.paused === false) plans.filter(plan => plan.project_id === id).forEach(advanceMockPlan);
     return structuredClone(project);
   },
 
@@ -1994,11 +2011,11 @@ export const api = {
     ].join("\n");
   },
 
-  resources: async (): Promise<ResourcesPayload> => ({
+  resources: async (): Promise<ResourcesPayload> => { refreshMockResources(); return ({
     ...structuredClone(resourcesPayload),
     cards: structuredClone(groupCards()),
     subscription_candidates: subscriptionCandidates(),
-  }),
+  }); },
   startLocalRunner: async () => {
     const local = resourcesPayload.local_runner!;
     local.running = true;
@@ -2316,3 +2333,136 @@ const humanTodos: HumanTodo[] = [
     done_at: now - 86000,
   },
 ];
+
+// Operations fixtures are one shared state: every visible assignment has a runner,
+// and each delivered result has a landing SHA plus review evidence for that SHA.
+const initialGoals: Record<string, string> = {};
+const desktop = resourcesPayload.machines![0];
+Object.assign(desktop, { name: "MacBook Pro", hostname: "ilyas-macbook", os: "macos", arch: "arm64", machine_type: "macbook", device_kind: "laptop", owner_user_id: "github:ikamensh" });
+resourcesPayload.runners[0].name = desktop.name;
+Object.assign(resourcesPayload.machines![1], { name: "Travel laptop", owner_user_id: "github:teammate" });
+resourcesPayload.runners[1].name = "Travel laptop";
+for (const [id, name, device] of [["vm", "hive-vm", "server"], ["lab", "Lab workstation", "desktop"]]) {
+  resourcesPayload.machines!.push({ id: `m-${id}`, workspace_id: "default", name, hostname: name, kind: "runner",
+    machine_type: device, os: "linux", arch: "x86_64", device_kind: device, first_seen: now - 86400 * 3, last_seen: now - 5 });
+  resourcesPayload.runners.push({ id: `r-${id}`, workspace_id: "default", machine_id: `m-${id}`, name,
+    backends: id === "vm" ? ["codex"] : ["opencode"], last_seen: now - 5, online: true });
+  resourcesPayload.resources.push({ ...resourcesPayload.resources[0], id: `res-${id}`, runner_id: `r-${id}`,
+    machine_id: `m-${id}`, backend: id === "vm" ? "codex" : "opencode", cli_path: `/usr/local/bin/${id === "vm" ? "codex" : "opencode"}`,
+    total_cost_usd: 0, total_tasks: 8, cooldown_until: 0 });
+}
+Object.assign(resourcesPayload.resources[0], { usage_plan: "Claude Max 5x", usage_source: "anthropic", usage_captured_at: now - 20,
+  usage_windows: [{ kind: "session", model_scope: "all", used_percent: 38, window_minutes: 300, resets_at: now + 9200 },
+    { kind: "weekly", model_scope: "all", used_percent: 24, window_minutes: 10080, resets_at: now + 432000 }] });
+Object.assign(resourcesPayload.resources[1], { usage_plan: "ChatGPT Plus", usage_source: "codex", usage_captured_at: now - 25,
+  usage_windows: [{ kind: "primary", model_scope: "all", used_percent: 98, window_minutes: 300, resets_at: now + 2700 }] });
+Object.assign(resourcesPayload.resources.find(resource => resource.id === "res-vm")!, {
+  usage_plan: "ChatGPT Pro", usage_source: "codex", usage_captured_at: now - 18,
+  usage_windows: [{ kind: "primary", model_scope: "all", used_percent: 19, window_minutes: 300, resets_at: now + 11400 },
+    { kind: "secondary", model_scope: "all", used_percent: 42, window_minutes: 10080, resets_at: now + 345600 }] });
+Object.assign(tasks.find(task => task.id === "t-2")!, { kind: "resolve", backend: "claude", model: "opus",
+  run_id: "plan-atlas-1", work_item_id: "pi-a2", repo: "git@github.com:acme/atlas-web.git",
+  instructions: "Implement touch-friendly controls for the mobile console.", workstream_id: "" });
+tasks.find(task => task.id === "t-r1")!.runner_id = "r-vm";
+Object.assign(planItems.find(item => item.id === "pi-a1")!, { merged_commit_sha: "1a43bf709e5c92fd2375a78017af392d4b598aba", merged_at: now - 1800, repo: "git@github.com:acme/atlas-web.git" });
+plans.push({ id: "plan-ledger-1", project_id: "p-ledger", goal: "Reliable invoice exports", status: "complete", proposed_by: "human",
+  spec_ref: "iteration-plan.toml", revision: 1, created_at: now - 86400 * 2, approved_at: now - 86400, finished_at: now - 3600 });
+for (const [index, title] of ["Export invoices as CSV", "Validate invoice totals before export"].entries()) {
+  planItems.push({ id: `pi-ledger-${index}`, plan_id: "plan-ledger-1", order: index,
+    repo: "git@github.com:acme/ledger.git", title, story: "Finance teams can reconcile exported invoices reliably.",
+    constraints: "", notes: "", status: "done", parked_reason: "", authored_by: "human", edited_by_human: false,
+    merged_commit_sha: `${index + 2}a43bf709e5c92fd2375a78017af392d4b598aba`, merged_at: now - (index + 2) * 1800 });
+}
+for (const item of planItems.filter(item => item.merged_commit_sha)) {
+  const plan = plans.find(plan => plan.id === item.plan_id)!;
+  tasks.push({ ...tasks.find(task => task.id === "t-r2")!, id: `review-${item.id}`, project_id: plan.project_id,
+    repo: item.repo, run_id: plan.id, work_item_id: item.id, workstream_id: "", runner_id: "r-vm",
+    instructions: `Review ${item.title}`, result_text: `Reviewed and validated ${item.title}.\n\nREVIEW: ACCEPT`,
+    created_at: item.merged_at! - 180, started_at: item.merged_at! - 170, finished_at: item.merged_at!,
+    trace_blob: `traces/review-${item.id}.jsonl`, cost_usd: 0.18,
+    validation_result: { command: "npm test", exit_code: 0, output: "All acceptance checks passed.", commit_sha: item.merged_commit_sha! } });
+}
+Object.assign(humanTodos.find(todo => todo.id === "ht1")!, { title: "Confirm staging DNS for Relay", kind: "external", project_id: "p-relay",
+  instructions: "Confirm the staging hostname points to the new service, then mark this task done.", dedup_key: "", resolution: {} });
+Object.assign(humanTodos.find(todo => todo.id === "ht5")!, { title: "Restore the Travel laptop connection",
+  instructions: "Wake the Travel laptop, refresh its Cursor CLI login, and check its runner connection in Capacity.", kind: "infra",
+  resolution: { check: "runner_online", runner_name: "Travel laptop" } });
+
+function refreshMockResources() {
+  const observed = Date.now() / 1000;
+  for (const runner of resourcesPayload.runners) {
+    if (runner.online) runner.last_seen = observed - 5;
+  }
+  for (const resource of resourcesPayload.resources) {
+    resource.available = resourcesPayload.runners.some(runner => runner.id === resource.runner_id && runner.online)
+      && resource.enabled !== false && resource.usability_status === "usable" && resource.cooldown_until <= observed;
+  }
+}
+
+function mockDeliveries(): RecentDelivery[] {
+  return planItems.filter(item => item.status === "done" && item.merged_commit_sha && item.merged_at).flatMap(item => {
+    const plan = plans.find(plan => plan.id === item.plan_id);
+    const project = projects.find(project => project.id === plan?.project_id && !project.archived);
+    if (!plan || !project) return [];
+    const evidence = tasks.find(task => task.work_item_id === item.id && task.run_id === plan.id
+      && task.kind === "review" && task.status === "done" && task.validation_result?.commit_sha === item.merged_commit_sha);
+    return [{ project_id: project.id, project_name: project.name, plan_id: plan.id, work_item_id: item.id, title: item.title,
+      repo: item.repo || project.spec_repo, merged_commit_sha: item.merged_commit_sha!, merged_at: item.merged_at!,
+      validation: { status: evidence ? evidence.validation_result!.exit_code === 0 ? "passed" as const : "failed" as const : "not_recorded" as const,
+        command: evidence?.validation_result?.command ?? "", task_id: evidence?.id ?? "", commit_sha: evidence?.validation_result?.commit_sha ?? "" } }];
+  }).sort((a, b) => b.merged_at - a.merged_at);
+}
+
+function mockInbox({ kind = "all", scope = "all", q = "", project_id = "", offset = 0, limit = 20 }: InboxOptions = {}): InboxPayload {
+  const member = workspaceMembers.find(member => member.is_you)!;
+  const admin = member.role === "admin";
+  const rows: InboxItem[] = [];
+  const row = (id: string, rowKind: InboxItem["kind"], title: string, body: string, projectId: string, created: number, payload: Partial<InboxItem>) => {
+    const project = projects.find(project => project.id === projectId);
+    if (projectId && !project) return;
+    const assignee = payload.todo?.assignee_user_id ?? "";
+    rows.push({ id: `${rowKind}:${id}`, kind: rowKind, title, body, project_id: projectId, project_name: project?.name ?? "Workspace",
+      created_at: created, can_act: admin || assignee === member.user.id,
+      waiting_on_other: assignee ? assignee !== member.user.id : !admin, assignee_user_id: assignee,
+      assignee_name: workspaceMembers.find(member => member.user.id === assignee)?.user.github_login ?? assignee, ...payload });
+  };
+  questions.filter(question => question.status === "open").forEach(question => row(question.id, "question", question.text.split("\n").find(line => line.trim())?.replace(/^#+\s*/, "") ?? "Question", question.text, question.project_id, question.created_at, { question }));
+  humanTodos.filter(todo => todo.status === "open").forEach(todo => row(todo.id, "todo", todo.title, todo.instructions, todo.project_id, todo.created_at, { todo }));
+  for (const plan of plans.filter(plan => ["draft", "approved"].includes(plan.status))) {
+    const items = planItems.filter(item => item.plan_id === plan.id);
+    if (plan.status === "draft" && items.some(item => ["proposed", "approved"].includes(item.status))) {
+      row(plan.id, "approval", plan.goal, `Review ${items.length} work items before starting this plan.`, plan.project_id, plan.created_at, { plan });
+    } else if (plan.status === "approved") for (const item of items) {
+      if (item.status === "proposed") row(item.id, "approval", item.title, item.story || item.notes, plan.project_id, plan.created_at, { plan, plan_item: item });
+      if (["blocked_clarity", "rejected"].includes(item.status)) row(item.id, "blocked", item.title, item.parked_reason, plan.project_id, plan.created_at, { plan, plan_item: item });
+    }
+  }
+  const counts: InboxPayload["counts"] = { all: rows.length, question: 0, todo: 0, approval: 0, blocked: 0, yours: 0, others: 0 };
+  rows.forEach(item => { counts[item.kind]++; counts[item.waiting_on_other ? "others" : "yours"]++; });
+  const filtered = rows.filter(item => (kind === "all" || item.kind === kind) && (scope === "all" || item.waiting_on_other === (scope === "others"))
+    && (!project_id || item.project_id === project_id) && `${item.title} ${item.body} ${item.project_name} ${item.assignee_name}`.toLowerCase().includes(q.trim().toLowerCase()))
+    .sort((a, b) => Number(a.waiting_on_other) - Number(b.waiting_on_other) || b.created_at - a.created_at || a.id.localeCompare(b.id));
+  return { items: filtered.slice(offset, offset + limit), total: filtered.length, counts, offset, limit, observed_at: Date.now() / 1000 };
+}
+
+function advanceMockPlan(plan: Plan) {
+  const project = projects.find(project => project.id === plan.project_id)!;
+  if (plan.status !== "approved" || project.paused || fleetPaused) return;
+  if (tasks.some(task => task.run_id === plan.id && ["pending", "running"].includes(task.status))) return;
+  const item = planItems.filter(item => item.plan_id === plan.id && !["done", "cancelled"].includes(item.status)).sort((a, b) => a.order - b.order)[0];
+  if (!item || item.status !== "queued") return;
+  refreshMockResources();
+  const occupied = new Set(tasks.filter(task => task.status === "running").map(task => task.runner_id));
+  const resource = resourcesPayload.resources.find(resource => resource.available && !occupied.has(resource.runner_id)
+    && (!project.agent_preferences?.length || project.agent_preferences.some(preference => preference.backend === resource.backend)));
+  const task: MockTask = { ...tasks.find(task => task.id === "t-2")!,
+    id: `t-plan-${Math.random().toString(36).slice(2, 9)}`, project_id: project.id, run_id: plan.id, work_item_id: item.id,
+    workstream_id: "", repo: item.repo || project.spec_repo, branch: `hive/plan-${item.id}`, fresh_branch: true,
+    kind: "resolve", instructions: item.story || item.title, backend: resource?.backend ?? project.agent_preferences?.[0]?.backend ?? "claude",
+    model: "", runner_id: resource?.runner_id ?? "", status: resource ? "running" : "pending", delivered: !!resource,
+    created_at: Date.now() / 1000, started_at: resource ? Date.now() / 1000 : 0, finished_at: 0,
+    cost_usd: 0, input_tokens: 0, output_tokens: 0, trace_blob: "", result_text: "", validation_result: undefined };
+  item.status = "resolving";
+  tasks.push(task);
+  project.state = "working";
+}
