@@ -105,15 +105,19 @@ export default function NeedsYou() {
   const inbox = usePoll(() => api.inbox({ kind, scope, project_id: projectId, q: query, offset, limit: PAGE_SIZE }), [kind, scope, projectId, query, offset]);
   const selected = inbox.data?.items.find(item => item.id === selectedId) ?? inbox.data?.items[0];
   const total = inbox.data?.total ?? 0;
+  useEffect(() => {
+    if (inbox.data && !inbox.failed && offset > 0 && offset >= inbox.data.total) {
+      setOffset(Math.max(0, Math.floor((inbox.data.total - 1) / PAGE_SIZE) * PAGE_SIZE));
+      setSelectedId("");
+    }
+  }, [inbox.data, inbox.failed, offset]);
   const resetPage = () => { setOffset(0); setSelectedId(""); };
   useEffect(() => { setOffset(0); setSelectedId(""); }, [projectId]);
   const projectName = overview.data?.projects.find(project => project.id === projectId)?.name
     ?? inbox.data?.items[0]?.project_name ?? "Selected project";
   const unfiltered = kind === "all" && scope === "all" && !query && !projectId;
   const refresh = () => {
-    // Refill a shortened last page after resolving its final item.
-    if (inbox.data?.items.length === 1 && offset > 0) setOffset(Math.max(0, offset - PAGE_SIZE));
-    else void inbox.refresh();
+    void inbox.refresh();
     void overview.refresh();
     setSelectedId("");
   };

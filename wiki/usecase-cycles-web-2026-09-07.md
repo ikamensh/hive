@@ -18,3 +18,17 @@ The initial browser baseline was 34 passing tests.
 - Visual check: viewed `/tmp/hive-usecase-cycles/screenshots/inbox-preserved-draft.png`.
 - Scope: drafts survive selection/filter/pagination within the current inbox
   visit; they are not persisted across page reloads.
+
+## Cycle 17 — Share a pageable inbox with another operator
+
+- Scenario: open item 13 on page two; another operator resolves that item, then
+  empties the inbox, then a new question arrives.
+- Reproduction: `cd web && npm test -- --grep 'another operator resolves'`
+  failed after polling: the page stayed at the now-invalid offset instead of
+  displaying the 12 remaining items.
+- Cause/fix: page recovery ran only after local actions. Fresh observations now
+  clamp the offset to the last available page, including zero remaining items.
+  This replaces the special case for local resolution.
+- Verification: the same browser journey passed through all three remote state
+  changes (12.4 seconds). Viewed `inbox-page-recovery.png` under the screenshot
+  directory above; remaining work and pagination are visible.

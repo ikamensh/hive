@@ -73,6 +73,23 @@ test("inbox keeps separate answer drafts while switching questions and filters",
   await expect(page.getByLabel("Your answer")).toHaveValue("Keep the original spelling.");
 });
 
+// Another operator can resolve the last page without an action in this tab.
+test("inbox returns to an available page when another operator resolves its last items", async ({ page }) => {
+  const state = await setup(page, Array.from({ length: 13 }, (_, index) => question(index)));
+  await page.goto("/needs-you");
+  await page.getByRole("button", { name: "Next inbox page" }).click();
+  await expect(page.getByText("13–13 of 13 items")).toBeVisible();
+  state.items = state.items.slice(0, 12);
+  await expect(page.getByText("1–12 of 12 items")).toBeVisible({ timeout: 7000 });
+  await expect(page.getByRole("heading", { name: "Decision 0", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Previous inbox page" })).toBeDisabled();
+  await capture(page, "inbox-page-recovery");
+  state.items = [];
+  await expect(page.getByRole("heading", { name: "You're all caught up" })).toBeVisible({ timeout: 7000 });
+  state.items = [question(20)];
+  await expect(page.getByRole("heading", { name: "Decision 20", exact: true })).toBeVisible({ timeout: 7000 });
+});
+
 // The real page and API client preserve form input on failures, expose all pages,
 // and route mutations to the correct question even when the selected row changes.
 test("inbox pages, filters, and resolves a selected question", async ({ page }) => {
