@@ -4,8 +4,11 @@ The acceptance criteria in `metrics.md` remain the completion contract. Seven of
 ten items have landed, including the independently verified quality/checkpoint
 repair. Muse completed only the dashboard amendment; its fresh Muse reviewer
 correctly rejected the missing frontend. Hive automatically returned to Astra
-after the synthetic cooldown expired and is repairing the full dashboard while
-preserving the API fix. Scaling, packaging and the contract challenge remain queued.
+after the synthetic cooldown expired and built the full dashboard while
+preserving the API fix. Independent production UI/API checks pass, but its fresh
+Opus review hit the Claude SDK's 1 MiB transport limit and parked visibly.
+That runtime/retry path is being repaired. Scaling, packaging and the contract
+challenge remain queued.
 
 ## Install and evidence
 
@@ -396,6 +399,35 @@ preserving the API fix. Scaling, packaging and the contract challenge remain que
     `last review: REJECT` and `last validation: PASS` appear together. This
     client-only change requires no chief interruption. Evidence:
     `evidence/plan-review-visibility/`.
+
+42. Automatic Astra repair `ca9a2cb0d328` completed in 1673.03 seconds and pushed
+    the full dashboard at `a434f7b44603ba83408fe69f889dedbba2e5e654`, preserving
+    Muse's API fix. A separate exact-SHA clone passes `make setup`, `make check`
+    (434 Python tests, four real-browser tests, frontend formatting/types/build)
+    and the independent raw-JSON/API/continuation suite. Root used the documented
+    production server at port 64610: step, advance, invalid input, recipe edits
+    preserving captured shots, pending demand, scheduled cooling, run/pause/speed,
+    real checkpoint download/reset/upload, scenario selection, metrics and events.
+    Desktop and narrow screenshots were seen. The downloaded baseline save has
+    exactly the same physical state, RNG and 485 events as an uninterrupted run;
+    the paced cooling case likewise matches all 383 events and the independently
+    calculated 376-part output. Browser console errors/warnings were absent.
+    Fresh Opus review `0512e87fbdeb` started at `1788653054.0219588`, then failed
+    after 142.07 seconds on `CLIJSONDecodeError: JSON message exceeded maximum
+    buffer size of 1048576 bytes`. Its verdict is NONE and it has no validation.
+    The dashboard remains unlanded; product checks do not substitute for review.
+    Evidence: `evidence/ui-independent/runs/a434f7b44603ba83408fe69f889dedbba2e5e654/`,
+    `evidence/item6-independent/runs/a434f7b44603ba83408fe69f889dedbba2e5e654/`,
+    and `evidence/dashboard-review-buffer-failure/`.
+
+43. Hive `e2c81fa` classifies the exact Claude SDK buffer diagnostic as a runtime
+    failure. Future occurrences preserve the failed review, queue a fresh review
+    on the retained checkout using another configured provider, and create an
+    actionable runtime repair. They do not fabricate quota exhaustion or treat
+    a transport failure as a product rejection. Both Astra and free Muse fallback
+    cases pass integration regressions; 71 relevant tests, lint and wheel build
+    pass. A separate Kodo transport fix and official retry of the already parked
+    historical attempt are pending; no old task record was rewritten.
 
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
 for all seven landed increments and must continue to hold for every later item. H7
