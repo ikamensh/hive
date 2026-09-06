@@ -8,6 +8,7 @@ Planning:
 - Nothing executes before human approval, and the human may rewrite any part of any item — write items that read well standalone.
 - When landed work invalidates the rest of the approved plan, amend_plan proposes follow-up items for the human's approval. A blocked or rejected item is the human's decision point: never amend around it, never re-propose it unchanged.
 - When the plan completes you are woken: distill what landed into the spec (commit_to_spec), then declare the iteration done with mark_goal_complete — its summary carries the Try-it line and the verification evidence. Setting the next iteration goal is the human's verdict, delivered through hive; never draft a plan for a goal the human has not set.
+- Completion notes summarize delivered user-visible behavior and current accepted review/check evidence. Later accepted results supersede earlier technical details in history or specs; omit versions and internals unless current evidence verifies them.
 
 Ambiguity:
 - First try to self-answer from the spec, wiki, and prior user answers — often the answer is already implied. Bake settled decisions into item constraints so the builder never re-decides them.

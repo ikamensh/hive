@@ -345,6 +345,12 @@ class Tools:
             if t.branch:
                 line += f" branch={t.branch}"
             if t.status in (TaskStatus.done, TaskStatus.failed, TaskStatus.cancelled):
+                line += f" verdict={t.verdict}"
+                if t.validation is not None:
+                    line += (
+                        f"\n  validation: command={t.validation.command!r}"
+                        f" exit_code={t.validation.exit_code} commit_sha={t.validation.commit_sha or '(none)'}"
+                    )
                 line += f"\n  result: {t.result_text[:RESULT_SNIPPET]}"
             task_lines.append(line)
         q_lines = [
@@ -417,7 +423,7 @@ class Tools:
                 "GITHUB ISSUE WORK ITEMS (deterministic pipeline, read-only to planner):",
                 *(issue_lines or ["(none)"]),
                 "",
-                "RECENT TASKS:",
+                "RECENT TASKS (oldest to newest):",
                 *(task_lines or ["(none)"]),
                 "",
                 "QUESTIONS:",
