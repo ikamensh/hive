@@ -1,4 +1,5 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
+import { NewWorkButton } from "../work/NewWork";
 import { api } from "../../api";
 import { Markdown } from "../../components/shared";
 import type { PlanItem, PlanItemStatus, PlanPayload, Project } from "../../types";
@@ -253,69 +254,18 @@ function AddItemForm({ planId, onAdded }: { planId: string; onAdded: () => void 
   );
 }
 
-/** Submission is the default; drafting tools remain optional. */
-function PlanStarter({
-  projectId,
-  onChanged,
-}: {
+/** Goal exploration and prepared documents share the same reviewed execution. */
+function PlanStarter({ projectId, onChanged }: {
   projectId: string;
   onChanged: (planId?: string) => void;
 }) {
-  const [goal, setGoal] = useState("");
-  const [busy, setBusy] = useState<"" | "propose" | "write">("");
-  const [error, setError] = useState("");
-  const propose = async () => {
-    if (busy) return;
-    setBusy("propose");
-    setError("");
-    try {
-      await api.proposePlan(projectId);
-      onChanged();
-    } catch (error) {
-      setError(String(error));
-    } finally {
-      setBusy("");
-    }
-  };
-  const write = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!goal.trim() || busy) return;
-    setBusy("write");
-    setError("");
-    try {
-      const accepted = await api.createPlan(projectId, goal.trim());
-      onChanged(accepted.plan.id);
-    } catch (error) {
-      setError(String(error));
-    } finally {
-      setBusy("");
-    }
-  };
-  return (
-    <div className="plan-starter">
-      <PlanSubmission projectId={projectId} onAccepted={onChanged} />
-      <details className="project-disclosure">
-        <summary>Other ways to prepare a plan</summary>
-        <div className="plan-starter-actions">
-          <button type="button" onClick={propose} disabled={busy !== ""} aria-busy={busy === "propose"}>
-            <i className="ti ti-sparkles" aria-hidden />
-            {busy === "propose" ? "asking hive…" : "have Hive propose a plan"}
-          </button>
-          <form className="plan-starter-manual" onSubmit={write}>
-            <input
-              value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-              placeholder="or state the iteration goal and write it yourself…"
-            />
-            <button type="submit" className="ghost" disabled={!goal.trim() || busy !== ""}>
-              start empty plan
-            </button>
-          </form>
-        </div>
-        {error && <p className="form-error" role="alert">{error}</p>}
-      </details>
+  return <div className="plan-starter">
+    <div className="workspace-notice">
+      <div><strong>Have a goal rather than a plan?</strong><p>Hive can inspect your project and help define the next useful step.</p></div>
+      <NewWorkButton projectId={projectId} defaultMode="design" label="Design with AI" onStarted={() => onChanged()} />
     </div>
-  );
+    <PlanSubmission projectId={projectId} onAccepted={onChanged} />
+  </div>;
 }
 
 function PlanValidation({ project, onChanged }: { project: Project; onChanged: () => void }) {
@@ -352,13 +302,16 @@ export function PlanPanel({
   project,
   payload,
   onChanged,
+  selectedItemId = "",
 }: {
   project: Project;
   payload: PlanPayload | null | undefined;
   onChanged: (planId?: string) => void;
+  selectedItemId?: string;
 }) {
   const projectId = project.id;
-  const [expandedId, setExpandedId] = useState("");
+  const [expandedId, setExpandedId] = useState(selectedItemId);
+  useEffect(() => { if (selectedItemId) setExpandedId(selectedItemId); }, [selectedItemId]);
   const [view, setView] = useState<"items" | "results" | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");

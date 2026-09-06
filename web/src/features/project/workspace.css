@@ -1,0 +1,397 @@
+/* Project surfaces share the application shell, with bounded summaries and full detail on tabs. */
+.project-workspace {
+  max-width: 1240px;
+  margin: 0 auto;
+}
+.workspace-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+.workspace-heading {
+  min-width: 0;
+}
+.workspace-heading h1 {
+  font-size: 28px;
+  margin: 6px 0 8px;
+  letter-spacing: -0.5px;
+}
+.workspace-heading p {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.workspace-breadcrumb {
+  color: var(--ink-dim);
+  font-size: 13px;
+  text-decoration: none;
+}
+.workspace-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.workspace-actions button,
+.workspace-actions a,
+.new-work-dialog button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.workspace-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  border-block: 1px solid var(--line, #dde2ea);
+  padding: 14px 0;
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+.workspace-status p {
+  margin: 0;
+}
+.workspace-tabs {
+  display: flex;
+  gap: 24px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line, #dde2ea);
+  margin-bottom: 24px;
+}
+.workspace-tabs a {
+  white-space: nowrap;
+  padding: 14px 0;
+  color: var(--ink-dim);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  font-size: 14px;
+}
+.workspace-tabs a[aria-current="page"] {
+  color: var(--accent, #2563eb);
+  border-color: currentColor;
+  font-weight: 600;
+}
+.project-content {
+  min-width: 0;
+}
+.project-content h2 {
+  font-size: 19px;
+  margin: 0 0 12px;
+}
+.project-content h3 {
+  font-size: 16px;
+}
+.project-content .plan-panel {
+  border: 1px solid var(--line, #dde2ea);
+  border-radius: 8px;
+  box-shadow: none;
+  padding: 24px;
+  background: var(--panel, #fff);
+}
+.project-content .plan-submission {
+  max-width: none;
+}
+.project-content .plan-head {
+  margin-bottom: 20px;
+}
+.project-content .plan-head h3 {
+  font-size: 21px;
+  line-height: 1.35;
+}
+.project-content .plan-goal > i {
+  display: none;
+}
+.project-content .plan-item {
+  box-shadow: none;
+  border-radius: 4px;
+}
+.project-content .plan-navigation {
+  gap: 8px;
+  padding-bottom: 18px;
+  flex-wrap: wrap;
+}
+.project-content .plan-validation {
+  margin-bottom: 18px;
+}
+.project-content .plan-starter-actions {
+  margin: 12px 0;
+}
+.workspace-notice {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  border: 1px solid var(--line, #dde2ea);
+  background: var(--panel, #fff);
+  border-radius: 7px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  font-size: 14px;
+}
+.workspace-notice p {
+  margin: 4px 0 0;
+  color: var(--ink-dim);
+}
+.workspace-attention {
+  margin-bottom: 24px;
+}
+.workspace-attention header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.workspace-attention ul {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.workspace-attention li {
+  padding: 10px 0;
+  border-top: 1px solid var(--line, #dde2ea);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.workspace-section {
+  margin-top: 28px;
+}
+.workspace-empty {
+  padding: 32px;
+  border: 1px dashed var(--line, #dde2ea);
+  border-radius: 8px;
+  text-align: center;
+}
+.workspace-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--line, #dde2ea);
+  border-radius: 8px;
+  background: var(--panel, #fff);
+}
+.workspace-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 14px;
+}
+.workspace-table th {
+  color: var(--ink-dim);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--panel-2, #f8fafc);
+}
+.workspace-table th,
+.workspace-table td {
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--line, #dde2ea);
+  vertical-align: middle;
+}
+.workspace-table tr:last-child td {
+  border-bottom: 0;
+}
+.workspace-table td:first-child {
+  min-width: 220px;
+}
+.workspace-table td a {
+  text-decoration: none;
+  font-weight: 600;
+}
+.workspace-table td small {
+  display: block;
+  margin-top: 5px;
+  color: var(--ink-dim);
+  font-size: 12px;
+}
+.workspace-filter {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.workspace-filter input {
+  max-width: 380px;
+}
+.project-content .setup-panel {
+  box-shadow: none;
+  border-radius: 8px;
+}
+.project-content .setup-form {
+  max-width: 860px;
+}
+.project-content .intake-thread {
+  max-height: 500px;
+  overflow: auto;
+}
+.project-content .intake-actions textarea {
+  width: 100%;
+}
+.project-content .setup-actions {
+  flex-wrap: wrap;
+}
+.project-content .intake-progress {
+  padding: 14px 18px;
+  border-left: 3px solid var(--accent, #2563eb);
+  background: var(--panel-2, #f8fafc);
+  margin-block: 16px;
+}
+.new-work-dialog {
+  color: var(--ink, #172033);
+  background: var(--panel, #fff);
+  border: 1px solid var(--line, #dde2ea);
+  border-radius: 12px;
+  padding: 28px;
+  width: min(600px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  overflow: auto;
+  box-shadow: 0 20px 80px #0f172a33;
+}
+.new-work-dialog::backdrop {
+  background: #0f172a77;
+}
+.new-work-dialog > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.new-work-dialog h2 {
+  font-size: 22px;
+  margin: 0 0 5px;
+}
+.new-work-dialog header p {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: 14px;
+}
+.new-work-dialog form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.new-work-dialog label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: var(--ink, #172033);
+  font-size: 13px;
+  font-weight: 500;
+}
+.new-work-dialog input,
+.new-work-dialog select,
+.new-work-dialog textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 14px;
+  font-weight: 400;
+}
+.new-work-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--line, #dde2ea);
+  padding-top: 18px;
+}
+.work-entry-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.work-entry-options button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  gap: 8px;
+  color: var(--ink, #172033);
+  background: transparent;
+  border: 1px solid var(--line, #dde2ea);
+  border-radius: 8px;
+  padding: 16px;
+}
+.work-entry-options button.selected {
+  border-color: var(--accent, #2563eb);
+  background: #2563eb08;
+  color: var(--accent, #2563eb);
+}
+.work-entry-options strong {
+  font-size: 14px;
+}
+.work-entry-options span {
+  color: var(--ink-dim);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+.work-entry-note {
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+  color: var(--ink-dim);
+}
+@media (max-width: 720px) {
+  .workspace-header {
+    flex-direction: column;
+    gap: 16px;
+  }
+  .workspace-heading h1 {
+    font-size: 25px;
+  }
+  .workspace-actions {
+    width: 100%;
+  }
+  .workspace-tabs {
+    gap: 22px;
+  }
+  .project-content .plan-panel {
+    padding: 16px;
+  }
+  .workspace-notice {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .new-work-dialog {
+    padding: 20px;
+  }
+  .work-entry-options {
+    gap: 8px;
+  }
+  .work-entry-options button {
+    padding: 12px;
+  }
+  .workspace-table th,
+  .workspace-table td {
+    padding: 12px;
+  }
+}
+
+.new-work-dialog select {
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--ink);
+}
+.new-work-dialog .icon-button {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 5px;
+  align-self: flex-start;
+  justify-content: center;
+}
+.new-work-dialog footer {
+  position: sticky;
+  bottom: -28px;
+  background: var(--panel);
+  padding-bottom: 8px;
+}
+@media (max-width: 720px) {
+  .new-work-dialog footer {
+    bottom: -20px;
+  }
+}

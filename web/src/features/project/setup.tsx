@@ -138,16 +138,18 @@ export function ProjectSetup({
   return (
     <section className="setup-panel reveal">
       <header className="setup-head">
-        <h2>{intakeDone ? "Intake complete" : draft ? "Configure intake" : "Project intake"}</h2>
+        <h2>{intakeDone ? "Agreed project brief" : draft ? "Connect your project" : "Design with Hive"}</h2>
         <p className="muted">
           {draft
-            ? "Choose a repo, or create one for this project, then start the scout."
-            : "The scout aligns mission, next iteration, and assumptions before planning starts."}
+            ? "Choose an existing repository or create one for this project."
+            : "Shape the goal, review assumptions, and agree on a useful next step."}
         </p>
       </header>
       <form className="setup-form" onSubmit={start}>
+        <details open={draft} className="project-disclosure">
+        <summary>Connected repositories</summary>
         <label>
-          spec repo
+          Primary repository
           <RepoUrlInput
             value={specRepo}
             onChange={setSpecRepo}
@@ -155,7 +157,7 @@ export function ProjectSetup({
           />
         </label>
         <label>
-          member repos
+          Other repositories
           <RepoListEditor repos={memberRepos} onChange={setMemberRepos} />
         </label>
         {draft && (
@@ -169,28 +171,32 @@ export function ProjectSetup({
             </button>
           </div>
         )}
+        <button type="button" className="ghost" onClick={save} disabled={busy}>Save repositories</button>
+        </details>
         {!conversation && (
           availableScouts.length > 0 ? (
             <p className="scout-status scout-ready">
-              scout ready — intake will run on {scoutLabel(availableScouts[0])}
+              Ready to research with {scoutLabel(availableScouts[0])}.
             </p>
           ) : (
             <p className="scout-status scout-blocked">
-              no eligible scout available — check project agent settings or <Link to="/machines">machines</Link>
+              No eligible agent is available. Check project settings or <Link to="/capacity">capacity</Link>.
             </p>
           )
         )}
         {error && <p className="form-error">{error}</p>}
         {conversation && (
           <div className={`intake-brief intake-${conversation.status}`}>
+            {intakeRunning && <p className="intake-progress" role="status">{conversation.status === "finalizing"
+              ? "Saving the agreed specification. Hive will prepare a plan when this finishes."
+              : "Hive is inspecting the repository and preparing the next response. You can leave this page and return later."}</p>}
             <header>
               <span className={`chip chip-${conversation.status}`}>{conversation.status}</span>
               <span className="muted">{conversation.backend} {conversation.model}</span>
             </header>
             {intakeFailed && (
               <p className="form-error">
-                Intake with {scoutLabel(conversation)} could not complete. Retry below, or probe
-                or fix an agent in <Link to="/machines">machines</Link>.
+                Design with {scoutLabel(conversation)} could not complete. Retry below or repair the agent in <Link to="/capacity">Capacity</Link>.
               </p>
             )}
             {transcript.length > 0 ? (
@@ -232,15 +238,15 @@ export function ProjectSetup({
                     value={intakeMessage}
                     onChange={(e) => setIntakeMessage(e.target.value)}
                     rows={4}
-                    placeholder="Answer or correct the scout..."
+                    placeholder="Answer a question, correct an assumption, or refine the goal…"
                     disabled={busy || intakeRunning}
                   />
                   <div className="setup-actions">
                     <button type="button" className="ghost" onClick={() => sendConversation("message")} disabled={busy || intakeRunning || !intakeMessage.trim()}>
-                      send answer
+                      Send message
                     </button>
                     <button type="button" className="ghost" onClick={() => sendConversation("proceed")} disabled={busy || intakeRunning}>
-                      proceed with assumptions
+                      Continue with assumptions
                     </button>
                   </div>
                 </div>
@@ -248,26 +254,23 @@ export function ProjectSetup({
             )}
           </div>
         )}
-        <div className="setup-actions">
-          <button type="button" className="ghost" onClick={save} disabled={busy}>
-            {busy ? "saving..." : "save"}
-          </button>
+        {!conversation && <div className="setup-actions">
           <button
             type="submit"
             disabled={busy || !specRepo.trim() || intakeRunning || intakeDone || Boolean(conversation)}
           >
-            {busy ? "starting..." : intakeFailed ? "intake failed" : conversation ? "intake started" : "start intake"}
+            {busy ? "Starting…" : "Start designing"}
           </button>
-        </div>
-        <div className="setup-actions">
+        </div>}
+        {conversation && !intakeDone && !intakeFailed && <div className="setup-actions">
           <button
             type="button"
             onClick={finalizeIntake}
             disabled={busy || intakeRunning || !specRepo.trim()}
           >
-            approve and finalize
+            Approve brief &amp; prepare plan
           </button>
-        </div>
+        </div>}
       </form>
     </section>
   );
