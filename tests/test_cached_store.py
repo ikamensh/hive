@@ -105,6 +105,28 @@ def test_failed_backend_write_raises_and_leaves_memory_unchanged():
     assert cached.get(Project, project.id).name == "p"
 
 
+def test_failed_hydration_is_retried_without_hiding_durable_documents():
+    """A temporary read failure must not mark an empty collection as loaded."""
+    class RecoveringStore(MemoryStore):
+        fail = True
+
+        def raw_docs(self, collection):
+            if self.fail:
+                raise ConnectionError("backend down")
+            return super().raw_docs(collection)
+
+    inner = RecoveringStore()
+    project = inner.put(Project(name="existing", spec_repo="s"))
+    cached = CachedStore(inner)
+
+    with pytest.raises(ConnectionError, match="backend down"):
+        cached.list(Project)
+    inner.fail = False
+
+    assert cached.get(Project, project.id) == project
+    assert cached.list(Project) == [project]
+
+
 def test_leases_pass_through_so_second_chief_is_fenced():
     inner = MemoryStore()
     cached = CachedStore(inner)

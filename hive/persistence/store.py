@@ -536,9 +536,9 @@ class CachedStore(MemoryStore):
 
     def _collection(self, collection: str) -> dict[str, dict]:
         if collection not in self._hydrated:
+            rows = {raw["id"]: raw for raw in self.inner.raw_docs(collection)}
+            self._data[collection] = rows
             self._hydrated.add(collection)
-            for raw in self.inner.raw_docs(collection):
-                self._data[collection][raw["id"]] = raw
         return self._data[collection]
 
     def put(self, obj: M) -> M:
