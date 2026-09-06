@@ -215,6 +215,7 @@ class IntakeMessage(BaseModel):
 
 class IntakeStart(BaseModel):
     backend: str = ""  # optional: pin the trusted scout (else best available is chosen)
+    goal: str = ""
 
 
 class ProjectRepoCreate(BaseModel):
@@ -780,7 +781,7 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         ctx: AuthContext = Depends(editor),
     ):
         project = require_project(project_id, ctx)
-        return intake.start(store, project, body.backend.strip()).model_dump()
+        return intake.start(store, project, body.backend.strip(), goal=body.goal.strip()).model_dump()
 
     @app.post("/api/projects/{project_id}/intake/finalize")
     def finalize_intake(project_id: str, ctx: AuthContext = Depends(editor)):

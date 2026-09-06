@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from threading import RLock
 
 from fastapi import HTTPException
 
@@ -150,8 +151,12 @@ def _carried_answers(store, project: Project) -> list[dict]:
     return answers[-6:]
 
 
-def create_conversation(store, project: Project, prefer_backend: str = "") -> AgentConversation:
+def create_conversation(store, project: Project, prefer_backend: str = "", *, goal: str = "") -> AgentConversation:
     backend, model, _runner_id = scout_capacity(store, project, prefer_backend)
+    transcript = _carried_answers(store, project)
+    if goal:
+        transcript = [turn for turn in transcript if turn.get("kind") != "goal"]
+        transcript.append({"role": "user", "text": goal, "kind": "goal"})
     conversation = store.put(
         AgentConversation(
             workspace_id=project.workspace_id,
@@ -160,16 +165,30 @@ def create_conversation(store, project: Project, prefer_backend: str = "") -> Ag
             backend=backend,
             model=model,
             status=ConversationStatus.open,
-            transcript=_carried_answers(store, project),
+            transcript=transcript,
         )
     )
     project.intake_conversation_id = conversation.id
+    if goal:
+        project.pending_iteration_goal = goal
+        project.goal_complete = False
+        project.goal_complete_note = ""
     project.state = ProjectState.intake
     store.put(project)
     return conversation
 
 
-def start(store, project: Project, prefer_backend: str = "") -> AgentConversation:
+_start_lock = RLock()
+
+
+def start(store, project: Project, prefer_backend: str = "", *, goal: str = "") -> AgentConversation:
+    """Serialize start requests so a retried handoff cannot queue two scouts."""
+    with _start_lock:
+        project = store.get(Project, project.id)
+        return _start(store, project, prefer_backend, goal=goal.strip())
+
+
+def _start(store, project: Project, prefer_backend: str = "", *, goal: str = "") -> AgentConversation:
     """(Re)start intake and return its conversation.
 
     An active conversation owns intake — returned unchanged, except: one that
@@ -187,6 +206,9 @@ def start(store, project: Project, prefer_backend: str = "") -> AgentConversatio
             ConversationStatus.running,
             ConversationStatus.finalizing,
         ):
+            if goal and not any(turn.get("kind") == "goal" and turn.get("text") == goal
+                                for turn in existing.transcript):
+                raise HTTPException(409, "A design conversation is already active. Continue it before starting a different goal.")
             live_turns = [
                 t
                 for t in store.list(
@@ -219,7 +241,7 @@ def start(store, project: Project, prefer_backend: str = "") -> AgentConversatio
                 return store.update(AgentConversation, existing.id, repin)
             else:
                 return existing
-    conversation = create_conversation(store, project, prefer_backend)
+    conversation = create_conversation(store, project, prefer_backend, goal=goal)
     queue_turn(store, project, conversation, "initial")
     return store.get(AgentConversation, conversation.id)
 
@@ -314,7 +336,9 @@ def prompt(
             if project.initial_spec.strip()
             else []
         )
-        carried = [t["text"].strip() for t in conversation.transcript if t.get("role") == "user"]
+        current_goal = next((t["text"] for t in reversed(conversation.transcript) if t.get("kind") == "goal"), "")
+        carried = [t["text"].strip() for t in conversation.transcript
+                   if t.get("role") == "user" and t.get("kind") != "goal"]
         prior_answers = (
             [
                 "The user already answered these questions in an earlier intake round — "
@@ -342,6 +366,8 @@ def prompt(
                 f"Member repos: {', '.join(project.member_repos) or '(none)'}",
                 "",
                 *handed_spec,
+                *(["Current goal from the user (takes precedence over earlier iteration goals):", current_goal, ""]
+                  if current_goal else []),
                 *prior_answers,
                 "Org context:",
                 org_context or "(none)",
