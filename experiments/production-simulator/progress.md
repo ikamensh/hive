@@ -571,12 +571,37 @@ challenge remains queued.
     ten-item timing/intervention assessment is frozen separately from this
     follow-up. Evidence: `evidence/completion-summary-correction/`.
 
+50. Follow-up review `2608b59867c4` accepted at `1788659968.516134`
+    after 376.08 seconds. In addition to checking the corrected summaries, Opus
+    found and repaired the same stale version in two locations of `docs/sources.md`.
+    Reviewed `65fb8af2f1bd0a0b914791649fb496f6e8b007eb` passes the 508 Python /
+    ten browser gate and equals landing `1c6f827fc4c8086f57c9b7bc350620f6987600ea`
+    at tree `3df358b3f4822887752340f3d25c4f7759c365fc`. Every product/build/test
+    byte remains identical to the accepted game; only documentation changed.
+    The actual free-Muse completion then received explicit ACCEPT and the exact
+    `65fb8af` validation SHA. It committed accurate current notes at
+    `642bd2fff3b50feb7e272f992ecbd0884459ed00` and marked the follow-up complete.
+    Eleven independent completion checks pass; a separate documentation audit
+    verifies format 1 / engine 3, valid zero-through-four presses, preserved
+    ten-item history and properly scoped timing. The old engine-2 claim is only
+    mentioned as a historical corrected defect. System-prompt adoption is bound
+    to source/runtime, while native persisted evidence directly proves the
+    current user context and free model; no stronger native-system capture is
+    claimed. The original plan's 27 task records remain unchanged. Both plans
+    are complete; no work remains queued or running. Stopped the read-only
+    observer cleanly and left chief 97503 plus the verified simulator on port
+    60445 available. The clean observer checkout is fast-forwarded to current
+    main. Final acceptance and limitations are in `results.md`,
+    `evidence/final-audit/analysis/1788658726673438000/`,
+    `evidence/completion-summary-correction/`, and
+    `evidence/docs-correction-independent/runs/892e7fc71a1d5bbec6c4ef60a5ddd93905d10fb3/REPORT.md`.
+
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
 for all ten original landed increments and must continue to hold for every later item. H7
 has substantive Astra, Fable, and Opus work. H8–H9 now have a labeled live fallback
 dispatch, natural expiry, and return to preferred capacity with preserved partial
 work and the recovered increment's reviewed landing. All original simulator product criteria now have independent acceptance evidence;
-the separate completion-note correction remains in progress. No spontaneous
+the separate completion-note correction is also reviewed, landed and independently verified. No spontaneous
 subscription exhaustion has been observed or claimed.
 
 ## User refinement: Muse in every role
