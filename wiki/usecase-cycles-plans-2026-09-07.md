@@ -72,3 +72,37 @@ No live services, repositories or agents are changed by these scenarios.
   via HTTP. Kept as a regression for the concurrent-author property.
 - **Self-review:** The API already centralizes revision checks in submission;
   adding client-side concurrency machinery would duplicate that guarantee.
+
+## Cycle 10 — stop review, amend, retry and finish with partial delivery
+
+- **Scenario:** Build a CSV export; stop its delivered review; amend its Unicode
+  and quoting requirements; cancel the later PDF item; retry CSV with its
+  existing checkout; finish build/review with validation evidence; read results.
+- **Initial observation:** `uv run pytest tests/test_plan_usecase_cycles.py::test_stop_review_amend_retry_and_finish_with_a_partial_receipt -q`
+  → **1 passed**. Cancellation parks the item, retry retains the checkout and
+  uses a fresh session, and the completed receipt reports partial delivery.
+- **Decision:** No production change. The existing explicit retry is the right
+  approval action for amended parked work. Its prior cancelled review remains
+  visible as an attempt, rather than being rewritten into a successful attempt.
+- **Verification:** HTTP checks cover `blocked` during interruption, same-runner
+  checkout preservation, the amended instructions, all four attempt statuses,
+  revision sequence `1/1/2/2`, exact validated and merged SHAs, one merged item
+  plus one cancellation with its reason, and no invented project-goal success.
+- **Self-review:** The existing attempt ledger supplies all recovery and result
+  facts. An additional retry state or generated summary would add complexity.
+
+## Combined verification and limits
+
+`uv run pytest tests/test_plan_usecase_cycles.py tests/test_plans.py
+tests/test_plan_artifacts.py tests/test_plan_document.py
+tests/test_plan_document_format.py tests/test_plan_edit_atomicity.py
+tests/test_plan_results.py tests/test_plan_retry.py tests/test_plan_readiness.py
+tests/test_plan_validation.py tests/test_plan_wait.py
+tests/test_plan_artifact_demo.py -q` → **132 passed in 20.62s**. Nine existing
+Starlette warnings concern passing timeouts to its test client.
+
+All five new workflows pass, including an unchanged item update retaining its
+approval/revision. The three fixes change shared plan behavior only; no API-route,
+frontend, LLM-prompt, storage-schema or external-service changes were needed.
+The combined suite includes the local Git artifact demonstration, but these
+cycles do not prove real-provider output quality or live GitHub permissions.

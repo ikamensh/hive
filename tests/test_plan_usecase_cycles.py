@@ -27,6 +27,12 @@ def test_editing_queued_instructions_waits_for_renewed_approval(app, monkeypatch
     client.post(f"/api/plans/{plan_id}/approve").raise_for_status()
     runner = _register_usable_runner(client, backend="codex")
 
+    unchanged = client.patch(f"/api/plan-items/{second}", json={
+        "title": "Filter exports",
+    }).raise_for_status().json()
+    assert unchanged["status"] == "queued"
+    assert client.get(f"/api/plans/{plan_id}").raise_for_status().json()["plan"]["revision"] == 1
+
     edited = client.patch(f"/api/plan-items/{second}", json={
         "constraints": "Export only records matching the selected date range.",
     }).raise_for_status().json()
@@ -145,3 +151,75 @@ def test_concurrent_multi_repository_amendment_preserves_accepted_work(app):
     exported = parse_plan_document(current_export)
     assert exported["context_documents"] == author_a["context_documents"]
     assert exported["repo_baselines"] == author_a["repo_baselines"]
+
+
+def test_stop_review_amend_retry_and_finish_with_a_partial_receipt(app, monkeypatch):
+    """An operator can stop a review, revise the requirement, preserve the
+    checkout on retry, and obtain an honest receipt after deferring later work."""
+    from test_api_e2e import _pump, _register_usable_runner
+    from test_cli import RUNNER_HEADERS
+
+    client, store = app
+    monkeypatch.setattr("hive.api.SpecRepo", FakeSpecRepo)
+    monkeypatch.setattr("hive.api.merge_branch", lambda *args, **kwargs: "d" * 40)
+    monkeypatch.setattr("hive.api.delete_branch", lambda *args, **kwargs: None)
+    project = _api_project(client)
+    client.patch(f"/api/projects/{project}", json={
+        "included_only": True, "testing_auto": False,
+        "build_backend": "codex", "review_backend": "codex",
+        "validation_command": "python -m pytest tests/test_exports.py",
+    }).raise_for_status()
+    created = client.post(f"/api/projects/{project}/plan", json={
+        "goal": "Provide downloadable exports",
+        "items": [{"title": "CSV export"}, {"title": "PDF export"}],
+    }).raise_for_status().json()
+    plan_id = created["plan"]["id"]
+    csv_item, pdf_item = created["items"]
+    client.post(f"/api/plans/{plan_id}/approve").raise_for_status()
+    runner = _register_usable_runner(client, backend="codex")
+
+    def poll():
+        _pump(client, store)
+        return client.post(f"/api/runners/{runner}/poll", headers=RUNNER_HEADERS).raise_for_status().json()["task"]
+
+    def report(task, **body):
+        return client.post(f"/api/tasks/{task['id']}/result", headers=RUNNER_HEADERS,
+                           json=body).raise_for_status().json()
+
+    builder = poll()
+    report(builder, text="CSV export implemented.\nOUTCOME: FIXED", session_handle="build-1")
+    review = poll()
+    client.post(f"/api/tasks/{review['id']}/cancel").raise_for_status()
+    report(review, text="Stopped; preserve the existing CSV implementation.", cancelled=True)
+    blocked = client.get(f"/api/plans/{plan_id}/result").raise_for_status().json()
+    assert blocked["outcome"] == "blocked" and not blocked["terminal"]
+
+    client.patch(f"/api/plan-items/{csv_item['id']}", json={
+        "notes": "Include UTF-8 names and quote commas in CSV cells.",
+    }).raise_for_status()
+    client.post(f"/api/plan-items/{pdf_item['id']}/cancel", json={
+        "reason": "PDF output is deferred.",
+    }).raise_for_status()
+    client.post(f"/api/plan-items/{csv_item['id']}/retry").raise_for_status()
+    retry = poll()
+    assert retry["retry_of_task_id"] == review["id"]
+    assert retry["preserve_checkout"] and not retry["fresh_branch"]
+    assert retry["runner_id"] == runner and not retry["session_handle"]
+    assert "Include UTF-8 names" in retry["instructions"]
+    report(retry, text="Unicode and quoted CSV implemented.\nOUTCOME: FIXED")
+    final_review = poll()
+    report(final_review, text="Unicode and quoted CSV verified.\nREVIEW: ACCEPT", validation={
+        "command": "python -m pytest tests/test_exports.py", "exit_code": 0,
+        "output": "6 passed", "commit_sha": "e" * 40,
+    })
+
+    result = client.get(f"/api/plans/{plan_id}/result").raise_for_status().json()
+    assert result["terminal"] and result["outcome"] == "partial"
+    assert result["counts"] == {"total": 2, "done": 1, "cancelled": 1, "remaining": 0}
+    attempts = result["items"][0]["attempts"]
+    assert [attempt["status"] for attempt in attempts] == ["done", "cancelled", "done", "done"]
+    assert [attempt["plan_revision"] for attempt in attempts] == [1, 1, 2, 2]
+    assert attempts[-1]["validation"]["commit_sha"] == "e" * 40
+    assert result["items"][0]["merged_commit_sha"] == "d" * 40
+    assert result["items"][1]["parked_reason"] == "PDF output is deferred."
+    assert not client.get(f"/api/projects/{project}").raise_for_status().json()["project"]["goal_complete"]
