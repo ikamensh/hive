@@ -497,8 +497,40 @@ challenge remains queued.
     `evidence/review-process-cleanup/`, and
     `evidence/scaling-packaging-independent/runs/3245eb96d7dcda73b6d170ca33c86dfeafb0b48c/`.
 
+47. Packaging review `d016a753c9d9` accepted at `1788657481.838233`
+    after 461.11 seconds. It independently exercised 5 s packaging, the exact
+    minimum batch buffer and four presses with rejects/failures. Its first
+    `make check` found a browser-test race against the ten-seed calculation;
+    reviewer commit `78e9af3b1327459a05cbc71d0f265a5dc672209c` adds bounded
+    waits and verifies the rerun actually starts. Only browser tests changed.
+    The runner gate and a separate clean final-SHA setup/gate both pass 483
+    Python and eight browser tests. Main
+    `c543a792060db1ff8901c5b25e4a8130816dc9ec` has the identical reviewed tree
+    `5071185e3ec95ef2a6d3fdcbb04247f80a697910`. The baseline artifact is now
+    retrieved from the chief and joined to the exact completed native session.
+    Independent shipping checks cover 15 prewritten cases, 336 invariant
+    snapshots, and 55 deterministic/stochastic CLI samples with separate
+    interval arithmetic. The operation extension keeps the existing event
+    clock and shares a 45-line reservation/token seam across molding and
+    packaging; the engine remains a large explicit domain coordinator.
+    Separate actual HTTP suites verify strict input and complete active,
+    blocked, repair, RNG and checkpoint continuation state. Root operated the
+    real browser in headless Chromium because the Mac was locked, inspected
+    desktop/narrow screenshots, and exercised comparison, run/pause, and actual
+    checkpoint download/reset/upload. The downloaded 47 s checkpoint resumes
+    through CLI to a save exactly equal to the browser's 3600 s download,
+    including its journal: 366 molded good parts and 358 shipments. Keyboard
+    scrolling exposes all narrow-table columns; browser errors are absent.
+    All production bytes are unchanged by review, so these checks bind to the
+    final reviewed head. Hive automatically started game build `a5b246432997`
+    with Astra at `1788657486.149096`, 4.31 seconds after review completion and
+    2.31 seconds after recorded landing. Nine of ten items are landed. Evidence:
+    `evidence/packaging-landing-and-game-start.json`,
+    `evidence/scaling-packaging-independent/runs/78e9af3b1327459a05cbc71d0f265a5dc672209c/`,
+    builder run `manual-ui/`, and `evidence/packaging-api-independent/`.
+
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
-for all eight landed increments and must continue to hold for every later item. H7
+for all nine landed increments and must continue to hold for every later item. H7
 has substantive Astra, Fable, and Opus work. H8–H9 now have a labeled live fallback
 dispatch, natural expiry, and return to preferred capacity with preserved partial
 work and the recovered increment's reviewed landing. Full-simulator product criteria
