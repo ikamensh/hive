@@ -118,14 +118,26 @@ In MVP the only channel is the web UI inbox (user visits the page, sees work sta
 
 **Parity principle: the CLI supports everything the UI supports.** The web UI is the human's surface; the `hive` CLI is the agent's. Agents (and scripts) must be able to work hive fluently — create and review plans, answer questions, trigger runs, inspect state — without a browser, so every UI capability ships with its CLI verb in the same change. The check lives in the CLI tests (`tests/test_cli.py` replays whole loops CLI-side; feature tests add their commands).
 
-Screens, in priority order:
+The implemented screen map is defined in [UI redesign](ui-redesign.md) and
+[project workflow](project-launchpad.md):
 
-1. **Project list** — one row per project with the supervisor state badge: `intake`, `working (+current task)`, `blocked: questions (3)`, `blocked: resources (resumes 16:40)`, `blocked: infra`, `idle: goal complete`. The "is hive healthy" glance.
-2. **Project page** — dedicated intake panel for spec-mode projects that are not yet active (repo picker / create private repo, trusted-scout resource status, latest brief, material questions, answer/correction composer, proceed-with-assumptions, approve-and-finalize), then workstream board (running / blocked / parked / done per stream), the **inbox** (clarification questions answered in place — **free-text-first with the agent's proposed options as accelerators** — plus escalations and infra alerts), activity feed (tasks with outcome, cost, links to commits/PRs and full traces), and the toggles panel: autonomy (PR vs direct-push), CI auto-fix, auto testing, paused. Only knobs that change behavior earn a place here.
-3. **Resources page** — vault credentials, runners and status, quota estimates and cooldowns, spend today/this week.
-4. Deep trace inspection reuses kodo's JSONL viewer.
+1. **Overview** (`/`) — observed execution, work/machine/agent mapping, spare
+   usable runners, recorded spend and recent landed results.
+2. **Projects** (`/projects`) — searchable goals, state reasons, progress and
+   exact-plan actions. The project workspace (`/p/:id`) separates Work,
+   Conversation, Activity, History, Issues and Tests. New work starts from a
+   prepared plan or an AI design conversation; plan execution remains explicit.
+3. **Inbox** (`/needs-you`) — pageable questions, human tasks, plan approvals
+   and blocked plan items with ownership and actions. Intake and issue-specific
+   blockers retain their project surfaces.
+4. **Capacity** (`/machines`) — machines, usable agent choices, access repair and
+   observed provider limits. Multiple agent CLIs do not multiply runner slots.
+5. **Results** (`/results`) — recorded landings with commit-specific validation
+   and links to the exact plan. Workspace/project settings and member management
+   remain separate pages.
 
-Deferred: analytics, multi-user management, notification channels, mobile polish.
+This is a local source-code inventory, not a deployment claim. Notification
+channels and broader analytics remain later work.
 
 ## 10. Logging now, GEPA later
 

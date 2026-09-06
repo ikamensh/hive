@@ -5,6 +5,11 @@ projects". Issue solving is a workstream inside a project, alongside the normal
 iteration-building workstream. The UI should make this feel like one project
 with multiple ways to produce useful work.
 
+This document records the workstream design proposal. Its domain rationale
+remains useful; migration steps and proposed APIs below are design history,
+not a statement that every proposal is implemented. The current UI follows
+[UI redesign](ui-redesign.md) and [project workflow](project-launchpad.md).
+
 ## Product principle
 
 The user-facing model is:
@@ -68,8 +73,9 @@ Supporting concepts:
 - **HumanTodo** — an action only the operator can perform outside Hive, such as
   refreshing a CLI login or fixing DNS. Clearer than `HumanTask`, which collides
   with runner tasks.
-- **Needs you** — the UI attention queue: open questions, human todos, blocked
-  issue work items, and landing failures.
+- **Inbox** — the UI attention queue (`/needs-you`). The current projection
+  includes questions, human tasks, plan approvals and blocked plan items;
+  issue-specific blockers retain their project view.
 
 Names to change from the current code in this design:
 
@@ -324,163 +330,28 @@ Backwards compatibility:
   run all_open_now".
 - `POST /issues-preflight` maps to the issue workstream preflight.
 
-## UI design
+## Current UI (2026-09-06)
 
-Keep the UI lean. Remove the setup-time source-mode toggle; project creation
-always creates a project. Issue solving appears as an action inside the project,
-not as a separate project type or a new app section.
+Project creation has no source-mode toggle. **New work** offers a prepared-plan
+handoff or AI-assisted goal design, for either a new or existing project. These
+are entry paths into the same durable project, not separate project types.
 
-### Project list
+The project workspace has **Work**, **Conversation**, **Activity**, **History**,
+**Issues** and **Tests** tabs. Issues retains repository selection, preflight,
+sync, scoped runs and its issue table; Tests retains testing-workstream tools.
+Both share the project's budgets and resource policy. Settings and decisions
+have dedicated routes. Activity and checkout diagnostics are secondary to work.
 
-One row per project:
+The former proposed permanent Needs you rail is replaced by a bounded attention
+preview and a workspace **Inbox**. The current Inbox projection covers questions,
+human tasks, plan approvals and parked plan items. Issue blockers remain in
+Issues and intake review in Conversation; adding them to the complete workspace
+projection is a separate follow-up.
 
-```text
-Hive                     working        Work: 3 items          Issues: 1 running, 2 need you
-Design Buddy             goal complete  Iteration done         Issues idle
-```
-
-The badge reports the strongest project-level condition. Secondary text shows
-workstream summaries so issue work no longer changes the kind of project.
-
-### Project page structure
-
-Use the current project page shape with one added issues surface:
-
-```text
-Project header
-  name, repo, state badge, pause switch
-
-Primary switch
-  Work | Issues
-
-Right rail
-  Needs you
-
-Below / side
-  Activity
-  Settings disclosure
-```
-
-`Needs you` is the existing attention surface, not a tab. It contains
-questions, human todos, issue blockers, and landing failures from every
-workstream. It should stay visible while looking at either Work or Issues.
-
-### Work view
-
-This is the current spec/build page:
-
-- intake panel if intake is incomplete
-- goal-complete banner when applicable
-- work item board
-- policy strip: autonomy, CI auto-fix, auto testing, paused
-- compact activity slice for latest iteration work
-
-No issue-specific controls appear here.
-
-### Issues view
-
-Top toolbar:
-
-```text
-Issues
-[repo selector] [Preflight] [Sync] [Run issues]
-```
-
-`Run issues` opens a small run drawer:
-
-```text
-Run GitHub issues
-Repo: ikamensh/hive
-Scope:
-  (*) selected issues
-  ( ) all currently open
-  ( ) scan only
-Backend: codex default
-[Start run]
-```
-
-Below the toolbar is a table, not a card grid:
-
-```text
-[ ] #42  Login probe fails on cold runner       Ready       labels...
-[x] #43  Add issue run boundary                 Needs you   blocked at clarify
-[ ] #44  Trace viewer raw link overflow         Reviewing   hive/issue-44
-```
-
-Columns:
-
-- checkbox
-- issue number and title
-- state
-- repo
-- last agent note
-- branch
-- opened/updated age
-
-Group filters:
-
-- Ready
-- Running
-- Needs you
-- Done
-- Cancelled
-
-Clicking an issue opens an inline detail drawer with:
-
-- rendered issue body/comments
-- attachments
-- latest resolve/review task
-- GitHub link
-- branch link
-- retry controls when blocked/rejected
-
-### Needs you rail
-
-Compact unified attention queue:
-
-```text
-Needs you
-- Clarification request from iteration work item "auth flow"
-- Issue #43 blocked: feature behavior decision needed
-- Land issue #18 failed: merge conflict, branch intact
-- Fix codex login on MacBook
-```
-
-Issue blockers should appear as attention items even if their authoritative text
-is on GitHub. The item links to the issue, branch, and relevant task trace.
-
-### Activity feed
-
-Unified feed with workstream chips:
-
-```text
-[issues] review accepted #44  codex  $0.18  12m
-[iteration] verify rejected auth flow cursor $0.07  8m
-[issues] preflight passed ikamensh/hive
-```
-
-This makes it clear the same project budget and resource pool are being used.
-
-### Settings disclosure
-
-Project policies plus automation workstreams:
-
-```text
-Project policies
-  autonomy, CI auto-fix, auto testing, paused, daily budget
-
-Repositories
-  spec repo
-  member repos
-
-Automation workstreams
-  Iteration goal                 enabled
-  GitHub issues: ikamensh/hive   enabled   manual runs
-  GitHub issues: org/api         disabled
-```
-
-Continuous issue polling is not part of this change. The settings can reserve
-the vocabulary, but the default should be manual runs.
+The project portfolio shows each current/latest plan goal, state reason, separate
+landed/cancelled/remaining counts and an exact-plan action. Fleet activity and
+capacity have their own Overview and Capacity pages. See the linked current UI
+documents for routes, evidence semantics and work-entry behavior.
 
 ## Migration
 
@@ -507,7 +378,7 @@ the vocabulary, but the default should be manual runs.
 - Orchestrator: `mark_goal_complete` ignores issue workstream terminal work items
   but refuses completion while iteration work is unfinished.
 - UI: mock project with both workstreams; verify project list, issues table, run
-  drawer, `Needs you` rail, and activity feed at desktop and mobile widths.
+  controls, project attention and activity at desktop and mobile widths.
 
 ## Recommended implementation order
 

@@ -308,26 +308,36 @@ hive subs | hive todos | hive org-context
 
 ### Web UI
 
-`web/` is the chief SPA (React + Vite + TypeScript). Create a project with a
-repository and optional validation command, then upload or paste a plan on its
-page. Review the accepted items and choose **Approve all & queue**. The plan
-stays at the top of the page, alongside decisions that need you. Home shows each
-project's current plan goal and separate landed, cancelled and remaining counts;
-fleet diagnostics are in a disclosure below the work.
+`web/` is the chief SPA (React + Vite + TypeScript). Its current local design
+uses a dark sidebar and light working surfaces. **Overview** (`/`) answers
+whether Hive is working, where tasks run, and how much usable runner capacity
+remains, followed by recent recorded landings. **Projects** (`/projects`) shows
+goals, state reasons and separate landed/cancelled/remaining counts, with links
+to the exact plan. **Inbox** (`/needs-you`) contains questions, human tasks,
+plan approvals and blocked plan items. **Capacity** (`/machines`) contains
+machines, agent access and provider usage windows; **Results** (`/results`)
+opens the complete landing history.
 
-**Execution readiness** checks current builder/reviewer capacity, model quotas,
-allowances, pause and budget before approval. Resume a paused project inline or
-follow the link to fix its agents/settings. Approval queues work even when it
-must wait. The same observation is available as `hive plan-ready PLAN_ID`
-(`--json` for automation). This preview does not reserve capacity or prove
-repository permissions, validation success, or feasibility.
+**New work** offers **Bring a plan** or **Design with AI**, for an existing or
+new project. Connect an existing repository or create a private one, and set an
+optional validation command. Bring a plan continues to upload/paste and review
+without starting intake. Design with AI accepts a goal, including a broad one,
+and opens the project conversation. Approving the agreed brief prepares the
+specification and plan; execution still requires plan approval.
+
+Project tabs separate **Work**, **Conversation**, **Activity**, **History**,
+**Issues** and **Tests**. **Execution readiness** checks builder/reviewer capacity,
+model quotas, allowances, pause and budget before approval. Approval can queue
+work that must wait. The same observation is available as `hive plan-ready PLAN_ID`
+(`--json` for automation). It reserves no capacity and proves neither repository
+permissions nor validation success.
 
 **Results & evidence** shows delivered and cancelled items, review reports,
-validation output and checked/landed commits. Download the full result JSON or
-export the plan as TOML for amendments. **Link to this plan** keeps the same
-execution selected after a reload or a newer iteration. Intake and Hive-authored
-planning remain optional; issues, tests, requests and diagnostics live in
-secondary disclosures. See [the project workspace](wiki/project-launchpad.md).
+validation output and checked/landed commits. Download result JSON or export
+canonical TOML for amendments. **Link to this plan** keeps the same execution
+selected after a reload or a newer iteration. See [the project workflow](wiki/project-launchpad.md)
+and [redesign contract](wiki/ui-redesign.md) for current behavior and limits.
+This describes the source implementation, not the deployment status.
 
 ```bash
 cd web

@@ -1,22 +1,26 @@
-# Ideal UX — spec-only autonomous development
+# UX north star and validation history
 
-The bar every hive flow is measured against, plus the live gap list. Written
-upfront for the current iteration ("hive builds a project; the human only
-writes specs"), updated after each validation project. Validation projects:
-**A** greenfield TD game in Rust, **B** adopting the existing repo `gleaner`,
-**C** a feature on the existing repo `kodo`.
+This document preserves the July 2026 spec-led journey and validation findings
+for projects A (greenfield Rust TD game), B (adopting `gleaner`) and C (a feature
+on `kodo`). It is not the current screen inventory or deployment status.
+
+The 2026-09-06 design makes prepared plans and AI-assisted goal design equal
+entry paths, and requires plan execution approval after brief approval. Current
+routes and behavior are authoritative in [UI redesign](ui-redesign.md) and
+[project workflow](project-launchpad.md). Historical gaps below retain the
+observations from their validation runs.
 
 ## North star
 
 The user's total contribution to a project is:
 
-1. **A spec** — mission + what the next iteration should produce, in whatever
-   form they naturally have it (a pasted document, a repo that already
-   contains docs, a few sentences).
+1. **A goal or prepared plan** — mission + what the next iteration should
+   produce, in whatever form they naturally have it (a pasted document, a repo
+   with existing docs, a few sentences, or an agreed execution plan).
 2. **Answers** to material questions, batched, asked only when the answer
    changes what gets built.
-3. **Verdicts** — approve the intake brief, accept/reject demonstrated
-   results, set the next iteration.
+3. **Verdicts** — approve the design brief when using intake, approve the
+   execution plan, inspect demonstrated results, and set the next iteration.
 
 Everything else — repo creation, planning, machine/agent selection, building,
 verification, landing, filing bugs against itself — is hive's job and never
@@ -34,7 +38,8 @@ has everything it needs) is a UX bug.
    (the spec, the repo, public docs), self-answers what it can, then comes
    back once with: its understanding, its assumptions, and the few material
    questions. The user corrects/answers/approves in the same place. Approval
-   ends setup — nothing else to arm.
+   ends specification setup. The resulting plan is reviewed and approved before
+   code execution starts.
 3. **Hive builds, visibly.** Planning, dispatch, verification and landing run
    without the user. At a glance the user can see: what is running now and
    where, what it costs today, what happened recently, and why hive is *not*
@@ -98,11 +103,10 @@ Ideal:
 | 1 | Types the feature ask into the launchpad box ("Give Hive a task") | Triages: material questions now or none; routes to an executor+machine; seeds work |
 | 2 | Answers if asked | Build→verify→PR, directive tracked to done with the PR linked |
 
-Current: `Directive` persists at `triaging` with a *preview* routing and
-**nothing dispatches** (`wiki/project-launchpad.md` — brain intentionally
-unbuilt). The launchpad's hero input is a UI promise the backend doesn't keep
-yet. Project C is blocked on building the directive brain: triage →
-route → seed a workstream/tasks → track to done.
+Historical pre-validation gap: `Directive` persisted at `triaging` without
+execution. This was resolved later (G2). The current UI places direct requests
+in a Work-tab disclosure; broad goals use New work → Design with AI. Current
+directive routing is described in [the code map](code-map.md).
 
 ## Cross-cutting requirements
 
@@ -122,7 +126,7 @@ route → seed a workstream/tasks → track to done.
   command/URL/screenshot proving the thing works; "the agent said done" is
   not evidence.
 
-## Gap list (live)
+## Validation gap history
 
 Numbered for reference from commits/fixes. Status: `open` | `fixing` | `done`.
 
