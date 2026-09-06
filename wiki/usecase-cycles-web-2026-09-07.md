@@ -32,3 +32,14 @@ The initial browser baseline was 34 passing tests.
 - Verification: the same browser journey passed through all three remote state
   changes (12.4 seconds). Viewed `inbox-page-recovery.png` under the screenshot
   directory above; remaining work and pagination are visible.
+
+## Cycle 18 — Retry a rejected repository/budget settings save
+
+- Scenario: edit a project budget, receive an API rejection, then retry.
+- Reproduction: `cd web && npm test -- --grep 'project settings explains'`
+  failed because no alert appeared; Vite also reported an unhandled rejection.
+- Cause/fix: the form had `try/finally` without error handling. It now displays
+  the chief's explanation, retains edits, and clears the error on retry.
+- Verification: the journey passed with the exact budget saved on retry and no
+  remaining alert. Viewed `project-settings-save-error.png`; the explanation is
+  adjacent to the edited field and save control.

@@ -124,6 +124,23 @@ test("new project goes to submission and a setup retry does not create another p
   expect(state.requests.some(r => r.path.includes("intake"))).toBe(false);
 });
 
+// A rejected save must leave both a useful explanation and the operator's edits.
+test("project settings explains a rejected save and retains edits for retry", async ({ page }) => {
+  const state = await setup(page);
+  await page.goto("/p/csv/settings");
+  await page.getByLabel("daily budget (USD)").fill("5");
+  state.failWiring = true;
+  await page.getByRole("button", { name: "save repos", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Repository access denied");
+  await expect(page.getByLabel("daily budget (USD)")).toHaveValue("5");
+  await capture(page, "project-settings-save-error");
+  state.failWiring = false;
+  await page.getByRole("button", { name: "save repos", exact: true }).click();
+  await expect(page.getByText("saved", { exact: true })).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  expect(state.project.daily_budget_usd).toBe(5);
+});
+
 test("completion updates live, preserves cancellation evidence, and remains inspectable after another plan starts", async ({ page }) => {
   const state = await setup(page, { plan: { ...plan, status: "approved" }, items: [
     { ...item, status: "reviewing" }, { ...item, id: "docs", title: "Document usage", status: "cancelled", order: 1 },

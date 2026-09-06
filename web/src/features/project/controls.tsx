@@ -486,10 +486,13 @@ export function ProjectSettings({
   );
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState("");
+  const [error, setError] = useState("");
 
   useEffect(() => {
     setMemberRepos(project.member_repos);
     setDailyBudget(project.daily_budget_usd > 0 ? String(project.daily_budget_usd) : "");
+    setSaved("");
+    setError("");
     // Keep local edits stable across project polling; a different project gets fresh form values.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
@@ -498,6 +501,7 @@ export function ProjectSettings({
     e.preventDefault();
     setBusy(true);
     setSaved("");
+    setError("");
     const budget = parseFloat(dailyBudget);
     const patch: ProjectPatch = {
       member_repos: memberRepos.map((s) => s.trim()).filter(Boolean),
@@ -506,6 +510,8 @@ export function ProjectSettings({
     try {
       await onPatch(patch);
       setSaved("saved");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not save project settings. Try again.");
     } finally {
       setBusy(false);
     }
@@ -535,6 +541,7 @@ export function ProjectSettings({
               placeholder="0"
             />
           </label>
+          {error && <p className="form-error" role="alert">{error}</p>}
           <div className="settings-actions">
             {saved && <span className="muted">{saved}</span>}
             <button type="submit" disabled={busy}>
@@ -660,4 +667,3 @@ export function GoalBanner({ project, onPatch }: { project: Project; onPatch: (p
     </section>
   );
 }
-
