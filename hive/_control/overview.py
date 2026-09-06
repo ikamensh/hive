@@ -12,6 +12,7 @@ safe to poll frequently.
 from __future__ import annotations
 
 from collections import defaultdict
+import time
 from typing import Callable
 
 from hive._control import pause
@@ -25,6 +26,7 @@ from hive.models import (
     Machine,
     Plan,
     PlanItem,
+    PlanItemStatus,
     PlanStatus,
     Project,
     ProjectState,
@@ -49,6 +51,23 @@ from hive.models import (
 # links into the project for the full set.
 LIVE_TASK_CAP = 30
 ATTENTION_CAP = 20
+DELIVERY_CAP = 8
+
+TASK_TITLES = {
+    TaskKind.work: "Implementation work",
+    TaskKind.verify: "Verify changes",
+    TaskKind.probe: "Check agent access",
+    TaskKind.intake: "Prepare the project specification",
+    TaskKind.resolve: "Implement requested changes",
+    TaskKind.review: "Review changes",
+    TaskKind.preflight: "Check repository access",
+    TaskKind.test_refresh: "Refresh acceptance stories",
+    TaskKind.test_sweep: "Test acceptance stories",
+    TaskKind.test_reproduce: "Reproduce a finding",
+    TaskKind.test_judge: "Review a testing finding",
+    TaskKind.testability_draft: "Prepare the testing environment",
+    TaskKind.testability_probe: "Check the testing environment",
+}
 
 
 def _bucket(items, key) -> dict[str, list]:
@@ -56,6 +75,44 @@ def _bucket(items, key) -> dict[str, list]:
     for item in items:
         out[key(item)].append(item)
     return out
+
+
+def _recent_deliveries(projects: list[Project], items: list[PlanItem], tasks: list[Task]) -> dict:
+    """Recorded landings only; checks for another commit remain distinct evidence."""
+    projects_by_id = {project.id: project for project in projects}
+    landed = [item for item in items if item.project_id in projects_by_id
+              and item.status == PlanItemStatus.done and item.merged_commit_sha and item.merged_at > 0]
+    landed.sort(key=lambda item: (item.merged_at, item.id), reverse=True)
+    checked = _bucket(
+        (task for task in tasks if task.status == TaskStatus.done and task.validation is not None),
+        lambda task: (task.project_id, task.run_id, task.work_item_id),
+    )
+    rows = []
+    for item in landed[:DELIVERY_CAP]:
+        project = projects_by_id[item.project_id]
+        attempt = max(checked.get((item.project_id, item.plan_id, item.id), []),
+                      key=lambda task: (task.finished_at, task.created_at, task.id), default=None)
+        validation = {"status": "not_recorded", "command": "", "task_id": "", "commit_sha": ""}
+        if attempt is not None:
+            check = attempt.validation
+            status = "not_recorded"
+            if check.commit_sha:
+                status = ("different_commit" if check.commit_sha != item.merged_commit_sha
+                          else "passed" if check.exit_code == 0 and not attempt.is_error else "failed")
+            validation = {"status": status, "command": check.command,
+                          "task_id": attempt.id, "commit_sha": check.commit_sha}
+        rows.append({
+            "project_id": project.id,
+            "project_name": project.name,
+            "plan_id": item.plan_id,
+            "work_item_id": item.id,
+            "title": item.title,
+            "repo": item.repo or project.spec_repo,
+            "merged_commit_sha": item.merged_commit_sha,
+            "merged_at": item.merged_at,
+            "validation": validation,
+        })
+    return {"count": len(landed), "items": rows}
 
 
 def testing_offers(
@@ -109,6 +166,7 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
     `spend_today(project_id)` is injected (the supervisor owns that sum) so this
     stays a pure read over the store and is trivial to test.
     """
+    observed_at = time.time()
     projects = [
         p for p in store.list(Project, workspace_id=workspace_id) if not p.archived
     ]
@@ -116,18 +174,26 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
 
     all_tasks = store.list(Task, workspace_id=workspace_id)
     runners = store.list(Runner, workspace_id=workspace_id)
+    resources = store.list(Resource, workspace_id=workspace_id)
+    resource_by_id = {resource.id: resource for resource in resources}
     online_runner_ids = {r.id for r in runners if r.online()}
     available_backends = {
         res.backend
-        for res in store.list(Resource, workspace_id=workspace_id)
+        for res in resources
         if res.available() and res.runner_id in online_runner_ids
     }
-    items_by_project = _bucket(store.list(IssueItem, workspace_id=workspace_id), lambda w: w.project_id)
-    streams_by_project = _bucket(store.list(ProjectWorkstream, workspace_id=workspace_id), lambda s: s.project_id)
+    issue_items = store.list(IssueItem, workspace_id=workspace_id)
+    streams = store.list(ProjectWorkstream, workspace_id=workspace_id)
+    stories = store.list(Story, workspace_id=workspace_id)
+    items_by_project = _bucket(issue_items, lambda w: w.project_id)
+    streams_by_project = _bucket(streams, lambda s: s.project_id)
     tasks_by_project = _bucket(all_tasks, lambda t: t.project_id)
     tasks_by_plan = _bucket(all_tasks, lambda t: t.run_id)
     plans_by_project = _bucket(store.list(Plan, workspace_id=workspace_id), lambda p: p.project_id)
-    items_by_plan = _bucket(store.list(PlanItem, workspace_id=workspace_id), lambda i: i.plan_id)
+    plan_items = store.list(PlanItem, workspace_id=workspace_id)
+    items_by_plan = _bucket(plan_items, lambda i: i.plan_id)
+    work_by_id = {item.id: item for item in [*issue_items, *plan_items, *stories, *streams]}
+    runner_by_id = {runner.id: runner for runner in runners}
     questions = store.list(Question, workspace_id=workspace_id)
     q_by_project = _bucket(questions, lambda q: q.project_id)
 
@@ -173,18 +239,41 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
             }
         )
 
-    capacity = capacity_summary(
-        group_machines(
-            store.list(Machine, workspace_id=workspace_id),
-            store.list(Runner, workspace_id=workspace_id),
-            store.list(Resource, workspace_id=workspace_id),
-        )
+    machine_groups = group_machines(
+        store.list(Machine, workspace_id=workspace_id),
+        runners,
+        resources,
     )
+    capacity = capacity_summary(machine_groups)
+    machine_by_runner = {runner.id: group.machine for group in machine_groups for runner in group.runners}
 
     running = [t for t in all_tasks if t.status == TaskStatus.running]
     running.sort(key=lambda t: t.started_at, reverse=True)
-    live_tasks = [
-        {
+    busy_runner_ids = {task.runner_id for task in running if task.runner_id}
+    for group, card in zip(machine_groups, capacity["machines"]):
+        for agent in card["agents"]:
+            agent.update(resource_by_id[agent["id"]].model_dump(include={
+                "usage_plan", "usage_source", "usage_captured_at", "usage_windows", "model_cooldowns",
+            }))
+        runner_ids = {runner.id for runner in group.runners}
+        online = runner_ids & online_runner_ids
+        usable = {agent["runner_id"] for agent in card["agents"] if agent["available"]}
+        card.update({
+            "runners_total": len(runner_ids),
+            "runners_online": len(online),
+            "runners_busy": len(online & busy_runner_ids),
+            "runners_usable": len(usable),
+            "runners_idle": len(usable - busy_runner_ids),
+        })
+    for key in ("runners_total", "runners_online", "runners_busy", "runners_usable", "runners_idle"):
+        capacity[key] = sum(card[key] for card in capacity["machines"])
+
+    live_tasks = []
+    for t in running[:LIVE_TASK_CAP]:
+        work = work_by_id.get(t.work_item_id or t.workstream_id)
+        runner = runner_by_id.get(t.runner_id)
+        machine = machine_by_runner.get(t.runner_id)
+        live_tasks.append({
             "id": t.id,
             "project_id": t.project_id,
             "project_name": name_by_id.get(t.project_id, ""),
@@ -193,14 +282,23 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
             "kind": t.kind,
             "started_at": t.started_at,
             "issue_number": t.issue_number,
-        }
-        for t in running[:LIVE_TASK_CAP]
-    ]
+            "title": work.title if work and work.title else TASK_TITLES[t.kind],
+            "runner_id": t.runner_id,
+            "runner_name": runner.name if runner else "",
+            "machine_id": machine.id if machine else "",
+            "machine_name": machine.name if machine else "",
+            "runner_online": t.runner_id in online_runner_ids,
+            "runner_last_seen": runner.last_seen if runner else 0.0,
+            "delivered": t.delivered,
+            "plan_id": work.plan_id if isinstance(work, PlanItem) else "",
+            "work_item_id": work.id if work else t.work_item_id,
+            "repo": t.repo,
+        })
 
     offers = testing_offers(
         projects,
         streams_by_project,
-        _bucket(store.list(Story, workspace_id=workspace_id), lambda s: s.workstream_id),
+        _bucket(stories, lambda s: s.workstream_id),
         {
             t.workstream_id
             for t in all_tasks
@@ -251,10 +349,13 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
     ]
 
     return {
+        "observed_at": observed_at,
+        "tasks_pending": sum(t.status == TaskStatus.pending for t in all_tasks),
         "paused": pause.fleet_paused(store, workspace_id),
         "projects": project_rows,
         "capacity": capacity,
         "live_tasks": live_tasks,
+        "recent_deliveries": _recent_deliveries(projects, plan_items, all_tasks),
         "attention": attention,
         "subscriptions": subscriptions,
         "totals": {
