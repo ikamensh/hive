@@ -240,7 +240,7 @@ def update_item(store, item: PlanItem, fields: dict) -> PlanItem:
     """Rewrite any part of an item — the human's edit (the AI only adds via
     amendments). Allowed whenever no agent is working on it and it is not
     terminal: editing a parked item's constraints before a retry is the direct
-    amendment path. Editing does not change approval."""
+    amendment path. Changed approved instructions need renewed approval."""
     item = _current(store, item)
     if item.status in PLAN_ITEM_IN_FLIGHT:
         raise ValueError("an agent is working on this item; cancel its task first")
@@ -255,6 +255,9 @@ def update_item(store, item: PlanItem, fields: dict) -> PlanItem:
         if key in fields and fields[key] is not None:
             value = fields[key]
             updates[key] = int(value) if key == "order" else value if key == "story_keys" else str(value).strip()
+    updates = {key: value for key, value in updates.items() if getattr(item, key) != value}
+    if not updates:
+        return item
     plan = store.get(Plan, item.plan_id)
     proposed = document(store, plan)
     for row in proposed["items"]:
@@ -265,6 +268,8 @@ def update_item(store, item: PlanItem, fields: dict) -> PlanItem:
     def mutate(saved: PlanItem) -> None:
         for key, value in updates.items():
             setattr(saved, key, value)
+        if saved.status in (PlanItemStatus.approved, PlanItemStatus.queued):
+            saved.status = PlanItemStatus.proposed
         saved.edited_by_human = True
         saved.updated_at = now_s()
 
