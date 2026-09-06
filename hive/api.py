@@ -339,6 +339,14 @@ class HumanTodoCreate(BaseModel):
     assignee_user_id: str = ""
 
 
+class SubscriptionCreate(BaseModel):
+    provider: str
+    plan: str = ""
+    licensing_mode: LicensingMode = LicensingMode.unknown
+    notes: str = ""
+    owner_user_id: str = ""
+
+
 class LocalRunnerPatch(BaseModel):
     autostart: bool
 
@@ -2149,18 +2157,25 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         ]
 
     @app.post("/api/subscriptions")
-    def create_subscription(body: dict, ctx: AuthContext = Depends(current)):
+    def create_subscription(body: SubscriptionCreate, ctx: AuthContext = Depends(current)):
         # A license belongs to whoever records it; an admin may record one on
         # another member's behalf.
-        owner = body.get("owner_user_id", "").strip() if ctx.is_admin else ""
+        provider = body.provider.strip()
+        if provider not in BACKEND_NAMES:
+            raise HTTPException(400, f"unknown subscription provider: {provider}")
+        owner = body.owner_user_id.strip() or ctx.user.id
+        if not ctx.is_admin and owner != ctx.user.id:
+            raise HTTPException(403, "you can only register your own licenses")
+        if not store.list(WorkspaceMembership, workspace_id=ctx.workspace_id, user_id=owner):
+            raise HTTPException(400, "owner must be a workspace member")
         return store.put(
             Subscription(
                 workspace_id=ctx.workspace_id,
-                provider=body["provider"],
-                plan=body.get("plan", ""),
-                licensing_mode=LicensingMode(body.get("licensing_mode", "unknown")),
-                notes=body.get("notes", ""),
-                owner_user_id=owner or ctx.user.id,
+                provider=provider,
+                plan=body.plan,
+                licensing_mode=body.licensing_mode,
+                notes=body.notes,
+                owner_user_id=owner,
             )
         ).model_dump()
 

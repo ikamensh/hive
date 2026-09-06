@@ -55,3 +55,24 @@ HTTP. System-generated records may be seeded as initial scenario fixtures.
   'todo or manual_todo or project_setup or blank_answer' -q` — passes. Rejected
   requests create no rows; valid instructions survive, Inbox links the right
   project, and completion removes the action while retaining history.
+
+## Cycle 14 — Register a member's subscription and manage it as its owner
+
+- Tried: create subscriptions with missing provider, invalid licensing mode,
+  blank/unsupported provider, and nonexistent owner; then register a supported
+  license on another member's behalf and have that member remove it.
+- Initial observation: missing provider and `licensing_mode: shared` returned
+  500. Blank and unknown providers, plus `owner_user_id: ghost`, were saved with
+  200. These records cannot match a usable backend or real workspace owner.
+- Fix: a typed `SubscriptionCreate` request validates types and licensing mode;
+  the provider must be in Hive's backend registry, the owner must be a workspace
+  member, and providers cannot silently register a license as another member.
+  Admins can still register on a member's behalf; omitted owner means yourself.
+- Evidence: `uv run pytest tests/test_api_operator_workflows.py -k
+  subscription_registration -q --tb=short` initially failed with
+  `KeyError: 'provider'`.
+- Verified: `uv run pytest tests/test_api_operator_workflows.py
+  tests/test_users_roles.py tests/test_api_e2e.py tests/test_capacity.py -k
+  'subscription or license or registration' -q` — passes. Invalid inputs leave
+  the list empty; a real member sees and deletes their correctly assigned
+  license. Existing provider ownership and inferred license workflows pass.

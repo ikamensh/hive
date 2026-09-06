@@ -5,6 +5,7 @@ import pytest
 from hive.models import Question
 from hive.persistence import MemoryStore
 from tests.test_inbox_api import client_for
+from tests.test_users_roles import login, make_app
 
 
 @pytest.fixture
@@ -92,3 +93,41 @@ def test_manual_todo_corrects_invalid_input_then_completes_from_inbox(client):
     assert client.post(f"/api/human-todos/{todo['id']}/done").json()["status"] == "done"
     assert client.get("/api/inbox?kind=todo").json()["total"] == 0
     assert client.get("/api/human-todos").json()[0]["status"] == "done"
+
+
+def test_subscription_registration_validates_license_and_owner_then_respects_control():
+    """Only a supported license assigned to a real member should enter capacity."""
+    client, auth, _ = make_app(MemoryStore())
+    alice_headers, alice = login(auth, "alice")
+    bob_headers, bob = login(auth, "bob")
+    client.patch(f"/api/users/{bob.id}", json={"role": "resource_provider"},
+                 headers=alice_headers).raise_for_status()
+    for body, status in (
+        ({}, 422),
+        ({"provider": "codex", "licensing_mode": "shared"}, 422),
+        ({"provider": " "}, 400),
+        ({"provider": "unsupported-agent"}, 400),
+        ({"provider": "codex", "owner_user_id": "missing-member"}, 400),
+    ):
+        rejected = client.post("/api/subscriptions", json=body, headers=alice_headers)
+        assert rejected.status_code == status
+        assert client.get("/api/subscriptions", headers=alice_headers).json() == []
+
+    rejected = client.post("/api/subscriptions", json={
+        "provider": "codex", "owner_user_id": alice.id,
+    }, headers=bob_headers)
+    assert rejected.status_code == 403
+    assert client.get("/api/subscriptions", headers=alice_headers).json() == []
+
+    created = client.post("/api/subscriptions", json={
+        "provider": " codex ", "plan": "Team account",
+        "licensing_mode": "machine_bound", "owner_user_id": bob.id,
+    }, headers=alice_headers)
+    assert created.status_code == 200
+    license = created.json()
+    assert license["provider"] == "codex"
+    assert license["owner_user_id"] == bob.id
+    assert license["licensing_mode"] == "machine_bound"
+    assert client.get("/api/subscriptions", headers=bob_headers).json() == [license]
+    assert client.delete(f"/api/subscriptions/{license['id']}", headers=bob_headers).status_code == 200
+    assert client.get("/api/subscriptions", headers=alice_headers).json() == []
