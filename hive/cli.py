@@ -98,7 +98,13 @@ def resolve_targets(env: dict[str, str], stored: dict[str, str]) -> list[Target]
 
     auth = _basic_auth(pick("HIVE_BASIC_AUTH"))
     token = pick("HIVE_TOKEN")
-    if url := pick("HIVE_URL"):
+    if url := env.get("HIVE_URL"):
+        return [Target(url, auth, token)]
+    from hive.config import desktop
+
+    if desktop.selected() is not None:
+        return [Target(*desktop.target())]
+    if url := stored.get("HIVE_URL"):
         return [Target(url, auth, token)]
     targets = [Target(DEFAULT_HIVE_URL, auth, token)]
     if fallback := runner_env_target():
@@ -133,6 +139,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--local", dest="local_target", action="store_true",
                         help="send commands only to localhost:8000, ignoring saved remote settings")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("switch", help="switch this Mac between its local and remote chief")
+    p.add_argument("target", choices=("local", "remote", "status"), nargs="?", default="status")
 
     p = sub.add_parser("run", help="launch the local chief (auto-detects tokens)")
     p.add_argument("--local", action="store_true", help="local state and an automatic local runner; no GCP")
@@ -2004,6 +2013,18 @@ def main(argv: list[str] | None = None) -> None:
     import httpx
 
     args = build_parser().parse_args(argv)
+    if args.command == "switch":
+        from hive.runner.desktop import status, switch
+
+        try:
+            if args.target == "status":
+                print(json.dumps(status(), indent=2))
+            else:
+                switch(args.target)
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError, httpx.HTTPError) as exc:
+            print(f"Chief switch failed: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+        return
     if args.command == "run":
         _run_chief(args)
         return

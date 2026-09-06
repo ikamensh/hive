@@ -1,6 +1,6 @@
 """Menu bar switch for the Mac runner — the Wi-Fi-toggle experience.
 
-A status item (🐝) next to the clock renders `control.runner_view()` and flips
+A status item (🐝) next to the clock renders the selected runner and flips
 the pause flag. Process lifecycle stays with launchd: the runner LaunchAgent's
 KeepAlive is conditioned on the flag being absent, so pausing means "the
 daemon drains and launchd leaves it down", resuming means "remove the flag and
@@ -20,22 +20,20 @@ out until the next login).
 from __future__ import annotations
 
 import os
-import socket
 import subprocess
 import webbrowser
+import threading
 from pathlib import Path
 
 import httpx
 import rumps
 
+from hive.config import desktop
 from hive.runner import control
+from hive.runner import desktop as desktop_service
 from hive.runner.control import RunnerMode
 
-RUNNER_LABEL = "com.hive.runner"
 MENUBAR_LABEL = "com.hive.menubar"
-LOG_PATH = Path.home() / "Library/Logs/hive/runner.log"
-ENV_FILE = Path(os.environ.get("HIVE_RUNNER_ENV", "~/.config/hive/runner.env")).expanduser()
-RUNNER_NAME = os.environ.get("HIVE_RUNNER_NAME") or socket.gethostname().split(".")[0]
 REFRESH_S = 3
 FLEET_POLL_TICKS = 5  # chief round-trips every ~15s; local files every tick
 
@@ -55,50 +53,12 @@ TOGGLE_LABELS = {
 }
 
 
-def _launchctl(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["launchctl", *args], capture_output=True, text=True, timeout=15
-    )
-
-
-def kickstart_runner() -> bool:
-    """Ask launchd to start the runner job now (idempotent when running)."""
-    return _launchctl("kickstart", f"gui/{os.getuid()}/{RUNNER_LABEL}").returncode == 0
-
-
-def terminate_runner() -> None:
-    """SIGTERM the runner job. With the pause flag set launchd won't respawn
-    it; the chief fails any in-flight task once the runner goes silent."""
-    _launchctl("kill", "SIGTERM", f"gui/{os.getuid()}/{RUNNER_LABEL}")
-
-
-def _env_value(name: str) -> str:
-    """A runner.env value, preferring the ambient environment."""
-    if value := os.environ.get(name, ""):
-        return value
-    if ENV_FILE.exists():
-        for line in ENV_FILE.read_text().splitlines():
-            key, _, value = line.partition("=")
-            if key.strip() == name:
-                return value.strip()
-    return ""
-
-
 def dashboard_url() -> str:
-    """The chief this runner reports to, from the environment or its env file."""
-    return _env_value("HIVE_URL").split(",")[0].strip()
+    return desktop.target()[0]
 
 
-def chief_client() -> httpx.Client | None:
-    """A client for the chief's web API, authed like the CLI: the Caddy
-    perimeter's basic auth from runner.env (inside, this deploy runs
-    auth_mode=dev). None when no chief URL is configured."""
-    url = dashboard_url()
-    if not url:
-        return None
-    basic = _env_value("HIVE_BASIC_AUTH")
-    auth = tuple(basic.split(":", 1)) if ":" in basic else None
-    return httpx.Client(base_url=url, auth=auth, timeout=5.0)
+def chief_client() -> httpx.Client:
+    return desktop_service.client()
 
 
 def agents_line(status: dict) -> str:
@@ -125,6 +85,11 @@ class HiveMenuBar(rumps.App):
         self.fleet_item = rumps.MenuItem("Pause all of hive")
         self.fleet_paused: bool | None = None  # None = chief not asked/reachable yet
         self._tick = 0
+        self._mode = desktop.selected()
+        self._background: threading.Thread | None = None
+        self._error: str | None = None
+        self.switch_item = rumps.MenuItem("Switch chief", callback=self.on_switch)
+        self.hide_item = rumps.MenuItem("Hide menu bar icon (back at login)", callback=self.on_hide)
         super().__init__(
             "Hive Runner",
             title=TITLES[RunnerMode.offline],
@@ -139,6 +104,7 @@ class HiveMenuBar(rumps.App):
                 self.stop_item,
                 None,
                 self.fleet_item,
+                self.switch_item,
                 None,
                 rumps.MenuItem("Open dashboard", callback=self.on_dashboard),
                 rumps.MenuItem("Show logs", callback=self.on_logs),
@@ -146,7 +112,7 @@ class HiveMenuBar(rumps.App):
                 # Under launchd KeepAlive a plain quit would respawn in
                 # seconds and read as "does nothing" — Hide boots the agent
                 # out instead; RunAtLoad brings the icon back at next login.
-                rumps.MenuItem("Hide menu bar icon (back at login)", callback=self.on_hide),
+                self.hide_item,
             ],
         )
         # Not @rumps.timer: that registers the *unbound* method at class-definition
@@ -155,12 +121,29 @@ class HiveMenuBar(rumps.App):
         self.refresh(None)
 
     def refresh(self, _timer) -> None:
-        view = control.runner_view()
-        status = control.read_status()
+        view = control.runner_view(desktop.runner_state())
+        status = control.read_status(desktop.runner_state())
         self.title = TITLES[view.mode]
-        self.status_item.title = view.detail
-        chief = control.chief_host(status.get("chief") or dashboard_url()) or "—"
-        self.chief_item.title = f"Runner {RUNNER_NAME} → {chief}"
+        busy = desktop_service.switching() or (
+            self._background is not None and self._background.is_alive()
+        )
+        self.status_item.title = "Switching / starting chief…" if busy else view.detail
+        chief = control.chief_host(dashboard_url())
+        mode = desktop.selected() or "remote"
+        self.chief_item.title = f"Chief: {mode} · {chief}"
+        self.switch_item.title = (
+            "Switch to remote chief" if mode == "local" else "Switch to local chief"
+        )
+        self.switch_item.set_callback(None if busy else self.on_switch)
+        self.toggle_item.set_callback(None if busy else self.on_toggle)
+        self.hide_item.set_callback(None if busy else self.on_hide)
+        if desktop.selected() != self._mode:
+            self._mode = desktop.selected()
+            self._tick = 0
+            self.fleet_paused = None
+        if self._error is not None:
+            error, self._error = self._error, None
+            rumps.alert("Could not switch/start Hive", error)
         self.agents_item.title = agents_line(status)
         last_line = control.last_task_line(status)
         self.last_item.title = f"Last: {last_line}"
@@ -168,18 +151,17 @@ class HiveMenuBar(rumps.App):
         self.toggle_item.title = TOGGLE_LABELS[view.mode]
         # A gray (callback-less) item can't be clicked; only offer the hard
         # stop while something is actually running.
-        can_stop = view.mode in (RunnerMode.working, RunnerMode.draining)
+        can_stop = not busy and view.mode in (RunnerMode.working, RunnerMode.draining)
         self.stop_item.set_callback(self.on_stop_now if can_stop else None)
         if self._tick % FLEET_POLL_TICKS == 0:
             self.poll_fleet()
         self._tick += 1
         self.render_fleet_item()
+        if busy:
+            self.fleet_item.set_callback(None)
 
     def poll_fleet(self) -> None:
         client = chief_client()
-        if client is None:
-            self.fleet_paused = None
-            return
         try:
             with client:
                 self.fleet_paused = bool(
@@ -200,27 +182,21 @@ class HiveMenuBar(rumps.App):
             self.fleet_item.set_callback(self.on_fleet_toggle)
 
     def on_toggle(self, _item) -> None:
-        view = control.runner_view()
+        view = control.runner_view(desktop.runner_state())
         if view.mode in (RunnerMode.working, RunnerMode.idle):
-            control.request_pause()
+            control.request_pause(desktop.runner_state())
         else:  # draining/paused resume; offline restarts
-            control.clear_pause()
-            if not kickstart_runner():
-                # alert, not notification: the latter needs an app bundle id.
-                rumps.alert(
-                    "Hive runner service is not installed",
-                    "Run `bash deploy/install_mac_runner.sh` from the hive repo.",
-                )
+            self.run_background(desktop_service.resume_runner)
         self.refresh(None)
 
     def on_stop_now(self, _item) -> None:
-        control.request_pause()
-        terminate_runner()
+        control.request_pause(desktop.runner_state())
+        desktop_service.terminate_runner()
         self.refresh(None)
 
     def on_fleet_toggle(self, _item) -> None:
         client = chief_client()
-        if client is None or self.fleet_paused is None:
+        if self.fleet_paused is None:
             return
         try:
             with client:
@@ -238,13 +214,44 @@ class HiveMenuBar(rumps.App):
             webbrowser.open(url)
 
     def on_logs(self, _item) -> None:
-        if LOG_PATH.exists():
-            subprocess.run(["open", str(LOG_PATH)], timeout=15)
+        log_path = (
+            desktop.local_data() / "local-runner.log"
+            if desktop.selected() == "local"
+            else Path.home() / "Library/Logs/hive/runner.log"
+        )
+        if log_path.exists():
+            subprocess.run(["open", str(log_path)], timeout=15)
+
+    def run_background(self, action) -> None:
+        def run():
+            try:
+                action()
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+                subprocess.SubprocessError,
+                httpx.HTTPError,
+            ) as exc:
+                self._error = str(exc)
+
+        self._background = threading.Thread(target=run, daemon=True)
+        self._background.start()
+
+    def on_switch(self, _item) -> None:
+        mode = "remote" if desktop.selected() == "local" else "local"
+        self.run_background(lambda: desktop_service.switch(mode))
+        self.refresh(None)
 
     def on_hide(self, _item) -> None:
         # bootout SIGTERMs this very process; the fallback quit only runs when
         # we're not under launchd (dev invocation from a terminal).
-        if _launchctl("bootout", f"gui/{os.getuid()}/{MENUBAR_LABEL}").returncode != 0:
+        if (
+            desktop_service.launchctl(
+                "bootout", f"gui/{os.getuid()}/{MENUBAR_LABEL}", check=False
+            ).returncode
+            != 0
+        ):
             rumps.quit_application()
 
 

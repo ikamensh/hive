@@ -19,6 +19,13 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 
+# Selection survives login/restart, even if someone clears the pause flag.
+SELECTION_FILE="$(dirname "${HIVE_CONFIG_FILE:-$HOME/.config/hive/config.env}")/selected-chief"
+if [ -f "$SELECTION_FILE" ] && [ "$(cat "$SELECTION_FILE")" = "local" ]; then
+  echo "local chief selected — remote runner stays disconnected"
+  exit 0
+fi
+
 # The menu bar toggle switched this runner off. Exit before any network work;
 # the plist's KeepAlive is conditioned on this file, so launchd leaves us down
 # until the flag is removed (which starts us again).
