@@ -11,8 +11,13 @@ const LABELS = { all: "All", question: "Questions", approval: "Approvals", block
 const SINGULAR = { question: "Question", approval: "Approval", blocked: "Blocked work", todo: "Human task" };
 const PAGE_SIZE = 12;
 
-function ItemDetail({ item, stale, onResolved }: { item: InboxItem; stale: boolean; onResolved: () => void }) {
-  const [answer, setAnswer] = useState("");
+function ItemDetail({ item, stale, answer, onAnswer, onResolved }: {
+  item: InboxItem;
+  stale: boolean;
+  answer: string;
+  onAnswer: (answer: string) => void;
+  onResolved: () => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const wholePlan = item.kind === "approval" && !!item.plan && !item.plan_item;
@@ -69,7 +74,7 @@ function ItemDetail({ item, stale, onResolved }: { item: InboxItem; stale: boole
       {item.question && item.can_act && (
         <form onSubmit={submit} className="inbox-answer">
           <label htmlFor={`answer-${item.question.id}`}>Your answer</label>
-          <textarea id={`answer-${item.question.id}`} value={answer} onChange={event => setAnswer(event.target.value)} rows={5} placeholder="Add the information Hive needs to continue" />
+          <textarea id={`answer-${item.question.id}`} value={answer} onChange={event => onAnswer(event.target.value)} disabled={busy} rows={5} placeholder="Add the information Hive needs to continue" />
           <button type="submit" disabled={disabled || !answer.trim()}>{busy ? "Sending…" : "Send answer"}<IconArrowRight size={16} /></button>
         </form>
       )}
@@ -96,6 +101,7 @@ export default function NeedsYou() {
   const [query, setQuery] = useState("");
   const [offset, setOffset] = useState(0);
   const [selectedId, setSelectedId] = useState("");
+  const [answers, setAnswers] = useState<Record<string, string>>({});
   const inbox = usePoll(() => api.inbox({ kind, scope, project_id: projectId, q: query, offset, limit: PAGE_SIZE }), [kind, scope, projectId, query, offset]);
   const selected = inbox.data?.items.find(item => item.id === selectedId) ?? inbox.data?.items[0];
   const total = inbox.data?.total ?? 0;
@@ -137,7 +143,17 @@ export default function NeedsYou() {
             <span className="inbox-row-top"><span className={`inbox-kind inbox-kind-${item.kind}`}>{SINGULAR[item.kind]}</span><span>{ago(item.created_at)}</span></span>
             <strong>{item.title}</strong><span className="inbox-row-scope">{item.project_name}{item.waiting_on_other ? ` · Waiting on ${item.assignee_name ? `@${item.assignee_name}` : "admin"}` : ""}</span>
           </button>)}</section>
-          {selected && <ItemDetail key={selected.id} item={selected} stale={inbox.failed} onResolved={refresh} />}
+          {selected && <ItemDetail key={selected.id} item={selected} stale={inbox.failed}
+            answer={answers[selected.id] ?? ""}
+            onAnswer={answer => setAnswers(previous => ({ ...previous, [selected.id]: answer }))}
+            onResolved={() => {
+              setAnswers(previous => {
+                const next = { ...previous };
+                delete next[selected.id];
+                return next;
+              });
+              refresh();
+            }} />}
           {!selected && <div className="inbox-empty"><p>No items on this page. Return to the previous page.</p></div>}
         </div>
         <div className="inbox-pagination"><span>{inbox.data.items.length ? offset + 1 : 0}–{Math.min(offset + inbox.data.items.length, total)} of {total} items</span><div><button className="ghost" aria-label="Previous inbox page" disabled={offset === 0} onClick={() => { setOffset(Math.max(0, offset - PAGE_SIZE)); setSelectedId(""); }}><IconChevronLeft size={17} />Previous</button><button className="ghost" aria-label="Next inbox page" disabled={offset + PAGE_SIZE >= total} onClick={() => { setOffset(offset + PAGE_SIZE); setSelectedId(""); }}>Next<IconChevronRight size={17} /></button></div></div>

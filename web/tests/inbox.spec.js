@@ -51,6 +51,28 @@ function question(index) {
     can_act: true, waiting_on_other: false, assignee_user_id: "", assignee_name: "", question: { id: `q${index}`, text: `Decision ${index}`, project_id: "search", created_at: 1, status: "open" } };
 }
 
+// Reading another question must not discard an answer the operator is composing.
+test("inbox keeps separate answer drafts while switching questions and filters", async ({ page }) => {
+  const state = await setup(page, [question(1), question(2)]);
+  await page.goto("/needs-you");
+  await page.getByLabel("Your answer").fill("Keep the original spelling.");
+  await page.getByRole("button", { name: /Decision 2/ }).click();
+  await expect(page.getByLabel("Your answer")).toHaveValue("");
+  await page.getByLabel("Your answer").fill("Use case-insensitive matching.");
+  await page.getByRole("button", { name: /Decision 1/ }).click();
+  await expect(page.getByLabel("Your answer")).toHaveValue("Keep the original spelling.");
+  await page.getByLabel("Search inbox").fill("not found");
+  await expect(page.getByRole("heading", { name: "No matching items" })).toBeVisible();
+  await page.getByLabel("Search inbox").clear();
+  await expect(page.getByLabel("Your answer")).toHaveValue("Keep the original spelling.");
+  await page.getByRole("button", { name: /Decision 2/ }).click();
+  await expect(page.getByLabel("Your answer")).toHaveValue("Use case-insensitive matching.");
+  await capture(page, "inbox-preserved-draft");
+  await page.getByRole("button", { name: "Send answer" }).click();
+  expect(state.mutations).toContainEqual({ path: "/api/questions/q2/answer", body: { answer: "Use case-insensitive matching." } });
+  await expect(page.getByLabel("Your answer")).toHaveValue("Keep the original spelling.");
+});
+
 // The real page and API client preserve form input on failures, expose all pages,
 // and route mutations to the correct question even when the selected row changes.
 test("inbox pages, filters, and resolves a selected question", async ({ page }) => {
