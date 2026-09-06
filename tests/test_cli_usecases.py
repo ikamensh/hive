@@ -66,3 +66,19 @@ def test_conflicting_intake_actions_cannot_start_or_advance_work(harness, action
     detail = cli(client, "project", project["id"])
     assert detail["conversations"] == []
     assert detail["tasks"] == []
+
+
+@pytest.mark.parametrize("budget", ["-1", "nan", "inf", "-inf"])
+@pytest.mark.parametrize("command", ["new", "set"])
+def test_invalid_budget_fails_before_mutating_projects(harness, command, budget, capsys):
+    """Invalid spend caps cannot leave a half-created project or change existing settings."""
+    client, _ = harness
+    project = client.post("/api/projects", json={"name": "existing"}).raise_for_status().json()
+    before = cli(client, "projects")
+    argv = (["new", "bad-budget", "--repo", "https://github.com/o/r.git", f"--budget={budget}"]
+            if command == "new" else ["set", project["id"], f"--daily-budget={budget}"])
+    with pytest.raises(SystemExit) as error:
+        cli(client, *argv)
+    assert error.value.code == 2
+    assert "finite nonnegative number" in capsys.readouterr().err
+    assert cli(client, "projects") == before

@@ -206,7 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("name")
     p.add_argument("--spec", help="path to your spec document ('-' reads stdin)")
     p.add_argument("--repo", default="", help="existing repo git URL (default: create a private repo)")
-    p.add_argument("--budget", type=float, help="daily spend cap in USD (default 10)")
+    p.add_argument("--budget", type=_budget, help="daily spend cap in USD (default 10)")
     p.add_argument("--public", action="store_true", help="make the created repo public")
     p.add_argument(
         "--required-capabilities",
@@ -266,7 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="autonomously draft/repair stories and sweep unproven ones (included-only or daily budget)",
     )
     p.add_argument("--paused", choices=["true", "false"])
-    p.add_argument("--daily-budget", type=float, help="daily cap on all paid work in USD (0 pauses it; new projects default to 10)")
+    p.add_argument("--daily-budget", type=_budget, help="daily cap on all paid work in USD (0 pauses it; new projects default to 10)")
     p.add_argument(
         "--grant",
         action="append",
@@ -931,6 +931,13 @@ STORY_GLYPHS = {
     "untested": "○",
     "stale": "~",
 }
+
+
+def _budget(value: str) -> float:
+    amount = float(value)
+    if not math.isfinite(amount) or amount < 0:
+        raise argparse.ArgumentTypeError("budget must be a finite nonnegative number")
+    return amount
 
 
 def _watch_interval(value: str) -> float:

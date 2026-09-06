@@ -60,3 +60,21 @@ deployments, live project mutations, or user inputs were needed.
   project creation workflows also pass (`5 passed` in the focused run).
 - Self-review: enforcement lives in the public command grammar; no new
   server state or action precedence is needed.
+
+## Cycle 4 — Start a project with an invalid spend cap
+
+- Scenario: `hive new bad-budget --repo https://github.com/o/r.git --budget
+  nan`, plus negative and infinite values and `hive set --daily-budget`.
+- Initial reproduction: `--budget -1` failed at the API budget patch but left
+  `bad--1` in the project list. `--budget nan` raised a JSON serialization
+  `ValueError` and also left its project behind. Both had already wired the repo.
+- Regression first: eight CLI/application cases failed before the fix;
+  they require an argparse exit and unchanged project listing after bad input.
+- Fix: both budget flags accept only finite, nonnegative amounts before any
+  API request. This complements the separate API validation fix and prevents
+  the CLI's multistep `new` command from creating partial state for bad input.
+- Verified: `9 passed` in the focused budget/normal-project-creation run.
+  The real `uv run hive new … --budget nan` entrypoint now exits 2 with
+  `budget must be a finite nonnegative number` without contacting a chief.
+- Self-review: zero and fractional amounts remain valid; the two flags share
+  one small parser rather than relying on HTTP serialization or API failures.
