@@ -3,7 +3,7 @@ repos:
     hooks:
       - id: ruff-check
         name: ruff check
-        entry: uv run ruff check .
+        entry: bash -c 'git ls-files -z "*.py" | xargs -0 uv run ruff check'
         language: system
         pass_filenames: false
         files: ^(hive|scripts|tests)/.*\.py$|^pyproject\.toml$|^uv\.lock$

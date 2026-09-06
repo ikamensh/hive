@@ -26,8 +26,6 @@ from hive.models import (
     Machine,
     Project,
     ProjectState,
-    Resource,
-    ResourceUsability,
     Runner,
     Task,
     TaskStatus,

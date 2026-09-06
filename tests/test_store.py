@@ -8,6 +8,7 @@ import time
 
 import pytest
 
+from hive.config.storage import copy_store
 from hive.models import Question, QuestionStatus, Project, Resource, Task, TaskStatus, User
 from hive.persistence.store import FileStore, MemoryStore
 
@@ -20,7 +21,6 @@ def test_local_leadership_is_shared_between_independent_stores(tmp_path):
     assert not b.release_leader("b")
     assert a.release_leader("a")
     assert b.claim_leader("b", 60) == "b"
-from hive.config.storage import copy_store
 
 
 def test_list_filters_orders_and_limits():
