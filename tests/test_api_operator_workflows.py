@@ -131,3 +131,48 @@ def test_subscription_registration_validates_license_and_owner_then_respects_con
     assert client.get("/api/subscriptions", headers=bob_headers).json() == [license]
     assert client.delete(f"/api/subscriptions/{license['id']}", headers=bob_headers).status_code == 200
     assert client.get("/api/subscriptions", headers=alice_headers).json() == []
+
+
+def test_rejected_machine_owner_change_preserves_power_settings_and_todo_routing():
+    """A rejected settings save must neither change power behavior nor move an action."""
+    client, auth, _ = make_app(MemoryStore())
+    alice_headers, alice = login(auth, "alice")
+    bob_headers, bob = login(auth, "bob")
+    client.patch(f"/api/users/{bob.id}", json={"role": "resource_provider"},
+                 headers=alice_headers).raise_for_status()
+    client.post("/api/runners/register", json={
+        "name": "Build server", "backends": ["codex"], "owner_user_id": bob.id,
+    }, headers={"X-Hive-Token": "t"}).raise_for_status()
+    machine, = client.get("/api/resources", headers=alice_headers).json()["machines"]
+    path = f"/api/machines/{machine['id']}"
+    todo = client.post("/api/human-todos", json={
+        "title": "Fix codex login on Build server", "assignee_user_id": bob.id,
+    }, headers=alice_headers).json()
+
+    for headers, owner, status in (
+        (alice_headers, "missing-member", 400),
+        (bob_headers, alice.id, 403),
+    ):
+        rejected = client.patch(path, json={
+            "power_policy": "on_demand", "idle_stop_minutes": 10,
+            "owner_user_id": owner,
+        }, headers=headers)
+        assert rejected.status_code == status
+        current, = client.get("/api/resources", headers=alice_headers).json()["machines"]
+        assert current == machine
+        row, = client.get("/api/inbox?kind=todo&scope=yours", headers=bob_headers).json()["items"]
+        assert row["todo"]["id"] == todo["id"]
+
+    accepted = client.patch(path, json={
+        "power_policy": "on_demand", "idle_stop_minutes": 10, "owner_user_id": alice.id,
+    }, headers=alice_headers)
+    assert accepted.status_code == 200
+    assert accepted.json()["owner_user_id"] == alice.id
+    assert accepted.json()["power_policy"] == "on_demand"
+    assert accepted.json()["idle_stop_minutes"] == 10
+    assert client.get("/api/inbox?scope=yours", headers=bob_headers).json()["total"] == 0
+    row, = client.get("/api/inbox?kind=todo", headers=alice_headers).json()["items"]
+    assert row["todo"]["assignee_user_id"] == alice.id
+    client.patch(path, json={"idle_stop_minutes": 25}, headers=alice_headers).raise_for_status()
+    current, = client.get("/api/resources", headers=alice_headers).json()["machines"]
+    assert current["idle_stop_minutes"] == 25

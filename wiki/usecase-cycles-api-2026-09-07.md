@@ -76,3 +76,32 @@ HTTP. System-generated records may be seeded as initial scenario fixtures.
   'subscription or license or registration' -q` — passes. Invalid inputs leave
   the list empty; a real member sees and deletes their correctly assigned
   license. Existing provider ownership and inferred license workflows pass.
+
+## Cycle 15 — Save machine power settings and ownership together
+
+- Tried: register a machine through the real runner protocol, give its owner a
+  login todo, then submit power-policy/idle-timeout changes together with an
+  invalid owner or a forbidden ownership transfer. Finally, transfer it as an
+  admin and update only the idle timeout.
+- Initial observation: a mixed request returned 400 (`owner must be a workspace
+  member`) but GET `/api/resources` showed the power policy changed from
+  `manual` to `on_demand` and timeout changed to 10. A failed save changed how
+  the chief would power-manage the machine.
+- Fix: defer the machine write until ownership validation succeeds. A
+  power-only change still persists, and successful owner changes still move
+  open login todos to the responsible member.
+- Evidence: `uv run pytest tests/test_api_operator_workflows.py -k
+  rejected_machine -q --tb=short` initially failed because the rejected request
+  changed both `power_policy` and `idle_stop_minutes` in HTTP readback.
+- Verified: `uv run pytest tests/test_api_operator_workflows.py
+  tests/test_users_roles.py tests/test_power_management.py
+  tests/test_runner_protocol.py -q` — 39 passed. Both 400 and 403 failures
+  preserve the complete machine row and Inbox assignment; valid mixed and
+  power-only edits work.
+
+## Review
+
+The existing HTTP seam was sufficient for all five regressions; no new service
+layer or speculative abstraction was needed. Two untyped create requests now
+have explicit input schemas, and the machine fix moves its existing write.
+No model calls, runner processes, cloud writes, or UI changes were required.

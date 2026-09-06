@@ -2032,9 +2032,8 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
                 if body.idle_stop_minutes < 1:
                     raise HTTPException(400, "idle_stop_minutes must be >= 1")
                 machine.idle_stop_minutes = body.idle_stop_minutes
-            store.put(machine)
         if body.owner_user_id is None:
-            return machine.model_dump()
+            return store.put(machine).model_dump()
         new_owner = body.owner_user_id.strip()
         if new_owner and not store.list(
             WorkspaceMembership, workspace_id=ctx.workspace_id, user_id=new_owner
