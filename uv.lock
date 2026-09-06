@@ -1132,7 +1132,7 @@ requires-dist = [
     { name = "google-cloud-storage", specifier = ">=2.18" },
     { name = "google-genai", specifier = ">=1.0" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "kodo-agent", git = "https://github.com/ikamensh/kodo.git?rev=5ad352ae75ef0809695ca460cc9c4628b8506bc1" },
+    { name = "kodo-agent", git = "https://github.com/ikamensh/kodo.git?rev=fa38b00efe12be6ccdfb4f9d4cc36dee604276b7" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "rumps", marker = "sys_platform == 'darwin' and extra == 'mac'", specifier = ">=0.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
@@ -1497,7 +1497,7 @@ wheels = [
 [[package]]
 name = "kodo-agent"
 version = "0.5.1"
-source = { git = "https://github.com/ikamensh/kodo.git?rev=5ad352ae75ef0809695ca460cc9c4628b8506bc1#5ad352ae75ef0809695ca460cc9c4628b8506bc1" }
+source = { git = "https://github.com/ikamensh/kodo.git?rev=fa38b00efe12be6ccdfb4f9d4cc36dee604276b7#fa38b00efe12be6ccdfb4f9d4cc36dee604276b7" }
 dependencies = [
     { name = "chardet" },
     { name = "charset-normalizer" },

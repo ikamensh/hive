@@ -11,8 +11,8 @@ dependencies = [
     "google-cloud-storage>=2.18",
     "google-genai>=1.0",
     "httpx>=0.27",
-    # Preserve provider/quota errors until this fix is included in a PyPI release.
-    "kodo-agent @ git+https://github.com/ikamensh/kodo.git@5ad352ae75ef0809695ca460cc9c4628b8506bc1",
+    # Tested CLI isolation, error handling and large-message transport pending release.
+    "kodo-agent @ git+https://github.com/ikamensh/kodo.git@fa38b00efe12be6ccdfb4f9d4cc36dee604276b7",
     # Its bundled Claude Code must support the selected Fable/Opus models.
     "claude-agent-sdk>=0.2.152",
 ]
