@@ -1,156 +1,214 @@
-# Shared artifacts for agent-administered Hive
+# Agent workflow and shared artifacts
 
-Status: design discussion, 2026-09-06. The principles below capture the user's
-direction; the proposed lifecycle is a recommendation, not implemented behavior
-or an approved implementation plan.
+Hive's canonical workflow is to prepare a plan with an administering agent,
+submit it to an explicitly selected project, authorize execution, and retrieve
+the result by plan ID. Hive's own planner produces the same document structure.
+An imported plan needs neither an intake conversation nor an internal planner.
 
-## Direction established in discussion
+The chief owns accepted revisions and live execution state. The author owns the
+editable source file. A local chief and a managed chief expose the same API and
+artifact contract; their storage and available machines differ. Editing a file
+after submission does not change work already accepted by the chief.
 
-- Hive is administered through its CLI by an agent working with the operator.
-  Together they can develop the mission, iteration goal, repository understanding,
-  and task breakdown before handing execution to Hive.
-- Hive may also plan autonomously. Both authors should produce the same kind of
-  planning artifacts, usable as files and accepted by the same execution path.
-- A project spans multiple repositories. Selecting the right Hive project can
-  remain the administering agent's responsibility. A remembered default in a
-  main repository is optional convenience, not the definition of project scope.
-- Explore clear file inputs, outputs, and durable artifact history for other
-  operations too. How these relate to distributed runtime state remains a design
-  choice; separate file-based and distributed workflows are not yet a decision.
+## Prepare the handoff
 
-## Recommendation: shared documents, one execution authority
+Start in the repository where the project is being discussed. Establish the
+iteration goal, expected outcomes, constraints, task order, and what code the
+plan assumes. Choose the Hive project explicitly:
 
-Planning authorship and runtime placement are independent choices. An external
-agent or Hive can author a plan; a local or remote chief can execute it. Existing
-local FileStore/LocalBlobStore and managed Firestore/GCS provide the storage
-alternatives without requiring different artifact semantics.
+```bash
+hive whoami
+hive projects
+hive project PROJECT
+```
 
-Distinguish three lifecycles:
+These examples assume the CLI is on PATH. Use `uv run hive` from the Hive source
+checkout, or `hive --local ...` to select the local install. A remembered default
+project in a repository is not implemented. Project selection remains the
+administering agent's responsibility.
 
-| Material | Authority | File behavior |
-| --- | --- | --- |
-| Draft instructions | The author editing that draft | Editable, portable, optionally tracked in Git |
-| Submitted instructions | The exact revision accepted by the chief | Retained and exportable without changing its meaning |
-| Execution state and results | The chief coordinating the work | Status exports are dated observations; final results are durable artifacts |
+The canonical plan is plain TOML. Stable item keys support amendments; item
+order is execution order. This is a new-plan example:
 
-The chief keeps the submitted input and its execution facts. It does not depend
-on the originating laptop or its checkout remaining online. Editing a source
-file after submission does not silently change executing work. Exporting status
-does not rewrite the author's draft.
+```toml
+version = 1
+plan_id = ""
+revision = 0
+goal = "Users can export deterministic CSV data from the CLI."
 
-Git remains useful for project knowledge and reviewed plan history. Starting a
-job should explicitly submit its documents to the selected chief; pushing a file
-need not implicitly launch work. Runtime heartbeats and runner leases remain
-coordinated execution state, with no requirement to commit them into a repository.
+[context_documents]
+"decisions.md" = "Use Python's standard library. Preserve the existing CLI.\n"
 
-## Proposed planning lifecycle
+[[items]]
+key = "csv-export"
+repo = "https://github.com/you/core.git"
+title = "Add deterministic CSV export"
+story = "A user can export the selected records to a CSV file."
+constraints = "Keep record ordering stable; add no dependencies."
+notes = """
+Cover empty input and records containing commas and newlines.
+Run the public CLI in the tests and verify the resulting CSV.
+"""
+```
 
-1. Prepare a brief and plan files, locally or through Hive's planner. Both paths
-   use one versioned plan schema and a lossless file representation. The web
-   editor must use the same document semantics too.
-2. Check and submit a specific revision to an explicitly selected project.
-   Return the accepted project, plan ID, revision, input digest, resolved
-   repository references, and execution settings.
-3. Start that revision under the operator's authorization. Hive-authored plans
-   obey the same authorization rules; authorship alone does not authorize work.
-   An authorized autonomous workflow can chain these stages without a manual
-   file export and re-import.
-4. Inspect or export current status, questions, task evidence, and outputs. An
-   administering agent can reconnect from another machine using the returned ID.
-5. Amend against the current accepted revision. Stable item identities and an
-   expected prior revision prevent stale drafts from overwriting newer work.
-   A retry of the same submission returns the same acceptance receipt.
-6. When execution ends, produce a deterministic result containing landed,
-   cancelled, and unresolved items, tested and merged commits, validation evidence,
-   and output references. A narrative assessment can explain whether the goal
-   was met, but is not required to record execution completion.
+For a project spanning repositories, give each item its target `repo`. An empty
+item repo resolves to the project's spec home when submitted, and that resolved
+repo is retained. A plan runs in strict order across its repositories; it does
+not express a dependency graph or parallel branches. Choose a project validation
+command that works in each target repository.
 
-Submitted revisions remain available. An active attempt retains the instructions
-it started with. Amendments affect eligible future work; changing an active
-attempt's instructions requires an explicit interruption. Removing a section
-from a draft must not implicitly cancel running work.
+`context_documents` is a map of names to inline text, preserved in the accepted
+revision and supplied to execution attempts. A name is a label, not a local path
+that Hive reads or uploads. Include the needed document text explicitly.
+`repo_baselines` optionally maps repository URLs to the commits used while
+planning. These baselines are advisory context: Hive does not verify them,
+check out those SHAs, capture dirty files, or transfer unpushed code. The
+administering agent must make the required code available to the runners;
+fresh item branches start from the remote default branch after prior merges.
 
-## Multiple repositories and references
+Markdown remains an initial-import shortcut: a `# Goal` followed by ordered
+`## Task title` sections puts each task body into its notes. Export TOML before
+editing a submitted plan. The canonical representation preserves prose,
+headings, code fences, structured fields, and stable identities without relying
+on Markdown headings as field delimiters. The authoritative schema is
+[`PlanDocument`](../hive/_workstreams/plan_document.py).
 
-Use the existing spec home as the natural location for shared artifacts; it can
-be the main implementation repository or a dedicated documentation repository.
-The selected Hive project supplies its member repository registry. A submission
-records the resolved repository mapping, so later registry edits do not silently
-retarget accepted work. Items name their target when a project default is
-insufficient. No checkout discovery is required to launch explicitly.
+## Check, submit, and start
 
-Project selection and code availability are separate concerns. Instructions
-written against unpushed code still need an explicit way to make that code
-available to remote runners. Start with published code and recorded repository
-baselines; avoid automatically packaging an entire working tree.
+```bash
+hive plan-check plan.toml
+hive plan-import PROJECT plan.toml --validate 'make check'
+hive plan PROJECT
+hive plan-approve PROJECT
+```
 
-Submission captures explicitly included local document bytes and resolves their
-relative paths from a defined artifact root. Referenced repository documents
-record the revision used. A planning baseline describes the code the author
-understood; it does not force every later item to restart from that commit and
-discard earlier items' merges.
+`plan-check` works offline and validates the document format. It does not check
+repository access, starting commits, agent availability, or whether the proposed
+work is feasible. A submission must contain at least one item. Add
+`--repo https://github.com/you/core.git` when creating a project through import.
+Existing project settings are preserved unless options such as `--validate` or
+`--prefer` explicitly change them. Agent selection, session allowances, and
+budgets remain project policy configured with `hive set`.
 
-## Generalize the convention through concrete operations
+When the operator has authorized execution of this revision, use
+`hive plan-import PROJECT plan.toml --start` to submit and approve together.
+Both authorship paths require approval before execution. Hive-authored drafts
+are available through `hive plan-propose PROJECT` and the same export/review
+commands; configuring its planner is covered in [the README](../README.md).
 
-| Operation | Durable input | Durable output |
-| --- | --- | --- |
-| Planning | Brief, goals, constraints, repository context | Plan |
-| Execution | Accepted plan revision | Execution result and evidence |
-| Testing | Acceptance stories and testability contract | Test report and findings |
-| Critique | Selected specification or plan revision | Findings and proposed changes |
+Save the returned `plan.id`, `accepted_revision`, and `plan.input_digest`.
+The ID identifies the execution to follow. The digest hashes the canonical
+accepted TOML for that revision, including assigned identities and resolved
+repositories. It is not a hash of the original Markdown or TOML source text.
 
-Each operation should accept and emit its documented representation through the
-CLI. Documents can be read or written directly by an external agent; Hive can
-produce them through the same module interface. Do not require every internal
-module to serialize a temporary file simply to call the next module.
+```bash
+hive plan-export PLAN_ID -o accepted.toml
+hive plan-export PLAN_ID --revision 1 -o revision-1.toml
+hive plan-export PLAN_ID --revision 1 --submitted -o original-input.txt
+```
 
-Pause, resume, cancellation, and retry remain explicit actions with receipts.
-File representation should make durable work easier to prepare, inspect, and
-compose; it should not require editing state files for a simple action.
+Canonical export returns an editable document with the accepted `plan_id` and
+`revision`. `--submitted` returns the original submitted text, which can differ
+from the canonical export; UTF-8 source line endings are preserved. Submitted
+revisions are retained by the chief.
+Repeating the same source for the same project reuses its accepted submission,
+including after completion or abandonment; it does not create another run.
 
-Begin with the plan document and execution result. Establish the convention
-through these real uses before introducing a generic operation framework.
+## Monitor and inspect
 
-## Current implementation gaps
+```bash
+hive plan-wait PLAN_ID --timeout 60 --json
+hive plan-result PLAN_ID -o result.json
+```
 
-- Markdown import and planner-created plans already converge on `Plan` and
-  `PlanItem`, but there is no common lossless document round trip. The import
-  parser puts task bodies in notes; the planner supplies structured item fields.
-- `iteration-plan.md` is written once at activation. Its commit identity is not
-  retained, and subsequent edits/amendments do not update that snapshot.
-- Submission identities, immutable revisions, stale-edit checks, and retained
-  repository mappings are absent.
-- CLI watching emits snapshots until the project's latest plan terminates; it
-  lacks a bounded wait for a specified plan to need attention or complete.
-- Final project completion currently relies on the planner, even though imported
-  plans can execute with planning disabled. A deterministic execution result is
-  needed for both authorship paths.
+Wait follows the specified plan even if the project later starts another one.
+It returns one observation with `reason`, `plan_id`, elapsed time, and a state
+snapshot. Waiting never approves, pauses, retries, or cancels work.
 
-## Choices still open
+| Wait reason | Administering agent's next action |
+| --- | --- |
+| `completed` | Read `plan-result`, inspect item outcomes and verification evidence. |
+| `abandoned` | Read the result; `terminal` tells whether running attempts have drained. |
+| `needs_attention` | Read the snapshot and `hive inbox`; approve a reviewed draft, answer a question, or repair the parked item as appropriate. |
+| `waiting_capacity` | Inspect the state reason and `hive show agents`; resolve access, allowance, or availability, then wait again. |
+| `timed_out` | Read the observation and wait again if continued monitoring is intended. A timeout does not stop Hive. |
 
-- Exact document syntax and directory convention. Prefer one canonical plan
-  representation with readable prose and enough structure for stable identities;
-  do not maintain independently editable Markdown and JSON versions.
-- Whether publishing draft/final artifacts to the spec home's Git history is
-  automatic or explicit. Either way, execution must retain accepted input and
-  output independently of whether that publication succeeds.
-- The policy for repository drift since planning: record a baseline, require
-  an expected revision where needed, and define when revalidation is necessary.
-- The authorization policy for fully autonomous planning and amendments. The
-  artifact format should not encode a mandatory human interview.
+The JSON execution result includes input revision/digest, separate done and
+cancelled counts, each item's outcome, attempt revisions and reports, review and
+validation evidence, landing commits, trace/artifact references, and relevant
+open questions/todos. `hive task TASK_ID` and `hive trace TASK_ID` provide deeper
+inspection. The result's `captured_at` changes on export: it is a dated snapshot,
+not a frozen JSON file written once.
 
-## Behavioral examples to validate before implementation is complete
+`terminal` means execution has ended, including draining any cancelled attempts.
+An execution can be `done`, `partial`, or `abandoned`; active snapshots also
+distinguish pending, running, blocked, and stopping. A complete plan can contain
+cancelled items. Inspect that distinction before assessing whether the goal was
+achieved. Results and completion reporting work with the planner disabled;
+the higher project goal verdict remains separate.
 
-- External and Hive-authored versions of the same plan preserve identical
-  meaning through export, edit, validation, submission, and execution.
-- Submit from a laptop to a remote chief, disconnect the laptop, then retrieve
-  the exact accepted input and result from another client.
-- Submit twice after a lost response: only one plan is accepted and executed.
-- Two agents edit revision 7: after one submits revision 8, the other's update
-  is rejected with the current revision and an inspectable difference.
-- An amendment changes queued work while the active task retains its original
-  instructions and previously completed work retains its evidence.
-- A two-repository plan records both repository identities and preserves earlier
-  items' merges when starting later items.
-- With the planner disabled, both local and managed runtime modes produce a
-  terminal execution result, distinguishing landed work from cancellations.
+## Amend and recover
+
+```bash
+hive plan-export PLAN_ID -o amendment.toml
+# Edit future work; preserve plan_id, revision, item keys, and existing items.
+hive plan-check amendment.toml
+hive plan-import PROJECT amendment.toml --start
+```
+
+An amendment names the revision it was based on; the chief assigns the next
+revision when accepting changes. Changed queued instructions become proposals
+and need renewed approval. Leave off `--start` to submit them for review.
+Execution attempts retain their original instructions and revision. Started or
+terminal items cannot be rewritten or reordered through an amendment. Shared
+goal/context cannot change once an item has started; put new requirements in
+eligible future items instead.
+
+Omitting an existing key does not cancel its item: the submission is rejected.
+Use `hive plan-item-cancel ITEM_ID`, retaining the item in future exports. Stop
+an active task with `hive cancel TASK_ID` and wait for its report before editing
+and retrying a parked item with `hive plan-retry ITEM_ID`. To stop the whole plan,
+use `hive plan-abandon PROJECT`. `--append` accepts a document of additional
+items with the same goal; they still need approval, optionally through `--start`.
+
+| Failure | Recovery |
+| --- | --- |
+| Unknown field, malformed TOML, duplicate key | Correct the file and rerun `plan-check`; these are document errors. |
+| HTTP 409, stale revision or another live plan | Export the current plan and reconcile your changes. Do not manually bump the revision to bypass the conflict. |
+| Lost response or chief interrupted during submission | Retry the same submission. The retained prepared submission is replayed before the accepted revision advances, preserving the plan identity. |
+| Edit touches an active/completed item, or omits a key | Keep those instructions and keys; amend eligible work or perform an explicit cancellation. |
+| Review or validation failure | Inspect the report. Hive makes bounded repairs; if it parks, fix the cause or amend the item and retry. |
+
+Approval publishes `iteration-plan.toml` to the spec home as a best-effort
+snapshot; a publication failure creates a todo while execution continues.
+Subsequent revisions are retained by the chief and retrieved through export.
+They are not automatically synchronized into Git. Draft files may be tracked
+in a repository, but pushing a file does not launch work and runtime heartbeats
+do not create Git commits. There is no bidirectional file watcher.
+
+## Executable evidence
+
+Run the isolated artifact demonstration from the Hive checkout:
+
+```bash
+uv run python scripts/demo_plan_artifacts.py --output-dir /tmp/hive-artifact-demo-new
+# With an authenticated coding agent:
+uv run python scripts/demo_plan_artifacts.py --output-dir /tmp/hive-artifact-codex-new --backend codex
+```
+
+Use a fresh output directory. The default uses a scripted agent;
+`--backend opencode` is also available. The demo uses a local FileStore chief and a local
+Git origin with isolated landing transport, preserving exported inputs, results,
+and checks in its output directory. It does not exercise the deployed chief or
+GitHub's production merge endpoint.
+
+On 2026-09-06, the real Codex variant at
+`~/.local/share/hive-demos/plan-artifacts-20260906` passed: two initially failing
+tests passed after independent build/review sessions. Plan `3eb0d22bdf1b` checked
+and landed SHA `0aef191c5111f585bb8b96b9a916a5c4e62d609e`.
+Two chief restarts preserved state, and
+a duplicate submission retained one plan. Managed storage uses the same API
+contract; this recorded live exercise verified local FileStore execution.
+
+See [acceptance examples](../acceptance/plan-artifacts.md) and the integration
+tests referenced in the [code map](code-map.md) for the maintained contract.

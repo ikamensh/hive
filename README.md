@@ -1,15 +1,64 @@
 # 🐝 hive
 
-Continuous autonomous software development. You give hive a project — a mission and a concrete iteration goal — and it keeps AI coding agents (Claude Code, Cursor, Codex, Gemini CLI, OpenCode) productively working toward that goal: planning, building, and verifying each change with a second agent, **asking you when the spec is genuinely ambiguous**, and never making a mess.
+Hive coordinates coding agents through a CLI that your own agent can administer.
+Work with that agent in your project's repository to establish the goal, inspect
+the code, and prepare a plan. Submit the plan to Hive, then use its returned plan
+ID to monitor execution and retrieve reviewed, tested results. Hive can also
+draft plans itself; both authors use the same versioned documents and execution
+pipeline.
 
-See the [current workflow guide](wiki/hive-workflow-guide.md) for scenario diagrams,
-definitions, steps and outputs, or open the [formatted Word document](wiki/hive-workflow-guide.docx).
+Start with the [agent workflow and artifact contract](wiki/artifact-workflow.md).
+The [scenario guide](wiki/hive-workflow-guide.md) covers the wider product flows
+and is also available as a [Word document](wiki/hive-workflow-guide.docx).
 
 The point isn't just "an agent writes code." It's the loop around it: hive decomposes the goal into workstreams, runs at most one agent per repo so there are no merge conflicts, gates every change behind independent verification (with an anti-bloat check), and parks work to batch up questions for you instead of guessing on things that are expensive to get wrong. Your answers accumulate into an ever-sharper spec.
 
 **Good for:** medium-running, spec-driven work you'd otherwise babysit — building out an iteration of a side project, a greenfield service from a written spec, multi-repo features. **Not (yet) for:** one-off "fix this line" edits (just use the agent CLI directly), or work with no written goal to aim at.
 
 ---
+
+## Canonical workflow: prepare, submit, monitor, inspect
+
+These commands assume `hive` is on your PATH. From the Hive source checkout,
+use `uv run hive`. Select the target chief with `hive whoami` and the project
+with `hive projects`; a Hive project may span several repositories. The current
+directory does not implicitly select a project.
+
+Prepare a canonical TOML plan, or start with Markdown containing one `# Goal`
+and ordered `## Task title` sections. The [artifact guide](wiki/artifact-workflow.md)
+has a TOML example and the amendment rules.
+
+```bash
+hive plan-check plan.toml                         # offline syntax/schema check
+hive plan-import my-project plan.toml --validate 'make check'
+hive plan my-project                             # review the accepted draft
+hive plan-approve my-project                      # authorize and start
+```
+
+For a new project, add `--repo https://github.com/you/core.git` to the import.
+When execution is already authorized, `plan-import ... --start` combines
+submission and approval. Imported plans do not require intake or a planner.
+Use `--local` after `hive` to address a local chief explicitly.
+
+Keep the returned `plan.id`, `accepted_revision`, and `plan.input_digest`:
+
+```bash
+hive plan-export PLAN_ID -o accepted.toml
+hive plan-wait PLAN_ID --timeout 60 --json
+hive plan-result PLAN_ID -o result.json
+```
+
+Wait returns a bounded observation of that exact plan. Inspect its reason and
+the result's `terminal`, item outcomes, and evidence before reporting completion.
+The execution result needs no planner; it distinguishes delivered work from
+cancellations and leaves assessment of the project goal separate.
+
+To amend, export the current plan, edit eligible items while retaining their
+keys and the exported revision, then import it again. Changed queued instructions
+need approval again; `--start` supplies that approval when authorized. A stale
+revision is rejected. Repeating the same submission reuses its accepted plan,
+including after a restart. `plan-export --submitted` retrieves the original
+submitted text; `input_digest` hashes the canonical accepted export instead.
 
 ## Quickstart: run hive on your laptop
 
@@ -116,8 +165,8 @@ hold shared state. `hive run` without `--local` requires that configuration.
 
 - **[uv](https://docs.astral.sh/uv/)** (Python runner; everything below is `uv run …`).
 - **At least one agent CLI installed and logged in** — `claude`, `cursor`, `codex`, `gemini-cli`, or `opencode`. This is what actually writes the code.
-- **An orchestrator provider** — free OpenCode (`HIVE_ORCH_PROVIDER=opencode`), `OPENAI_API_KEY`, or `GEMINI_API_KEY`. This plans and decides separately from the coding sessions.
-- **`gh` logged in** (`gh auth login`) — hive pushes commits/PRs using your GitHub credentials.
+- **An orchestrator provider, if Hive will draft plans** — free OpenCode (`HIVE_ORCH_PROVIDER=opencode`), `OPENAI_API_KEY`, or `GEMINI_API_KEY`. Imported plans execute without it.
+- **`gh` logged in** (`gh auth login`) — hive pushes branches and lands changes using your GitHub credentials.
 - **GCP application credentials** (`gcloud auth application-default login`) with access to the Firestore project and GCS bucket.
 - **A GitHub repo to point at** — the project's *spec home* (holds `mission.md` / `iteration.md`). For a quick test, any repo you can push to works; hive will write the goal into it.
 
@@ -292,7 +341,7 @@ The laptop quickstart runs the chief *and* a runner on your machine — close th
 
 **The model.** There is exactly one chief per project database — a Firestore leader lease makes a second one refuse to start — and runners attach to it:
 
-- **The server** runs the chief *and* an always-on runner. The chief's planning loop keeps decomposing the goal, dispatching work, and verifying results on its own, so **iteration work progresses with no human in the loop** while your laptop is closed.
+- **The server** runs the chief *and* an always-on runner. It advances approved plans and verifies results while your laptop is closed. Newly proposed work still needs approval.
 - **Your laptop** is just a client. You point the `hive` CLI at the server to set goals, answer questions, and trigger issue/test runs. You can *also* attach your laptop as an extra runner; closing it simply removes that runner and the server's runner keeps going.
 
 **Point your CLI at the server (once):**

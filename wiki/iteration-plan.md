@@ -6,8 +6,17 @@ durable, human-visible **plan**: an ordered list of plan items the AI proposes
 executed through the proven resolve → review → merge pipeline, fed directly
 from the plan. Done = the item's work merged on the remote default branch.
 
-Local execution now has a direct Markdown entrypoint (`hive --local plan-import`)
-and independent build/review backend settings. Included-only projects use their
+The canonical agent interface is now a versioned TOML plan, shared by external
+authors and Hive's planner. `plan-check`, `plan-import`, `plan-export`,
+`plan-wait`, and `plan-result` cover the handoff and return path; Markdown remains
+an initial-import shortcut. Retained revisions preserve the accepted input,
+and deterministic result snapshots distinguish merged work from cancellations
+without requiring a planner. The project goal verdict remains a separate
+assessment. See [the artifact workflow](artifact-workflow.md) for current file,
+amendment, recovery, and publication semantics.
+
+Local execution supports independent build/review backend settings.
+Included-only projects use their
 CLI session grants at a zero dollar budget. Planning can use explicitly free
 OpenCode models; paid API planning remains disabled. A configured
 validation command runs on the runner after review and records evidence tied to
@@ -81,10 +90,11 @@ model is `PlanItem`. In UI copy "item" is unambiguous inside a plan view.
    approval is always the explicit flip (approve-all being the shortcut), so
    "reviewed" keeps one meaning. Item approval is review progress, never an
    execution trigger.
-3. **Approve** = every item approved. One store transaction queues all items
-   (they are meaningful as a set), plus one commit of the plan document to the
-   spec home — the durable record of what was approved. Activation is
-   store-only, so it is genuinely atomic. Execution starts immediately.
+3. **Approve** makes approved items eligible for execution. The chief retains
+   the input revision and publishes `iteration-plan.toml` to the spec home as a
+   best-effort approval snapshot. Publication failure creates a todo without
+   blocking execution. Subsequent revisions remain retrievable from the chief;
+   they are not automatically synchronized into Git.
 4. **Execute.** Strict plan order, one item active at a time, through the
    existing pipeline: a resolve task (warm session) clarifies and builds, a
    review task (fresh session) accepts or rejects, accept lands the work
@@ -94,76 +104,29 @@ model is `PlanItem`. In UI copy "item" is unambiguous inside a plan view.
    `done` when its work is merged on the remote. Blocked/rejected states park
    the item with the agent's explanation on the item itself, surfaced through
    Needs-you — not as a comment on some external artifact.
-5. **Amend.** Reality invalidates plans. The AI proposes amendments (add,
-   cancel, split, reorder remaining items) which need the human's flip; the
-   human amends directly, self-approved. Amendments are store flips — no
-   external churn — and are diffs against what was approved: the honest
-   answer to "what changed since I signed off".
-6. **Complete.** All items done → plan complete → the AI records the outcome
-   and marks the goal complete with commands and verification evidence. The
-   human sets the next iteration's goal; Hive drafts it for review.
+5. **Amend.** Export the current document and submit changes against that
+   revision, retaining stable item keys. Stale edits, omitted items, and changes
+   to active or terminal work are rejected. Changed queued instructions need
+   renewed approval. Cancellation and retry remain explicit actions. Retained
+   exports let the administering agent inspect what changed since approval.
+6. **Complete.** Once all items are done or cancelled, the plan becomes complete
+   if any work landed, otherwise abandoned. The execution result records that
+   distinction and its evidence independently of the planner. A planner may
+   assess whether the goal was met; the human sets the next iteration goal.
 
 ## Data model
 
-```python
-class PlanStatus(StrEnum):
-    draft = "draft"          # assembling / under review
-    approved = "approved"    # items queued; executing
-    complete = "complete"
-    abandoned = "abandoned"
+The authoritative definitions are in [`hive/models.py`](../hive/models.py).
+`Plan` identifies an iteration and its current accepted input revision;
+`PlanItem` carries one durable item through review and execution.
+`PlanRevision` retains canonical and submitted instructions. `PlanSubmission`
+retains prepared writes only until the accepted revision is committed, allowing
+an interrupted submission to recover. Each `Task` records `plan_revision`,
+its attempt report, and validation evidence. Landed items record the merge SHA.
 
-
-class Plan(BaseModel):
-    id: str
-    workspace_id: str
-    project_id: str
-    goal: str                # the iteration statement this plan serves
-    status: PlanStatus
-    proposed_by: str         # "agent" | "human"
-    spec_ref: str = ""       # path of the committed plan doc in the spec home
-    created_at: float
-    approved_at: float = 0.0
-    finished_at: float = 0.0
-
-
-class PlanItemStatus(StrEnum):
-    # review phase (owned by the plan UI)
-    proposed = "proposed"    # awaiting the human's flip
-    approved = "approved"    # flipped; waiting for whole-plan approval
-    # execution phase (owned by the pipeline; same machine as issue work)
-    queued = "queued"
-    resolving = "resolving"
-    blocked_clarity = "blocked_clarity"
-    reviewing = "reviewing"
-    rejected = "rejected"
-    done = "done"            # work merged on the remote default branch
-    cancelled = "cancelled"  # removed by amendment, or plan abandoned
-
-
-class PlanItem(BaseModel):
-    id: str
-    workspace_id: str
-    project_id: str
-    plan_id: str
-    order: int
-    repo: str = ""           # target repo; the project's main repo when empty
-    title: str
-    story: str = ""          # target user story
-    constraints: str = ""    # technical boundaries, intentionally sparse
-    notes: str = ""
-    story_keys: list[str] = []  # acceptance stories this claims to deliver
-    status: PlanItemStatus
-    parked_reason: str = ""  # blocked/rejected: the agent's explanation
-    authored_by: str         # "agent" | "human"
-    edited_by_human: bool = False
-    created_at: float
-    updated_at: float
-```
-
-One record, one owner per phase: the plan UI owns the review states and the
-content fields; from `queued` onward the pipeline owns the status exactly as
-it does for issue work items. Content edits stop at approval (amendment path
-after that); no field is written by both sides.
+Runtime status does not belong in the editable document. Amendments change
+eligible future instructions; running attempts retain the input they started
+with, and completed work retains its evidence.
 
 ## Execution: the doc-fed pipeline
 
@@ -173,18 +136,17 @@ truth to reconcile. Plan items replace all three with things hive already
 owns:
 
 - **Input** — the work doc is synthesized from the item (title, story,
-  constraints, notes) and ships to the runner over the existing
-  markdown-doc field on `Task` (today `issue_doc` → `ISSUE.md`; generalize
-  the name to `work_doc`/`WORK.md` when convenient — cosmetic).
+  constraints, notes) and embedded in `Task.instructions`, alongside retained
+  context documents and advisory planning baselines.
 - **Communication** — blocked/rejected explanations land in
   `parked_reason` + Needs-you, hive's one attention queue.
 - **Truth** — the store owns item status; there is no external state to
   reconcile, no filing races, no provenance markers so the issue scan can
   skip hive's own filings.
-- **Landing** — merge the work branch into the remote default branch (the
-  same merge call issue work uses; that is transport, not integration). With
-  `autonomy=pr` the landing step opens a PR instead — an orthogonal project
-  policy, not part of this design.
+- **Landing** — merge the accepted work into the remote default branch and
+  retain the landing commit. Configured runner validation gates the exact
+  pushed commit being merged. Plan execution currently uses direct landing;
+  a PR delivery mode is not implemented for this pipeline.
 
 Sequencing reuses the existing lowest-order-first advancement: plan items
 carry contiguous `order`, one item in `resolving`/`reviewing` at a time per
@@ -193,14 +155,12 @@ workstream with today's behavior, side by side.
 
 ## Planner changes
 
-The orchestrator's iteration role shrinks from "invent and dispatch work" to
-planning: `create_workstream` is retired for iteration use; in its place
-`propose_plan(goal, items)`, `propose_amendment(...)`, and next-iteration
-proposal on completion. `ask_user`, todo filing, and `mark_goal_complete`
-remain; goal completion keys off plan completion. With no approved plan the
-iteration workstream idles with the visible reason "no approved plan" — never
-a silent stall. That shrinkage is where the predictability comes from: less
-LLM-emergent surface, more deterministic machine.
+The orchestrator proposes plans with `propose_plan(goal, items_json)` and
+additional items with `amend_plan(items_json)`. Both use the shared document
+schema and retained history. Its tools do not dispatch iteration work or
+approve its own proposals. `ask_user`, todo filing, and `mark_goal_complete`
+remain available. Completion can wake the planner to assess the outcome, but
+the human must supply the next iteration goal before another plan is drafted.
 
 ## UI
 
@@ -228,9 +188,9 @@ LLM-emergent surface, more deterministic machine.
 
 ## Scope
 
-**MVP:** `Plan` + `PlanItem`, propose/review/edit/approve, atomic store-only
-activation, execution via the doc-fed pipeline, amendments (human direct, AI
-proposed), review checklist + progress rail.
+**Implemented:** shared plan documents and retained revisions,
+propose/review/edit/approve, ordered execution, guarded amendments, review
+checklist and progress rail, pinned CLI waits, and deterministic result exports.
 
 **Deferred until a real run shows the need:**
 
@@ -250,14 +210,15 @@ proposed), review checklist + progress rail.
 
 - Property: approve-all is equivalent to flipping every item individually —
   identical resulting plan and item states.
-- Activation atomicity: approval queues all N items and commits the plan doc,
-  or changes nothing and surfaces the error — never a partial set (store-only
-  writes make this cheap to guarantee).
+- Submission recovery: prepared writes recover before the accepted revision
+  advances; rejected stale amendments leave the current revision intact.
+- Publication failure: the chief retains approved input and executes it even
+  when publishing the approval snapshot fails.
 - Invariant: no iteration task is ever dispatched without an approved plan
   item behind it.
 - Round-trip: the committed plan document and the store rows agree on content
   after approval; the synthesized work doc contains every content field.
 - Amendment: cancelling a queued item is a store flip; adding one queues
   exactly one; `done` items are untouchable.
-- Phase ownership: no code path writes content fields after approval, and no
-  plan-UI path writes status once the pipeline owns it.
+- Amendment ownership: active/terminal instructions remain unchanged;
+  amended queued instructions require renewed approval.
