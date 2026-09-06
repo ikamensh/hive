@@ -352,19 +352,31 @@ def test_resolve_auth_block_stops_dispatch_and_files_todo(app, monkeypatch):
     assert any("Fix codex login on codex-runner" in t.title for t in open_todos)
 
 
-def test_scan_resolve_review_accept_lands(app, monkeypatch):
+@pytest.mark.parametrize("repo", ["https://github.com/o/r.git", "https://github.com/o/app.git"])
+def test_scan_resolve_review_accept_lands(app, monkeypatch, repo):
+    """An issue stays in its source repo through resolve, review and landing,
+    including when the project keeps its specs in a different repository."""
     client, store = app
     pid = _issues_project_via_api(client)
     rid = _register_usable_runner(client, name="codex-runner", backend="codex")
     _pass_preflight(monkeypatch)
-    monkeypatch.setattr("hive.api.fetch_open_issues_full", lambda repo, token: [issue(1, "bug")])
+    stream = client.post(f"/api/projects/{pid}/workstreams", json={"repo": repo}).json()
 
-    resp = client.post(f"/api/projects/{pid}/scan-issues").json()
+    def fetch_issues(source_repo, token):
+        assert source_repo == repo
+        return [issue(1, "bug")]
+
+    monkeypatch.setattr("hive.api.fetch_open_issues_full", fetch_issues)
+
+    resp = client.post(
+        f"/api/projects/{pid}/workstreams/{stream['id']}/issue-runs", json={},
+    ).json()
     assert resp["open_issues"] == 1 and resp["resolve_queued"] == 1
 
     _pump(client, store)
     resolve = _poll(client, rid)
     assert resolve["kind"] == "resolve" and resolve["branch"] == "hive/issue-1"
+    assert resolve["repo"] == repo
     _report(
         client,
         resolve["id"],
@@ -384,17 +396,19 @@ def test_scan_resolve_review_accept_lands(app, monkeypatch):
     _pump(client, store)
     review = _poll(client, rid)
     assert review["kind"] == "review" and review["branch"] == "hive/issue-1"
+    assert review["repo"] == repo
 
     merged = {}
     monkeypatch.setattr("hive.api.merge_branch",
-                        lambda repo, head, token, message="": merged.setdefault("head", head))
-    def close_issue(repo, number, comment, token):
+                        lambda repo, head, token, message="": merged.update(repo=repo, head=head))
+    def close_issue(source_repo, number, comment, token):
+        assert source_repo == repo
         merged["closed"] = number
         merged["comment"] = comment
 
     monkeypatch.setattr("hive.api.resolve_issue_on_github", close_issue)
     monkeypatch.setattr("hive.api.delete_branch",
-                        lambda repo, branch, token: merged.setdefault("deleted", branch))
+                        lambda repo, branch, token: merged.update(deleted_repo=repo, deleted=branch))
     _report(
         client,
         review["id"],
@@ -408,6 +422,7 @@ def test_scan_resolve_review_accept_lands(app, monkeypatch):
     )
 
     assert merged["head"] == "hive/issue-1"
+    assert merged["repo"] == repo
     assert merged["closed"] == 1
     assert "Resolved by Hive — merged `hive/issue-1`" in merged["comment"]
     assert "### Fix summary" in merged["comment"]
@@ -419,6 +434,7 @@ def test_scan_resolve_review_accept_lands(app, monkeypatch):
     assert store.get(IssueItem, ws_id).status == IssueItemStatus.done
     # The merged work branch is cleaned up so issue branches don't pile up.
     assert merged["deleted"] == "hive/issue-1"
+    assert merged["deleted_repo"] == repo
 
 
 def test_strict_sequencing_starts_next_issue_only_after_landing(app, monkeypatch):

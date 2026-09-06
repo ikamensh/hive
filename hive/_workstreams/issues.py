@@ -683,7 +683,7 @@ def _make_issue_task(
             workstream_id=ws.id,
             work_item_id=ws.id,
             run_id=run.id if run else "",
-            repo=project.spec_repo,
+            repo=ws.repo,
             branch=item_branch(ws),
             fresh_branch=kind == TaskKind.resolve,
             kind=kind,
@@ -790,5 +790,4 @@ def create_landing_integration_task(
         prompt_name="landing_integration",
         context=context,
     )
-
 
