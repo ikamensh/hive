@@ -1,6 +1,6 @@
 """Launch the isolated acceptance install with subscription/free agent capacity.
 
-Run from the Hive checkout: uv run python experiments/production-simulator/run_local.py
+Run from the Hive checkout: uv run python scripts/run_production_simulator.py
 CLI commands in another terminal use `uv run hive --local ...`.
 """
 

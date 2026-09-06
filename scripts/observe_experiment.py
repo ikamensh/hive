@@ -1,6 +1,6 @@
 """Record a live Hive experiment without changing its state.
 
-uv run python experiments/production-simulator/observe.py PROJECT --output /path/to/evidence
+uv run python scripts/observe_experiment.py PROJECT --output /path/to/evidence
 Writes full snapshots, a JSONL event timeline, and a continuously refreshed report.
 The output directory must be empty. Ctrl-C stops observation, not Hive.
 """

@@ -17,7 +17,7 @@ from hive.persistence.store import FileStore
 from test_capacity_fallback import PREFERENCES
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "experiments/production-simulator/capacity_drill.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts/capacity_drill.py"
 
 
 def drill_module():

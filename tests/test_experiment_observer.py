@@ -10,7 +10,7 @@ import threading
 import time
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "experiments/production-simulator/observe.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts/observe_experiment.py"
 
 
 def test_observer_records_changes_capacity_and_outage_without_mutations(tmp_path):
