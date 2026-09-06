@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 
 import httpx
+import pytest
 
 import hive.worker.loop as loop_mod
 from hive.worker import WorkerConfig, WorkerLoop
@@ -136,6 +137,35 @@ def test_loop_fails_over_to_advertised_chief_and_prefers_it(tmp_path):
 
     # Success is remembered: the survivor is now the first candidate tried.
     assert loop2.roster.candidates()[0] == "http://b"
+
+
+@pytest.mark.parametrize("failure", ["http", "json"])
+def test_repeated_bad_polls_reconnect_to_advertised_chief(tmp_path, failure):
+    """HTTP errors and undecodable replies both count toward live failover."""
+    old = FakeChief(name="old", advertised=["http://b"])
+    new = FakeChief(name="new", tasks=[{"id": "t1"}])
+    register = old.handler
+
+    def unavailable(request):
+        if request.url.path.endswith("/register") and not old.registers:
+            return register(request)
+        if request.url.path.endswith("/poll"):
+            old.polls += 1
+            if failure == "json":
+                return httpx.Response(200, content=b"<html>misrouted</html>")
+        return httpx.Response(503)
+
+    old.handler = unavailable
+    loop = make_loop(
+        tmp_path,
+        {"http://a": old, "http://b": new},
+        ["http://a"],
+        before_poll=lambda: "polling stalled" if old.polls >= 6 else "",
+    )
+
+    assert loop.run(max_tasks=1) == ""
+    assert loop.current_url == "http://b"
+    assert [tid for tid, _ in new.results] == ["t1"]
 
 
 def test_loop_reregisters_when_chief_forgets_worker(tmp_path):

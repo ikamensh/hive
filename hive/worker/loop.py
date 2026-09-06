@@ -225,8 +225,8 @@ class WorkerLoop:
                     if response.status_code == 404:  # chief forgot us: fresh identity
                         self.worker_id = self._register(client)
                         continue
-                    failures = 0
                     data = response.raise_for_status().json()
+                    failures = 0
                     if self.between_tasks is not None and (reason := self.between_tasks(data)):
                         log.info("exiting worker loop: %s", reason)
                         return reason
