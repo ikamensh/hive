@@ -529,12 +529,54 @@ challenge remains queued.
     `evidence/scaling-packaging-independent/runs/78e9af3b1327459a05cbc71d0f265a5dc672209c/`,
     builder run `manual-ui/`, and `evidence/packaging-api-independent/`.
 
+48. The final original build `a5b246432997` completed at `1788658141.712285`
+    after 655.56 seconds, pushing `d388f38451544deca159478fc2327dcb7ea0bf83`.
+    Fresh Opus review `312c4c4b7e4c` started at `1788658146.658092` and accepted
+    the unchanged head at `1788658456.859135` after 310.20 seconds. Its baseline
+    was the prior packaging landing, and the uploaded artifact/native session
+    join is verified. Runner and independent clean gates pass **508 Python and
+    ten browser tests**. Merge `29a998f967836f16d6ee4e9079dd58776099b58f` exactly
+    matches reviewed tree `2771bef5923aacb83999458e8395f017e67b0cea`.
+    All ten original items are done. Independent game tests cover every legal
+    purchase and over-budget combination, exact deadlines, fixed seed/edit
+    protection, forged metadata and replay. Actual UI checkpoint downloads
+    reproduce through HTTP/CLI, including a complete two-action journal and
+    one 600 EUR investment. Root exercised every legal choice, run/pause,
+    save/reset/load, keyboard/narrow layout, and return to the sandbox; all
+    eight groups pass and screenshots were inspected. Installed-wheel execution
+    outside the repository verifies packaged data and public challenge behavior.
+    The 160-line game module reuses the unchanged physics/event/persistence core.
+    Evidence: `evidence/production-contract-independent/runs/d388f38451544deca159478fc2327dcb7ea0bf83/`
+    and the frozen original ten-item `evidence/final-audit/` capture.
+
+49. The free Muse chief then automatically committed completion notes at
+    `168ebd73947c7386b846947daaef389936611844` and marked the goal complete.
+    Chief log provenance distinguishes this docs-only bookkeeping from the
+    exact reviewed implementation landing. Independent inspection found one
+    stale assertion: `wiki/landed.md` still said engine contract 2 after the
+    packaging implementation moved to 3. The original product acceptance remains
+    valid; this separate completion-summary defect is retained explicitly.
+    Paused at `1788658968.014615` and imported the reviewed follow-up brief
+    `completion-correction.md` through the official CLI as new plan `7eb1706d7a08`
+    (item `0823eee2c3df`), preserving original complete plan `164e1f61d0c0`.
+    Import automatically reopened the project. Started Astra builder
+    `980ce19d247c` at `1788659222.790509`, then drained at `1788659266.468548`
+    while the chief fix was prepared. The builder finished at `1788659523.557981`.
+    Hive `bd76815` exposes current review verdict/check SHA in chronological
+    task context and keeps completion notes focused on verified current behavior.
+    Its actual orchestrator/tool/Git integration regression and sibling review
+    pass; the full suite passes **709 tests, one skip (126.80 seconds)** plus
+    focused lint/build. Gracefully replaced idle chief 64399 with 97503 on this
+    source and resumed for fresh documentation review `2608b59867c4`. The original
+    ten-item timing/intervention assessment is frozen separately from this
+    follow-up. Evidence: `evidence/completion-summary-correction/`.
+
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
-for all nine landed increments and must continue to hold for every later item. H7
+for all ten original landed increments and must continue to hold for every later item. H7
 has substantive Astra, Fable, and Opus work. H8–H9 now have a labeled live fallback
 dispatch, natural expiry, and return to preferred capacity with preserved partial
-work and the recovered increment's reviewed landing. Full-simulator product criteria
-remain open. No spontaneous
+work and the recovered increment's reviewed landing. All original simulator product criteria now have independent acceptance evidence;
+the separate completion-note correction remains in progress. No spontaneous
 subscription exhaustion has been observed or claimed.
 
 ## User refinement: Muse in every role
