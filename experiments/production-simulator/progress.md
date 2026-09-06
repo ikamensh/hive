@@ -7,8 +7,8 @@ correctly rejected the missing frontend. Hive automatically returned to Astra
 after the synthetic cooldown expired and built the full dashboard while
 preserving the API fix. Independent production UI/API checks pass, but its fresh
 Opus review hit the Claude SDK's 1 MiB transport limit and parked visibly.
-That runtime/retry path is being repaired. Scaling, packaging and the contract
-challenge remain queued.
+The runtime/retry fixes are deployed and a fresh Opus review is now running on
+the preserved branch. Scaling, packaging and the contract challenge remain queued.
 
 ## Install and evidence
 
@@ -428,6 +428,31 @@ challenge remain queued.
     cases pass integration regressions; 71 relevant tests, lint and wheel build
     pass. A separate Kodo transport fix and official retry of the already parked
     historical attempt are pending; no old task record was rewritten.
+
+44. Kodo `fa38b00` gives Claude sessions a bounded 16 MiB SDK message buffer,
+    configurable and retained by fresh clones. A real SDK/subprocess regression
+    exercises a 2 MiB image-bearing tool result, a second query and visible
+    failure when an explicitly smaller cap is exceeded. All 170 session tests
+    pass; five new transport cases also pass on the SDK minimum. A real
+    subscription Opus smoke read an image whose serialized SDK message is
+    **1,258,037 bytes**, above the old 1,048,576-byte limit, and finished normally
+    in 19 seconds. Its earlier 1,035,765-byte smoke is retained and explicitly
+    does not prove crossing the old limit. Only type/size metadata and final
+    output were captured. Hive `e95c496` pins the tested Kodo revision.
+    Hive `c30b1c7` also makes an official manual retry resume a failed unfinished
+    review, with fresh session and preserved checkout; real REJECT or a nonzero
+    gate still returns to the builder. FileStore/restart/cancellation regressions
+    pass, including missing validation evidence requiring renewed review.
+    Paused at `1788654054.2819462`, gracefully stopped idle chief 456, installed
+    the pin, and passed all **701 Hive tests (one skip, 109.56 seconds)** plus
+    lint and wheel/sdist build. Chief 37358 runs the updated source. Official
+    `plan-retry 9360ea649d57` created review `1e5e313cfe2c`, retaining the original
+    runner/branch and `make check`, with a blank session and immutable failed
+    predecessor. After the native large-message proof, resumed the workspace:
+    Opus review started at `1788654376.43871`. This is an operator retry after
+    an integration fix, not a retroactive claim of automatic recovery.
+    Evidence: `evidence/dashboard-review-buffer-failure/` including native smoke,
+    full-suite log, `rollout-and-official-review-retry.json` and `resumed-review.json`.
 
 H1–H3 and recovery of the first increment have live evidence. H4–H6 are established
 for all seven landed increments and must continue to hold for every later item. H7
