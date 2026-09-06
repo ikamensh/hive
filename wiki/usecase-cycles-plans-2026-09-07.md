@@ -55,3 +55,20 @@ No live services, repositories or agents are changed by these scenarios.
   tests/test_plan_artifacts.py -q` → **44 passed**.
 - **Self-review:** Kept the existing strict parsers and changed only format
   selection; invalid TOML is still rejected rather than silently repaired.
+
+## Cycle 9 — concurrent amendments to an API/documentation plan
+
+- **Scenario:** Import API and documentation items with shared contract text
+  and a repository baseline. Approve the API item. Two authors export revision
+  one; author A improves documentation, then author B submits a stale API edit.
+- **Initial observation:** `uv run pytest tests/test_plan_usecase_cycles.py::test_concurrent_multi_repository_amendment_preserves_accepted_work -q`
+  → **1 passed**. The stale amendment receives HTTP 409 and an actionable
+  revision-conflict message.
+- **Decision:** No production change. The accepted documentation amendment
+  preserves API approval, the item repositories, shared contract and baseline.
+  The stale edit changes neither current source nor retained revision one.
+- **Verification:** The scenario checks original submitted text, canonical
+  historical/current exports, resolved default repository, and item approval
+  via HTTP. Kept as a regression for the concurrent-author property.
+- **Self-review:** The API already centralizes revision checks in submission;
+  adding client-side concurrency machinery would duplicate that guarantee.

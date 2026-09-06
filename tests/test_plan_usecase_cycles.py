@@ -97,3 +97,51 @@ def test_markdown_goal_links_survive_import_and_export(app):
     exported = parse_plan_document(client.get(f"/api/plans/{plan_id}/document").raise_for_status().text)
     assert "## This is example content, not another task" in exported["items"][0]["notes"]
     assert len(exported["items"]) == 2
+
+
+def test_concurrent_multi_repository_amendment_preserves_accepted_work(app):
+    """Two authors editing one cross-repository plan cannot overwrite each
+    other; a rejected stale source leaves approval and retained inputs intact."""
+    from copy import deepcopy
+    from hive._workstreams.plan_document import parse_plan_document, render_plan_document
+
+    client, _ = app
+    project = _api_project(client)
+    source = render_plan_document({
+        "goal": "Ship an export API and its documentation",
+        "context_documents": {"contract.md": "CSV columns are name and city. Preserve Unicode."},
+        "repo_baselines": {"https://github.com/o/api.git": "c" * 40},
+        "items": [
+            {"key": "api", "title": "Expose CSV records", "repo": "https://github.com/o/api.git"},
+            {"key": "docs", "title": "Document CSV download", "notes": "Show a curl example."},
+        ],
+    })
+    accepted = client.post(f"/api/projects/{project}/plan/submit", json={"source": source}).raise_for_status().json()
+    plan_id = accepted["plan"]["id"]
+    client.post(f"/api/plan-items/{accepted['items'][0]['id']}/approve").raise_for_status()
+    original_export = client.get(f"/api/plans/{plan_id}/document").raise_for_status().text
+    author_a = parse_plan_document(original_export)
+    author_b = deepcopy(author_a)
+    author_a["items"][1]["notes"] += " Include Unicode response data."
+    amended = client.post(f"/api/projects/{project}/plan/submit", json={
+        "source": render_plan_document(author_a),
+    }).raise_for_status().json()
+    current_export = client.get(f"/api/plans/{plan_id}/document").raise_for_status().text
+    author_b["items"][0]["constraints"] = "Paginate the export."
+
+    stale = client.post(f"/api/projects/{project}/plan/submit", json={
+        "source": render_plan_document(author_b),
+    })
+
+    assert stale.status_code == 409
+    assert "stale plan revision" in stale.json()["detail"]
+    assert [item["status"] for item in amended["items"]] == ["approved", "proposed"]
+    assert [item["repo"] for item in amended["items"]] == [
+        "https://github.com/o/api.git", "https://github.com/o/r.git",
+    ]
+    assert client.get(f"/api/plans/{plan_id}/document").raise_for_status().text == current_export
+    assert client.get(f"/api/plans/{plan_id}/document?revision=1").raise_for_status().text == original_export
+    assert client.get(f"/api/plans/{plan_id}/input?revision=1").raise_for_status().text == source
+    exported = parse_plan_document(current_export)
+    assert exported["context_documents"] == author_a["context_documents"]
+    assert exported["repo_baselines"] == author_a["repo_baselines"]
