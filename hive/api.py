@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict
 
@@ -136,6 +136,7 @@ from hive._control.capacity import (
     subscription_candidates,
 )
 from hive._control.overview import build_overview
+from hive._control.inbox import InboxKind, InboxScope, build_inbox
 from hive._control.show import build_show
 from hive._control.supervisor import Supervisor, state_reason
 from hive.version import get_version, version_payload
@@ -1134,6 +1135,16 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def get_plan(plan_id: str, ctx: AuthContext = Depends(current)):
         plan = require_plan(plan_id, ctx)
         return plan_payload(require_project(plan.project_id, ctx), plan)
+
+    @app.get("/api/projects/{project_id}/plans")
+    @plans.synchronized
+    def list_project_plans(project_id: str, ctx: AuthContext = Depends(current)):
+        from hive._workstreams.plan_artifacts import recover_submissions
+        project = require_project(project_id, ctx)
+        recover_submissions(store, project)
+        history = store.list(Plan, workspace_id=ctx.workspace_id, project_id=project_id)
+        history.sort(key=lambda plan: (plan.created_at, plan.id), reverse=True)
+        return {"plans": [plan.model_dump() for plan in history]}
 
     @app.get("/api/plans/{plan_id}/readiness")
     @plans.synchronized
@@ -2142,6 +2153,14 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
             raise HTTPException(403, "this license belongs to another user")
         store.delete(Subscription, sub_id)
         return {"ok": True}
+
+    @app.get("/api/inbox")
+    @plans.synchronized
+    def get_inbox(kind: InboxKind = "all", scope: InboxScope = "all", project_id: str = "",
+                  q: str = "", offset: int = Query(default=0, ge=0),
+                  limit: int = Query(default=20, ge=1, le=100), ctx: AuthContext = Depends(current)):
+        return build_inbox(store, ctx, kind=kind, scope=scope, project_id=project_id,
+                           q=q, offset=offset, limit=limit)
 
     @app.get("/api/human-todos")
     def list_human_todos(ctx: AuthContext = Depends(current)):
