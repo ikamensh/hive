@@ -245,6 +245,33 @@ def test_concurrent_dispatch_still_serializes_per_repo():
     assert len(store.list(Task, status=TaskStatus.pending)) == 1
 
 
+def test_dispatch_serializes_shared_repo_across_projects():
+    """Two projects sharing a repo must wait for each other's edits to land,
+    while an unrelated repo can use the spare runner and keep progressing."""
+    store = MemoryStore()
+    first = seed(store)
+    second = store.put(Project(name="second", spec_repo=first.spec_repo))
+    runner = store.put(Runner(name="r2", backends=["cursor"]))
+    store.put(Resource(runner_id=runner.id, backend="cursor",
+                       usability_status=ResourceUsability.usable))
+    first_task = store.put(Task(project_id=first.id, workstream_id="first",
+                                repo=first.spec_repo, instructions="first edit"))
+    waiting_task = store.put(Task(project_id=second.id, workstream_id="second",
+                                  repo=first.spec_repo, instructions="next edit"))
+    independent_task = store.put(Task(project_id=second.id, workstream_id="independent",
+                                      repo="https://example.com/other.git", instructions="other repo"))
+    supervisor = make_supervisor(store)
+
+    assert supervisor.dispatch(first) == 1
+    assert supervisor.dispatch(second) == 1
+    assert store.get(Task, waiting_task.id).status == TaskStatus.pending
+    assert store.get(Task, independent_task.id).status == TaskStatus.running
+
+    store.update(Task, first_task.id, lambda task: setattr(task, "status", TaskStatus.done))
+    assert supervisor.dispatch(second) == 1
+    assert store.get(Task, waiting_task.id).status == TaskStatus.running
+
+
 def test_dispatch_parallel_across_repos():
     store = MemoryStore()
     project = seed(store)

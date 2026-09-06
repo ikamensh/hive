@@ -760,22 +760,13 @@ class Supervisor:
         grant_left = allowances.remaining(
             grants, allowances.sessions_today(tasks, utc_day_start())
         )
-        busy_repos = {
-            t.repo
-            for t in tasks
-            if t.status == TaskStatus.running and _serializes_repo(t)
-        }
-        # Workspace-wide, not per-project: a runner executes one task at a time,
-        # so stacking another project's task on it leaves other machines idle
-        # while this one queues (observed live: raven ran one project's intake
-        # with a second project's verify claimed behind it, hive-vm idle).
-        busy_runners = {
-            t.runner_id
-            for t in self.store.list(
-                Task, workspace_id=self.workspace_id, status=TaskStatus.running
-            )
-            if t.runner_id
-        }
+        # Projects can share both repos and runners. Occupancy must span the
+        # workspace so they cannot edit one repo or claim one runner together.
+        running = self.store.list(
+            Task, workspace_id=self.workspace_id, status=TaskStatus.running
+        )
+        busy_repos = {t.repo for t in running if _serializes_repo(t)}
+        busy_runners = {t.runner_id for t in running if t.runner_id}
         runners = [r for r in self.store.list(Runner, workspace_id=self.workspace_id) if r.online()]
         resources = {
             (r.runner_id, r.backend): r
