@@ -1,4 +1,5 @@
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -231,7 +232,7 @@ def test_checkout_uses_https_token_auth_for_github_ssh_urls(monkeypatch, tmp_pat
         if args[:2] == ["git", "clone"]:
             assert args[2] == "https://github.com/ikamensh/hive.git"
             assert "ghp_runner" not in args
-            (tmp_path / "work" / "hive").mkdir(parents=True)
+            Path(args[3]).mkdir(parents=True)
             env = kwargs["env"]
             entries = [
                 (env[f"GIT_CONFIG_KEY_{i}"], env[f"GIT_CONFIG_VALUE_{i}"])
@@ -256,8 +257,8 @@ def test_checkout_uses_https_token_auth_for_github_ssh_urls(monkeypatch, tmp_pat
 
     path = runner.checkout("git@github.com:ikamensh/hive.git")
 
-    assert path == tmp_path / "work" / "hive"
     clone = next(args for args, _kwargs in calls if args[:2] == ["git", "clone"])
+    assert path == Path(clone[3]) and path.parent == tmp_path / "work"
     assert clone[2] == "https://github.com/ikamensh/hive.git"
 
 
@@ -269,6 +270,8 @@ def test_checkout_rewrites_existing_github_origin_before_fetch(monkeypatch, tmp_
 
     def fake_run(args, **kwargs):
         calls.append((args, kwargs))
+        if args[:2] == ["git", "config"]:
+            return _completed(args, "git@github.com:ikamensh/hive.git\n")
         if args[:2] == ["git", "for-each-ref"]:
             return _completed(args, "abc123 commit\trefs/remotes/origin/main\n")
         if args[:2] == ["git", "symbolic-ref"]:
@@ -279,15 +282,11 @@ def test_checkout_rewrites_existing_github_origin_before_fetch(monkeypatch, tmp_
 
     runner.checkout("git@github.com:ikamensh/hive.git")
 
-    git_calls = [args for args, _kwargs in calls]
-    assert git_calls[0] == [
-        "git",
-        "remote",
-        "set-url",
-        "origin",
-        "https://github.com/ikamensh/hive.git",
+    remote_calls = [args for args, _kwargs in calls if args[1] in ("remote", "fetch")]
+    assert remote_calls == [
+        ["git", "remote", "set-url", "origin", "https://github.com/ikamensh/hive.git"],
+        ["git", "fetch", "origin"],
     ]
-    assert git_calls[1] == ["git", "fetch", "origin"]
 
 
 def test_checkout_restores_requested_origin_when_token_is_unavailable(monkeypatch, tmp_path):
@@ -298,6 +297,8 @@ def test_checkout_restores_requested_origin_when_token_is_unavailable(monkeypatc
 
     def fake_run(args, **kwargs):
         calls.append((args, kwargs))
+        if args[:2] == ["git", "config"]:
+            return _completed(args, "https://github.com/ikamensh/hive.git\n")
         if args[:2] == ["git", "for-each-ref"]:
             return _completed(args, "abc123 commit\trefs/remotes/origin/main\n")
         if args[:2] == ["git", "symbolic-ref"]:
@@ -308,15 +309,11 @@ def test_checkout_restores_requested_origin_when_token_is_unavailable(monkeypatc
 
     runner.checkout("git@github.com:ikamensh/hive.git")
 
-    git_calls = [args for args, _kwargs in calls]
-    assert git_calls[0] == [
-        "git",
-        "remote",
-        "set-url",
-        "origin",
-        "git@github.com:ikamensh/hive.git",
+    remote_calls = [args for args, _kwargs in calls if args[1] in ("remote", "fetch")]
+    assert remote_calls == [
+        ["git", "remote", "set-url", "origin", "git@github.com:ikamensh/hive.git"],
+        ["git", "fetch", "origin"],
     ]
-    assert git_calls[1] == ["git", "fetch", "origin"]
 
 
 def test_runner_github_token_uses_allowed_user_for_gh_detection(monkeypatch):
@@ -401,3 +398,95 @@ def test_checkout_of_empty_origin_supports_a_named_branch(monkeypatch, tmp_path)
         ["git", "symbolic-ref", "HEAD"], cwd=path, capture_output=True, text=True
     ).stdout.strip()
     assert head == "refs/heads/hive/ws-1"
+
+
+def _git(path, *args):
+    return subprocess.run(
+        ["git", *args], cwd=path, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def _seed_origin(path, owner):
+    path.mkdir(parents=True)
+    _git(path, "init", "-b", "main")
+    (path / "owner.txt").write_text(owner)
+    _git(path, "add", ".")
+    _git(path, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "seed")
+    return path
+
+
+def test_same_name_repositories_keep_separate_resumable_checkouts(monkeypatch, tmp_path):
+    """Switching to another owner's app must leave interrupted work intact."""
+    monkeypatch.setattr(runner, "WORKDIR", tmp_path / "work")
+    alice = _seed_origin(tmp_path / "alice" / "app", "alice")
+    bob = _seed_origin(tmp_path / "bob" / "app", "bob")
+    alice_checkout = runner.checkout(str(alice))
+    (alice_checkout / "unfinished.txt").write_text("Alice's interrupted work")
+
+    bob_checkout = runner.checkout(str(bob))
+    resumed = runner.checkout(str(alice), preserve=True)
+
+    assert (resumed / "owner.txt").read_text() == "alice"
+    assert (resumed / "unfinished.txt").read_text() == "Alice's interrupted work"
+    assert resumed == alice_checkout and resumed != bob_checkout
+    assert _git(resumed, "remote", "get-url", "origin") == str(alice)
+    assert (bob_checkout / "owner.txt").read_text() == "bob"
+
+
+@pytest.mark.parametrize("previous_name", [False, True])
+def test_resume_rejects_a_changed_origin_without_touching_work(monkeypatch, tmp_path, previous_name):
+    """A matching branch name alone is not proof that a checkout is ours."""
+    monkeypatch.setattr(runner, "WORKDIR", tmp_path / "work")
+    alice = _seed_origin(tmp_path / "alice" / "app", "alice")
+    bob = _seed_origin(tmp_path / "bob" / "app", "bob")
+    path = runner.checkout(str(alice))
+    (path / "unfinished.txt").write_text("keep these edits")
+    _git(path, "remote", "set-url", "origin", str(bob))
+    if previous_name:
+        path = path.rename(runner.WORKDIR / "app")
+
+    with pytest.raises(runner.CheckoutError, match="different repository"):
+        runner.checkout(str(alice), preserve=True)
+
+    assert (path / "unfinished.txt").read_text() == "keep these edits"
+    assert _git(path, "remote", "get-url", "origin") == str(bob)
+
+
+def test_resume_moves_existing_basename_checkout_with_unfinished_work(monkeypatch, tmp_path):
+    """Changing checkout names must preserve work made before the runner update."""
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.setattr(runner, "WORKDIR", work)
+    origin = _seed_origin(tmp_path / "alice" / "app", "alice")
+    previous = work / "app"
+    _git(work, "clone", str(origin), str(previous))
+    (previous / "owner.txt").write_text("work in progress")
+    (previous / "unfinished.txt").write_text("keep these edits")
+
+    resumed = runner.checkout(str(origin), preserve=True)
+
+    assert (resumed / "owner.txt").read_text() == "work in progress"
+    assert (resumed / "unfinished.txt").read_text() == "keep these edits"
+    assert not previous.exists()
+    assert _git(resumed, "remote", "get-url", "origin") == str(origin)
+
+
+def test_github_transport_and_case_aliases_resume_the_same_checkout(monkeypatch, tmp_path):
+    """GitHub auth transport and URL casing do not change repository identity."""
+    monkeypatch.setattr(runner, "WORKDIR", tmp_path / "work")
+    monkeypatch.setattr(runner, "_runner_github_token", lambda: "")
+    origin = _seed_origin(tmp_path / "alice" / "app", "alice")
+    ssh = "git@github.com:Alice/App.git"
+    https = "https://github.com/alice/app.git"
+    # Exercise real Git offline: both network URLs resolve to the local fixture.
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    for i, url in enumerate((ssh, https)):
+        monkeypatch.setenv(f"GIT_CONFIG_KEY_{i}", f"url.{origin}.insteadOf")
+        monkeypatch.setenv(f"GIT_CONFIG_VALUE_{i}", url)
+
+    path = runner.checkout(ssh)
+    (path / "unfinished.txt").write_text("keep these edits")
+    resumed = runner.checkout(https, preserve=True)
+
+    assert resumed == path
+    assert (resumed / "unfinished.txt").read_text() == "keep these edits"

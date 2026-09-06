@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import hashlib
 import importlib.util
 import json
 import logging
@@ -221,6 +222,12 @@ def _github_repo(repo_url: str) -> str:
     return match.group("repo") if match else ""
 
 
+def _repo_identity(repo_url: str) -> str:
+    if github_repo := _github_repo(repo_url):
+        return f"github.com/{github_repo.lower()}"
+    return repo_url.strip().rstrip("/")
+
+
 def _runner_github_token() -> str:
     if token := (os.environ.get("HIVE_GH_TOKEN") or os.environ.get("GH_TOKEN") or "").strip():
         return token
@@ -388,8 +395,25 @@ def checkout(repo_url: str, branch: str = "", fresh_branch: bool = False, *, pre
     default branch so the new attempt does not build on stale rejected work."""
     checkout_url, auth_overlay = _checkout_plan(repo_url)
     env = _with_env(auth_overlay)
-    slug = checkout_url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
-    path = WORKDIR / slug
+    identity = _repo_identity(checkout_url)
+    slug = identity.rsplit("/", 1)[-1].removesuffix(".git")
+    digest = hashlib.sha256(identity.encode()).hexdigest()[:16]
+    path = WORKDIR / f"{slug}-{digest}"
+
+    # Move a matching pre-update checkout intact, including interrupted edits.
+    previous = WORKDIR / checkout_url.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
+    existing = path if path.exists() else previous
+    if existing.exists() and (preserve or existing == previous):
+        origin = _run_checkout_git(
+            ["config", "--get", "remote.origin.url"], cwd=existing, timeout=60,
+            env=env, repo_url=checkout_url, branch=branch,
+        ).stdout.strip()
+        if _repo_identity(origin) == identity:
+            if existing == previous:
+                previous.rename(path)
+        elif preserve:
+            raise CheckoutError(f"Cannot resume {existing}: origin points to a different repository; edits were preserved.")
+
     if preserve and path.exists():
         expected = branch
         if not expected:
