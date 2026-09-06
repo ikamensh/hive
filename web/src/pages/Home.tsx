@@ -4,6 +4,7 @@ import { api, countdown, duration, money, repoShort } from "../api";
 import { useOverview } from "../App";
 import { StateBadge } from "../components/shared";
 import { ProjectActions } from "../features/project/controls";
+import "./home.css";
 import type {
   AgentStatus,
   OverviewAgent,
@@ -21,6 +22,12 @@ const AGENT_TONE: Record<AgentStatus, "ok" | "warn" | "bad" | "muted"> = {
   failed: "bad",
   offline: "muted",
   disabled: "muted",
+};
+
+const PLAN_OUTCOMES: Record<NonNullable<OverviewProject["plan"]>["outcome"], string> = {
+  pending: "Awaiting approval", running: "Execution in progress", blocked: "Needs attention",
+  stopping: "Stopping · waiting for attempts to finish", done: "All items landed",
+  partial: "Execution ended with cancellations", abandoned: "Plan abandoned",
 };
 
 function agentLabel(agent: OverviewAgent): string {
@@ -85,15 +92,19 @@ function ProjectRow({
   cooldownHint?: string;
   onPatch: (p: ProjectPatch) => Promise<void>;
 }) {
-  const { counts } = p;
+  const { counts, plan } = p;
+  const isIdle = p.state === "idle" || p.state === "idle_goal_complete";
+  const actionLabel = !plan ? "Submit a plan" : plan.outcome === "pending"
+    ? "Review plan" : ["done", "partial", "abandoned"].includes(plan.outcome)
+      ? "Inspect results" : "View progress";
   const bits = [
     counts.running ? `${counts.running} running` : null,
     counts.blockers ? `${counts.blockers} blocked` : null,
     counts.questions ? `${counts.questions} questions` : null,
   ].filter(Boolean);
   return (
-    <article className="home-project">
-      <Link to={`/p/${p.id}`} className="hp-content">
+    <article className="home-project home-plan-project">
+      <Link to={`/p/${p.id}${plan ? `?plan=${encodeURIComponent(plan.id)}` : ""}`} className="hp-content">
         <div className="hp-main">
           <div className="hp-title">
             <span className="hp-name">{p.name}</span>
@@ -104,20 +115,31 @@ function ProjectRow({
             )}
             {p.paused && <span className="chip chip-paused">paused</span>}
           </div>
-          <div className="hp-stats">{bits.join(" · ")}</div>
-          {p.state_reason && <div className="hp-reason" title={p.state_reason}>{p.state_reason}</div>}
+          {plan ? <>
+            <h3 className="hp-goal">{plan.goal}</h3>
+            <p className={`hp-outcome hp-outcome-${plan.outcome}`}>{PLAN_OUTCOMES[plan.outcome]}</p>
+            <div className="hp-progress" aria-label="Plan progress">
+              <strong>{plan.counts.done} landed</strong>
+              <span>{plan.counts.cancelled} cancelled</span>
+              <span>{plan.counts.remaining} remaining</span>
+            </div>
+          </> : <p className="hp-no-plan">No plan yet. {p.spec_repo
+            ? "Submit a plan to start an iteration."
+            : "Connect a repository to submit your first plan."}</p>}
+          {bits.length > 0 && <div className="hp-stats">{bits.join(" · ")}</div>}
+          {p.state_reason && !isIdle && (
+            <div className="hp-reason">{p.state_reason}</div>
+          )}
         </div>
-        <StateBadge
-          state={p.state}
-          attentionCount={counts.questions + counts.blockers}
-          cooldownHint={p.state === "blocked_resources" ? cooldownHint : undefined}
-        />
-        <span
-          className={`hp-spend${p.spend_today > 0 ? "" : " hp-spend-empty"}`}
-          title="spend today"
-        >
-          {p.spend_today > 0 ? money(p.spend_today) : "$0"}
-        </span>
+        <div className="hp-footer">
+          <span className="hp-open">{actionLabel} →</span>
+          {!isIdle && <StateBadge
+            state={p.state}
+            attentionCount={counts.questions + counts.blockers}
+            cooldownHint={p.state === "blocked_resources" ? cooldownHint : undefined}
+          />}
+          {p.spend_today > 0 && <span className="hp-spend">{money(p.spend_today)} today</span>}
+        </div>
       </Link>
       <ProjectActions project={p} onPatch={onPatch} compact />
     </article>
@@ -268,11 +290,6 @@ function NewProjectModal({ onClose }: { onClose: () => void }) {
 function HomeSkeleton() {
   return (
     <div className="home-skeleton" aria-hidden>
-      <div className="kpi-row">
-        {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="kpi skeleton" />
-        ))}
-      </div>
       <div className="home-grid">
         <div className="panel skeleton tall" />
         <div className="panel skeleton tall" />
@@ -295,9 +312,12 @@ export default function Home() {
 
   const t = data.totals;
   const cooldownHint = soonestCooldown(data);
+  const activePlans = data.projects.filter(p => p.plan?.status === "approved").length;
+  const draftPlans = data.projects.filter(p => p.plan?.status === "draft").length;
   const summary = [
-    `${t.tasks_running} ${t.tasks_running === 1 ? "task" : "tasks"} running`,
-    t.needs_you > 0 ? `${t.needs_you} ${t.needs_you === 1 ? "thing needs you" : "things need you"}` : null,
+    activePlans ? `${activePlans} ${activePlans === 1 ? "plan" : "plans"} in progress` : null,
+    draftPlans ? `${draftPlans} awaiting approval` : null,
+    t.needs_you > 0 ? `${t.needs_you} ${t.needs_you === 1 ? "action needs you" : "actions need you"}` : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -310,7 +330,10 @@ export default function Home() {
   return (
     <div className="page page-home">
       <div className="home-head">
-        <h1>{data.paused ? "hive is paused" : summary || "the hive is quiet"}</h1>
+        <div className="home-heading">
+          <h1>{data.paused ? "Hive is paused" : "Project work"}</h1>
+          <p>{summary || "Submit a plan, follow its progress, and inspect the results."}</p>
+        </div>
         <button
           type="button"
           className={data.paused ? "" : "ghost"}
@@ -328,38 +351,6 @@ export default function Home() {
           Running tasks finish and report. Resume to let queued work continue.
         </div>
       ) : null}
-
-      <div className="kpi-row">
-        <Kpi icon="bolt" label="running" value={t.tasks_running} sub="tasks now" />
-        <Kpi
-          icon="robot"
-          label="agents"
-          value={<>{t.agents_ready}<span> / {t.agents_total}</span></>}
-          sub="ready"
-          to="/machines"
-        />
-        <Kpi
-          icon="server"
-          label="machines"
-          value={<>{t.machines_online}<span> / {t.machines_total}</span></>}
-          sub="online"
-          to="/machines"
-        />
-        <Kpi
-          icon="alert-circle"
-          label="needs you"
-          value={t.needs_you}
-          sub={`${data.attention.questions.length} q · ${data.attention.human_todos.length} todo`}
-          hot={t.needs_you > 0}
-          to="/needs-you"
-        />
-        <Kpi
-          icon="currency-dollar"
-          label="spend"
-          value={money(t.spend_today)}
-          sub={t.budget_today > 0 ? `of ${money(t.budget_today)} today` : "today"}
-        />
-      </div>
 
       <div className="home-grid">
         <section className="panel">
@@ -438,36 +429,74 @@ export default function Home() {
         </div>
       </div>
 
-      <section className="panel">
-        <div className="panel-head">
-          <h2>
-            <i className="ti ti-cpu" aria-hidden /> capacity · machines &amp; agents
-          </h2>
-          <Link to="/machines" className="panel-link">
-            manage →
-          </Link>
+      <details className="home-diagnostics">
+        <summary>
+          <span>Capacity &amp; activity</span>
+          <span>{t.agents_ready} {t.agents_ready === 1 ? "agent" : "agents"} ready · {money(t.spend_today)} today</span>
+        </summary>
+        <div className="kpi-row">
+          <Kpi icon="bolt" label="running" value={t.tasks_running} sub="tasks now" />
+          <Kpi
+            icon="robot"
+            label="agents"
+            value={<>{t.agents_ready}<span> / {t.agents_total}</span></>}
+            sub="ready"
+            to="/machines"
+          />
+          <Kpi
+            icon="server"
+            label="machines"
+            value={<>{t.machines_online}<span> / {t.machines_total}</span></>}
+            sub="online"
+            to="/machines"
+          />
+          <Kpi
+            icon="alert-circle"
+            label="needs you"
+            value={t.needs_you}
+            sub={`${data.attention.questions.length} q · ${data.attention.human_todos.length} todo`}
+            hot={t.needs_you > 0}
+            to="/needs-you"
+          />
+          <Kpi
+            icon="currency-dollar"
+            label="spend"
+            value={money(t.spend_today)}
+            sub={t.budget_today > 0 ? `of ${money(t.budget_today)} today` : "today"}
+          />
         </div>
-        {data.capacity.machines.length === 0 ? (
-          <p className="muted">No machines enrolled. Enroll a machine on the machines page.</p>
-        ) : (
-          <div className="cap-list">
-            {data.capacity.machines.map((m) => (
-              <MachineCard key={m.id} m={m} />
-            ))}
+
+        <section className="panel">
+          <div className="panel-head">
+            <h2>
+              <i className="ti ti-cpu" aria-hidden /> capacity · machines &amp; agents
+            </h2>
+            <Link to="/machines" className="panel-link">
+              manage →
+            </Link>
           </div>
-        )}
-        {data.subscriptions.length > 0 && (
-          <div className="cap-subs">
-            <span className="muted">subscriptions</span>
-            {data.subscriptions.map((s) => (
-              <span key={s.id} className="chip">
-                {s.provider}
-                {s.plan ? ` · ${s.plan}` : ""}
-              </span>
-            ))}
-          </div>
-        )}
-      </section>
+          {data.capacity.machines.length === 0 ? (
+            <p className="muted">No machines enrolled. Enroll a machine on the machines page.</p>
+          ) : (
+            <div className="cap-list">
+              {data.capacity.machines.map((m) => (
+                <MachineCard key={m.id} m={m} />
+              ))}
+            </div>
+          )}
+          {data.subscriptions.length > 0 && (
+            <div className="cap-subs">
+              <span className="muted">subscriptions</span>
+              {data.subscriptions.map((s) => (
+                <span key={s.id} className="chip">
+                  {s.provider}
+                  {s.plan ? ` · ${s.plan}` : ""}
+                </span>
+              ))}
+            </div>
+          )}
+        </section>
+      </details>
 
       {showNew && <NewProjectModal onClose={() => setShowNew(false)} />}
     </div>

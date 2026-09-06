@@ -17,11 +17,15 @@ from typing import Callable
 from hive._control import pause
 from hive._control.capacity import capacity_summary, group_machines
 from hive._control.supervisor import state_reason
+from hive._workstreams.plan_results import execution_summary
 from hive._workstreams.testing import automatic_testing_enabled, story_health
 from hive.models import (
     HumanTask,
     HumanTaskStatus,
     Machine,
+    Plan,
+    PlanItem,
+    PlanStatus,
     Project,
     ProjectState,
     ProjectWorkstream,
@@ -121,6 +125,9 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
     items_by_project = _bucket(store.list(IssueItem, workspace_id=workspace_id), lambda w: w.project_id)
     streams_by_project = _bucket(store.list(ProjectWorkstream, workspace_id=workspace_id), lambda s: s.project_id)
     tasks_by_project = _bucket(all_tasks, lambda t: t.project_id)
+    tasks_by_plan = _bucket(all_tasks, lambda t: t.run_id)
+    plans_by_project = _bucket(store.list(Plan, workspace_id=workspace_id), lambda p: p.project_id)
+    items_by_plan = _bucket(store.list(PlanItem, workspace_id=workspace_id), lambda i: i.plan_id)
     questions = store.list(Question, workspace_id=workspace_id)
     q_by_project = _bucket(questions, lambda q: q.project_id)
 
@@ -130,6 +137,16 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
     for project in projects:
         items = items_by_project.get(project.id, [])
         tasks = tasks_by_project.get(project.id, [])
+        plans = plans_by_project.get(project.id, [])
+        active = [p for p in plans if p.status in (PlanStatus.draft, PlanStatus.approved)]
+        plan = active[-1] if active else max(plans, key=lambda p: p.created_at, default=None)
+        plan_summary = None
+        if plan is not None:
+            summary = execution_summary(plan, items_by_plan.get(plan.id, []), tasks_by_plan.get(plan.id, []))
+            plan_summary = {
+                "id": plan.id, "goal": plan.goal, "status": plan.status,
+                "outcome": summary.outcome, "counts": summary.counts.model_dump(),
+            }
         spend = spend_today(project.id)
         spend_total += spend
         if project.daily_budget_usd > 0:
@@ -145,6 +162,7 @@ def build_overview(store, workspace_id: str, spend_today: Callable[[str], float]
                 "created_at": project.created_at,
                 "daily_budget_usd": project.daily_budget_usd,
                 "spend_today": spend,
+                "plan": plan_summary,
                 "counts": {
                     "running": sum(1 for t in tasks if t.status == TaskStatus.running),
                     "questions": sum(

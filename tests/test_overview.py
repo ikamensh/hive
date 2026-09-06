@@ -13,6 +13,10 @@ from hive._control.overview import build_overview
 from hive.models import (
     HumanTask,
     Machine,
+    Plan,
+    PlanItem,
+    PlanItemStatus,
+    PlanStatus,
     Project,
     Question,
     Resource,
@@ -53,6 +57,58 @@ def test_empty_store_has_shape_and_zero_totals():
         "spend_today": 0.0,
         "budget_today": 0.0,
     }
+
+
+def test_projects_show_the_current_plan_without_counting_cancelled_work_as_landed():
+    """The home summary follows the same plan as the project page, and its
+    progress accounts only for that plan's items in the current workspace."""
+    store = MemoryStore()
+    project = store.put(Project(name="Exports"))
+    empty = store.put(Project(name="New project"))
+    old = store.put(Plan(project_id=project.id, goal="Old goal", status=PlanStatus.complete, created_at=1))
+    current = store.put(Plan(project_id=project.id, goal="Export CSV", status=PlanStatus.approved, created_at=2))
+    # An active plan stays visible even if another terminal record is newer.
+    store.put(Plan(project_id=project.id, goal="Abandoned experiment", status=PlanStatus.abandoned, created_at=3))
+    store.put(PlanItem(project_id=project.id, plan_id=old.id, title="Old work", status=PlanItemStatus.done))
+    for status in (PlanItemStatus.done, PlanItemStatus.cancelled, PlanItemStatus.reviewing):
+        store.put(PlanItem(project_id=project.id, plan_id=current.id, title=status, status=status))
+    store.put(PlanItem(workspace_id="other", project_id=project.id, plan_id=current.id,
+                       title="Foreign work", status=PlanItemStatus.done))
+
+    rows = {row["id"]: row for row in build_overview(store, WS, _spend_zero)["projects"]}
+
+    assert rows[empty.id]["plan"] is None
+    assert rows[project.id]["plan"] == {
+        "id": current.id, "goal": current.goal, "status": "approved", "outcome": "running",
+        "counts": {"total": 3, "done": 1, "cancelled": 1, "remaining": 1},
+    }
+
+
+def test_home_keeps_the_last_result_and_distinguishes_stopping_from_finished():
+    """Finishing execution keeps the outcome inspectable until a new plan is
+    submitted; abandonment is not finished while a runner is still reporting."""
+    store = MemoryStore()
+    project = store.put(Project(name="Exports"))
+    plan = store.put(Plan(project_id=project.id, goal="Export CSV", status=PlanStatus.complete))
+    for status in (PlanItemStatus.done, PlanItemStatus.cancelled):
+        store.put(PlanItem(project_id=project.id, plan_id=plan.id, title=status, status=status))
+
+    def summary():
+        return build_overview(store, WS, _spend_zero)["projects"][0]["plan"]
+
+    assert summary()["outcome"] == "partial"
+    assert summary()["counts"] == {"total": 2, "done": 1, "cancelled": 1, "remaining": 0}
+    plan.status = PlanStatus.abandoned
+    store.put(plan)
+    task = store.put(Task(project_id=project.id, workstream_id="", run_id=plan.id, repo="r", instructions="finish",
+                          status=TaskStatus.running))
+    assert summary()["outcome"] == "stopping"
+    task.status = TaskStatus.done
+    store.put(task)
+    assert summary()["outcome"] == "abandoned"
+    draft = store.put(Plan(project_id=project.id, goal="Add JSON export"))
+    assert summary()["id"] == draft.id
+    assert summary()["outcome"] == "pending"
 
 
 def test_totals_agree_with_rows_and_records():

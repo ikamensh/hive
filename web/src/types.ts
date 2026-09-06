@@ -708,6 +708,14 @@ export interface OverviewProject {
   created_at: number;
   daily_budget_usd: number;
   spend_today: number;
+  /** Current plan, or the latest finished plan while awaiting another iteration. */
+  plan: {
+    id: string;
+    goal: string;
+    status: PlanStatus;
+    outcome: PlanResult["outcome"];
+    counts: PlanResult["counts"];
+  } | null;
   counts: {
     running: number;
     questions: number;

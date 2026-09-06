@@ -10,7 +10,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from hive.models import (
-    PLAN_ITEM_PARKED, HumanTask, HumanTaskStatus, Plan, PlanItemStatus, PlanStatus,
+    PLAN_ITEM_PARKED, HumanTask, HumanTaskStatus, Plan, PlanItem, PlanItemStatus, PlanStatus,
     Project, Question, QuestionStatus, Task, TaskKind, TaskStatus, ValidationResult, Verdict,
 )
 from hive._workstreams.plans import plan_items
@@ -62,7 +62,13 @@ class ItemResult(BaseModel):
     attempts: list[AttemptResult]
 
 
-class PlanResult(BaseModel):
+class ExecutionSummary(BaseModel):
+    terminal: bool
+    outcome: Literal["pending", "running", "blocked", "stopping", "done", "partial", "abandoned"]
+    counts: ResultCounts
+
+
+class PlanResult(ExecutionSummary):
     schema_version: Literal[1] = 1
     kind: Literal["plan_result"] = "plan_result"
     project_id: str
@@ -71,9 +77,6 @@ class PlanResult(BaseModel):
     input_digest: str
     goal: str
     status: PlanStatus
-    terminal: bool
-    outcome: Literal["pending", "running", "blocked", "stopping", "done", "partial", "abandoned"]
-    counts: ResultCounts
     items: list[ItemResult]
     questions: list[Question]
     todos: list[HumanTask]
@@ -81,6 +84,27 @@ class PlanResult(BaseModel):
     created_at: float
     approved_at: float
     finished_at: float
+
+
+def execution_summary(plan: Plan, items: list[PlanItem], tasks: list[Task]) -> ExecutionSummary:
+    """Summarize the existing ledger without fetching or exporting attempt evidence."""
+    done = sum(item.status == PlanItemStatus.done for item in items)
+    cancelled = sum(item.status == PlanItemStatus.cancelled for item in items)
+    live_attempts = any(task.status in (TaskStatus.pending, TaskStatus.running) for task in tasks)
+    terminal = plan.status in (PlanStatus.complete, PlanStatus.abandoned) and not live_attempts
+    if terminal:
+        outcome = "abandoned" if plan.status == PlanStatus.abandoned else "partial" if cancelled else "done"
+    elif plan.status == PlanStatus.abandoned:
+        outcome = "stopping"
+    elif any(item.status in PLAN_ITEM_PARKED for item in items):
+        outcome = "blocked"
+    else:
+        outcome = "pending" if plan.status == PlanStatus.draft else "running"
+    return ExecutionSummary(
+        terminal=terminal,
+        outcome=outcome,
+        counts=ResultCounts(total=len(items), done=done, cancelled=cancelled, remaining=len(items) - done - cancelled),
+    )
 
 
 def result_document(store, project: Project, plan: Plan) -> dict:
@@ -99,28 +123,15 @@ def result_document(store, project: Project, plan: Plan) -> dict:
         HumanTask, workspace_id=project.workspace_id, project_id=project.id, status=HumanTaskStatus.open,
     ) if all(key not in todo.resolution or todo.resolution[key] in ids
              for key, ids in references.items())]
-    done = sum(item.status == PlanItemStatus.done for item in items)
-    cancelled = sum(item.status == PlanItemStatus.cancelled for item in items)
-    live_attempts = any(task.status in (TaskStatus.pending, TaskStatus.running) for task in tasks)
-    terminal = plan.status in (PlanStatus.complete, PlanStatus.abandoned) and not live_attempts
-    if terminal:
-        outcome = "abandoned" if plan.status == PlanStatus.abandoned else "partial" if cancelled else "done"
-    elif plan.status == PlanStatus.abandoned:
-        outcome = "stopping"
-    elif any(item.status in PLAN_ITEM_PARKED for item in items):
-        outcome = "blocked"
-    else:
-        outcome = "pending" if plan.status == PlanStatus.draft else "running"
+    summary = execution_summary(plan, items, tasks)
     return PlanResult(
+        **summary.model_dump(),
         project_id=project.id,
         plan_id=plan.id,
         revision=plan.revision,
         input_digest=plan.input_digest,
         goal=plan.goal,
         status=plan.status,
-        terminal=terminal,
-        outcome=outcome,
-        counts=ResultCounts(total=len(items), done=done, cancelled=cancelled, remaining=len(items) - done - cancelled),
         items=[ItemResult(
             id=item.id, title=item.title, order=item.order, repo=item.repo or project.spec_repo,
             status=item.status, parked_reason=item.parked_reason,
@@ -133,5 +144,5 @@ def result_document(store, project: Project, plan: Plan) -> dict:
         captured_at=time.time(),
         created_at=plan.created_at,
         approved_at=plan.approved_at,
-        finished_at=max(plan.finished_at, *(task.finished_at for task in tasks), 0) if terminal else 0,
+        finished_at=max(plan.finished_at, *(task.finished_at for task in tasks), 0) if summary.terminal else 0,
     ).model_dump(mode="json")
