@@ -9,6 +9,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from hive.agents import BACKEND_NAMES, AgentCallResult
+from hive.models import TaskKind
 from hive.runner import _daemon as runner
 
 
@@ -123,6 +125,13 @@ def test_preserved_review_receives_frozen_remote_default_baseline(review_checkou
     baseline = json.loads(uploaded["/api/tasks/review-1/artifacts/review-baseline.json"])
     assert baseline["task_id"] == "review-1" and baseline["base_sha"] == remote_head and baseline["head_sha"] == head
     prompt = capture.read_text()
+    # This task's stored prompt predates the host-ownership contract. The runner
+    # supplies current execution context even for already queued work.
+    assert "This checkout shares a host" in prompt
+    assert f"Working checkout: `{path.resolve()}`" in prompt
+    assert "capture their PIDs at launch" in prompt
+    assert "Do not use name-wide `pkill` or `killall`" in prompt
+    assert prompt.index("This checkout shares a host") < prompt.index(stored_instructions)
     assert f"git diff {remote_head}...HEAD" in prompt and f"git log {remote_head}..HEAD" in prompt
     assert prompt.index("Review baseline:") < prompt.index(stored_instructions)
     assert git(path, "diff", "--name-only", f"{remote_head}...HEAD") == "dashboard.py"
@@ -161,3 +170,37 @@ def test_failed_baseline_fetch_stops_before_agent_without_losing_work(review_che
     assert not capture.exists() and not uploaded
     assert git(path, "rev-parse", "HEAD") == head
     assert (git(path, "status", "--porcelain"), git(path, "diff", "--cached"), git(path, "diff")) == before
+
+
+@pytest.mark.parametrize("backend", BACKEND_NAMES)
+def test_host_process_ownership_reaches_every_worker_role(
+    backend, review_checkout, scripted_agent, monkeypatch,
+):
+    """Every backend receives host rules at delivery, including persisted task
+    instructions and resumed sessions. Only the external agent call is scripted."""
+    path, origin, _, _, _ = review_checkout
+    calls = []
+
+    def agent_call(*args, **kwargs):
+        calls.append((args, kwargs))
+        return AgentCallResult(text="Completed checks")
+
+    monkeypatch.setattr(runner, "run_agent", agent_call)
+    # Probe uses its dedicated scratch repo, preflight has no model, and work /
+    # verify are historical rows. These are all current repository AI roles.
+    roles = set(TaskKind) - {TaskKind.probe, TaskKind.preflight, TaskKind.work, TaskKind.verify}
+    for kind in sorted(roles):
+        stored = {"id": f"cached-{kind}", "kind": kind.value, "backend": backend,
+                  "repo": str(origin), "branch": "hive/item", "preserve_checkout": True,
+                  "session_handle": "existing-session", "instructions": "Run the project checks."}
+        before = dict(stored)
+        result = runner.execute(stored, {}, None)
+        assert not result["is_error"]
+        args, kwargs = calls[-1]
+        assert args[0] == backend and kwargs["resume_session"] == "existing-session"
+        assert f"Working checkout: `{path.resolve()}`" in args[1]
+        assert "free local ports" in args[1] and "capture their PIDs at launch" in args[1]
+        assert "stop only those task-owned PIDs" in args[1]
+        assert "Do not use name-wide `pkill` or `killall`" in args[1]
+        assert args[1].index("This checkout shares a host") < args[1].index(stored["instructions"])
+        assert stored == before  # attempt context does not rewrite durable history

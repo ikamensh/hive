@@ -79,6 +79,15 @@ UPDATE_CHECK_INTERVAL_S = 900.0
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNNER_VERSION = get_version()
 
+# Added at delivery so queued task prompts also receive the current host rules.
+WORKER_EXECUTION_CONTEXT = (
+    "This checkout shares a host with other tasks and user services. "
+    "Start test services on free local ports, capture their PIDs at launch, and "
+    "stop only those task-owned PIDs after testing. Do not use name-wide `pkill` or `killall`, "
+    "or stop an existing listener to free a port. If a port is occupied, choose another "
+    "port or report the conflict.\n\n"
+)
+
 log = logging.getLogger("hive.runner._daemon")
 
 SKIP_ARTIFACT_PARTS = {
@@ -793,7 +802,9 @@ def execute(task: dict, headers: dict, auth) -> dict:
     prepare_issue_workspace(project_dir, task, headers, auth)
 
     with _git_auth_environment(task["repo"]):
-        instructions = str(task.get("instructions") or "")
+        instructions = ("Runner execution context (current attempt):\n"
+                        f"Working checkout: `{project_dir.resolve()}`.\n"
+                        + WORKER_EXECUTION_CONTEXT + str(task.get("instructions") or ""))
         if task["kind"] == "review":
             try:
                 instructions = prepare_review_baseline(project_dir, task) + instructions
