@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AuthInfo,
   AgentConversation,
@@ -295,8 +295,9 @@ function writeCache(key: string | undefined, value: unknown) {
 }
 
 /**
- * Poll `fn` every `intervalMs`; re-runs when `deps` change. `refresh()` forces an
- * immediate re-fetch (use after mutations).
+ * Poll `fn` with `intervalMs` between requests; re-runs when `deps` change.
+ * `refresh()` forces an immediate re-fetch (use after mutations). Only the latest
+ * request for the current dependencies may update the result or its cache.
  *
  * `enabled: false` holds polling (and leaves `data` null) until a prerequisite —
  * e.g. auth — is ready, so callers never see a premature empty payload.
@@ -310,55 +311,56 @@ export function usePoll<T>(
   opts: { enabled?: boolean; cacheKey?: string } = {},
 ) {
   const { enabled = true, cacheKey } = opts;
-  const [data, setData] = useState<T | null>(() => readCache<T>(cacheKey));
-  const [failed, setFailed] = useState(false);
-  const [error, setError] = useState<unknown>(null);
+  const scope = useMemo(() => ({
+    active: false,
+    request: 0,
+    cached: enabled ? readCache<T>(cacheKey) : null,
+  }), [...deps, enabled, cacheKey]);
+  const [result, setResult] = useState({ scope, data: scope.cached, error: null as unknown });
   const fnRef = useRef(fn);
   fnRef.current = fn;
 
-  const store = useCallback(
-    (d: T) => {
-      setData(d);
-      setFailed(false);
-      setError(null);
-      writeCache(cacheKey, d);
-    },
-    [cacheKey],
-  );
-
   const refresh = useCallback(async () => {
+    if (!enabled || !scope.active) return;
+    const request = ++scope.request;
+    const current = () => scope.active && request === scope.request;
     try {
-      store(await fnRef.current());
+      const data = await fnRef.current();
+      if (!current()) return;
+      setResult({ scope, data, error: null });
+      writeCache(cacheKey, data);
     } catch (err) {
-      setFailed(true);
-      setError(err);
+      if (!current()) return;
+      const unauthorized = err instanceof ApiError && err.status === 401;
+      if (unauthorized) writeCache(cacheKey, null);
+      setResult(previous => ({
+        scope,
+        data: unauthorized ? null : previous.scope === scope ? previous.data : scope.cached,
+        error: err,
+      }));
     }
-  }, [store]);
+  }, [scope, enabled, cacheKey]);
 
   useEffect(() => {
     if (!enabled) return;
-    let alive = true;
+    scope.active = true;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
-      try {
-        const d = await fnRef.current();
-        if (alive) store(d);
-      } catch (err) {
-        if (alive) {
-          setFailed(true);
-          setError(err);
-        }
-      }
+      await refresh();
+      if (!stopped) timer = setTimeout(tick, intervalMs);
     };
-    tick();
-    const id = setInterval(tick, intervalMs);
+    void tick();
     return () => {
-      alive = false;
-      clearInterval(id);
+      stopped = true;
+      scope.active = false;
+      scope.request++;
+      clearTimeout(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, enabled, intervalMs]);
+  }, [scope, refresh, enabled, intervalMs]);
 
-  return { data, failed, error, refresh };
+  const { data, error } = result.scope === scope ? result : { data: scope.cached, error: null };
+  return { data, failed: error !== null, error, refresh };
 }
 
 // ---- formatting helpers ----------------------------------------------------

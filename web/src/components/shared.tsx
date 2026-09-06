@@ -1,4 +1,5 @@
 import { marked } from "marked";
+import DOMPurify from "dompurify";
 import type { Autonomy, ProjectState } from "../types";
 
 marked.setOptions({ gfm: true, breaks: true });
@@ -7,7 +8,9 @@ export function Markdown({ text, className = "" }: { text: string; className?: s
   return (
     <div
       className={`md ${className}`}
-      dangerouslySetInnerHTML={{ __html: marked.parse(text, { async: false }) }}
+      dangerouslySetInnerHTML={{
+        __html: DOMPurify.sanitize(marked.parse(text, { async: false }), { USE_PROFILES: { html: true } }),
+      }}
     />
   );
 }

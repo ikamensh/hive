@@ -11,7 +11,7 @@ export function useOverview() {
 function storageLabel(storage: StorageInfo): string {
   if (storage.fully_managed) return "persistence: managed";
   if (storage.backend === "firestore") return "persistence: mixed storage";
-  if (storage.backend === "file") return "persistence: legacy local";
+  if (storage.backend === "file") return "persistence: local";
   return "persistence: test memory";
 }
 
@@ -88,14 +88,26 @@ export default function App() {
   const [loggingOut, setLoggingOut] = useState(false);
   const version = usePoll(() => api.version(), [], 60000, { cacheKey: "hive-version" });
   const auth = usePoll(() => api.me(), [], 30000);
+  const overviewCacheKey = auth.data ? `hive-overview:${auth.data.workspace.id}:${auth.data.user.id}` : undefined;
   const poll = usePoll(() => api.overview(), [auth.data?.workspace.id], 4000, {
     enabled: !!auth.data,
-    cacheKey: "hive-overview",
+    cacheKey: overviewCacheKey,
   });
   const { theme, toggle } = useTheme();
   const attention = poll.data?.totals.needs_you ?? 0;
   const authNeedsLogin = auth.error instanceof ApiError && auth.error.status === 401;
   const versionLabel = version.data?.version ?? auth.data?.version?.version ?? "";
+
+  useEffect(() => () => {
+    // Authentication can expire before the overview request returns its own 401.
+    if (overviewCacheKey) {
+      try {
+        localStorage.removeItem(overviewCacheKey);
+      } catch {
+        /* private mode — caching is best-effort */
+      }
+    }
+  }, [overviewCacheKey]);
 
   useEffect(() => {
     document.title = versionLabel ? `hive ${versionLabel} — chief` : "hive — chief";
