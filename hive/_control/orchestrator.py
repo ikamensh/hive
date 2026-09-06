@@ -280,8 +280,6 @@ class Tools:
         (e.g. `git clone … && cargo run`), plus the verification evidence
         (review verdicts, test counts) — a claim without a way to check it is
         not a completion note."""
-        if self.project.pending_iteration_goal:
-            return "rejected: a new human iteration goal awaits a plan; propose_plan for it first."
         # The quality gate is structural: every plan item landed only through
         # an accepted fresh-agent review, so a complete plan IS the evidence.
         # Abandoned drafts don't count — they must not block the verdict.
@@ -309,9 +307,20 @@ class Tools:
                 f"rejected: {len(unfinished)} unfinished tasks, "
                 f"{len(open_questions)} open questions. Finish them or withdraw moot questions first."
             )
-        self.project.goal_complete = True
-        self.project.goal_complete_note = summary
-        self.store.put(self.project)
+
+        def complete(saved: Project) -> None:
+            # The operator can set the next goal while the model is thinking.
+            # Check it in the same update that records the old goal's verdict.
+            if not saved.pending_iteration_goal:
+                saved.goal_complete = True
+                saved.goal_complete_note = summary
+
+        current = self.store.update(Project, self.project.id, complete)
+        if current is None:
+            return "error: the project no longer exists"
+        self.project = current
+        if current.pending_iteration_goal:
+            return "rejected: a new human iteration goal awaits a plan; propose_plan for it first."
         self.actions.append("marked goal complete")
         return "goal marked complete"
 

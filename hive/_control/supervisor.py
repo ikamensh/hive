@@ -409,10 +409,7 @@ class Supervisor:
             ConversationStatus.running,
             ConversationStatus.finalizing,
         ):
-            if project.state != ProjectState.intake:
-                project.state = ProjectState.intake
-                self.store.put(project)
-            return ProjectState.intake
+            return self._set_state(project, ProjectState.intake)
         elif not project.goal_complete:
             workstreams = self.store.list(
                 IssueItem, workspace_id=self.workspace_id, project_id=project.id
@@ -428,10 +425,7 @@ class Supervisor:
                 self.store.list(Plan, workspace_id=self.workspace_id, project_id=project.id)
             )
             if not workstreams and not tasks and not plans_exist:
-                if project.state != ProjectState.intake:
-                    project.state = ProjectState.intake
-                    self.store.put(project)
-                return ProjectState.intake
+                return self._set_state(project, ProjectState.intake)
         workstreams = self.store.list(
             IssueItem, workspace_id=self.workspace_id, project_id=project.id
         )
@@ -474,9 +468,13 @@ class Supervisor:
         )
         if state == ProjectState.blocked_resources:
             self._handle_capability_block(project, tasks, available_capacity)
+        return self._set_state(project, state)
+
+    def _set_state(self, project: Project, state: ProjectState) -> ProjectState:
         if state != project.state:
+            # A tick's project snapshot must not overwrite newer operator edits.
+            self.store.update(Project, project.id, lambda saved: setattr(saved, "state", state))
             project.state = state
-            self.store.put(project)
         return state
 
     def _handle_capability_block(

@@ -11,6 +11,8 @@ import logging
 import threading
 import time
 
+import pytest
+
 from hive.models import (
     AgentConversation,
     ConversationStatus,
@@ -179,6 +181,34 @@ def test_supervisor_does_not_fetch_empty_intake_conversation_id():
     project = store.put(Project(name="p", spec_repo="x"))
     sup = make_supervisor(store)
     assert sup.refresh_state(project) == ProjectState.intake
+
+
+@pytest.mark.parametrize("intake_status", [None, ConversationStatus.open, ConversationStatus.done])
+def test_refresh_state_preserves_operator_edits(intake_status):
+    """Refreshing a project snapshot changes its badge without overwriting
+    the operator's newer goal or settings, during intake or ordinary work."""
+    store = MemoryStore()
+    project = store.put(Project(name="p", spec_repo="x", state=ProjectState.working))
+    if intake_status is not None:
+        conversation = store.put(AgentConversation(
+            project_id=project.id, repo=project.spec_repo, backend="codex", status=intake_status,
+        ))
+        project.intake_conversation_id = conversation.id
+        store.put(project)
+
+    def operator_edit(saved):
+        saved.pending_iteration_goal = "New goal"
+        saved.name = "New name"
+        saved.paused = True
+
+    store.update(Project, project.id, operator_edit)
+    state = make_supervisor(store).refresh_state(project)
+
+    saved = store.get(Project, project.id)
+    assert saved.state == state
+    assert saved.pending_iteration_goal == "New goal"
+    assert saved.name == "New name"
+    assert saved.paused is True
 
 
 def test_dispatch_serializes_per_repo():

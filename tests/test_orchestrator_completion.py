@@ -4,7 +4,11 @@ This checks context and real spec writes, not scripted-model factual judgment;
 actual prompt compliance requires a separate live planner check.
 """
 
+import pytest
+from fastapi.testclient import TestClient
+
 from hive._control.orchestrator import Orchestrator
+from hive._control.supervisor import Supervisor
 from hive._integrations.specrepo import SpecRepo
 from hive.llm import Completion, ToolCall
 from hive.models import (
@@ -14,6 +18,51 @@ from hive.models import (
 from hive.persistence import LocalBlobStore, MemoryStore
 from test_llm import FakeAdapter, _config
 from test_specrepo import bare_repo  # noqa: F401
+
+
+@pytest.mark.parametrize("new_goal", ["", "Ship the next iteration"])
+def test_completion_preserves_operator_edits_during_planning(
+    bare_repo, tmp_path, monkeypatch, new_goal,  # noqa: F811 -- imported pytest fixture
+):
+    """A planner finishing the old iteration must preserve settings changed
+    through the API while it thought, and a new goal must prevent completion."""
+    from hive.api import create_app
+
+    store = MemoryStore()
+    project = store.put(Project(name="factory", spec_repo=str(bare_repo)))
+    store.put(Plan(project_id=project.id, goal="Ship first iteration", status=PlanStatus.complete))
+    config = _config(data_dir=tmp_path)
+    client = TestClient(create_app(store, Supervisor(store, lambda *_: None), config))
+
+    class OperatorEditAdapter(FakeAdapter):
+        def start(self, *args):
+            super().start(*args)
+            patch = {"name": "renamed factory", "paused": True}
+            if new_goal:
+                patch["new_iteration_note"] = new_goal
+            response = client.patch(f"/api/projects/{project.id}", json=patch)
+            assert response.status_code == 200
+
+    adapter = OperatorEditAdapter([
+        Completion(tool_calls=[ToolCall(name="mark_goal_complete", arguments={"summary": "Try it: run"})]),
+        Completion(text="Finished reviewing the old iteration."),
+    ])
+    adapter.model = "scripted"
+    orch = Orchestrator(store, LocalBlobStore(tmp_path / "blobs"), config)
+    monkeypatch.setattr(orch, "_build_adapters", lambda: [adapter])
+
+    orch.invoke(project.id, ["Iteration plan complete; summarize delivered scope."])
+
+    saved = client.get(f"/api/projects/{project.id}").json()["project"]
+    assert saved["name"] == "renamed factory"
+    assert saved["paused"] is True
+    assert saved["pending_iteration_goal"] == new_goal
+    assert saved["goal_complete"] is (not new_goal)
+    result = adapter.fed[0][0].content
+    if new_goal:
+        assert "awaits a plan" in result
+    else:
+        assert result == "goal marked complete"
 
 
 def test_completion_receives_current_accepted_evidence_and_preserves_history(
