@@ -135,7 +135,7 @@ from hive._control.capacity import (
     resource_available,
     subscription_candidates,
 )
-from hive._control.overview import build_overview
+from hive._control.overview import build_deliveries, build_overview
 from hive._control.inbox import InboxKind, InboxScope, build_inbox
 from hive._control.show import build_show
 from hive._control.supervisor import Supervisor, state_reason
@@ -720,6 +720,11 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
     def overview(ctx: AuthContext = Depends(current)):
         refresh_project_states_for_view(ctx.workspace_id)
         return build_overview(store, ctx.workspace_id, supervisor.spend_today)
+
+    @app.get("/api/deliveries")
+    def deliveries(offset: int = Query(default=0, ge=0), limit: int = Query(default=20, ge=1, le=100),
+                   ctx: AuthContext = Depends(current)):
+        return build_deliveries(store, ctx.workspace_id, offset=offset, limit=limit)
 
     @app.get("/api/workspace")
     def get_workspace(ctx: AuthContext = Depends(current)):

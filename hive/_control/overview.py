@@ -77,7 +77,8 @@ def _bucket(items, key) -> dict[str, list]:
     return out
 
 
-def _recent_deliveries(projects: list[Project], items: list[PlanItem], tasks: list[Task]) -> dict:
+def _recent_deliveries(projects: list[Project], items: list[PlanItem], tasks: list[Task], *,
+                       offset: int = 0, limit: int = DELIVERY_CAP) -> dict:
     """Recorded landings only; checks for another commit remain distinct evidence."""
     projects_by_id = {project.id: project for project in projects}
     landed = [item for item in items if item.project_id in projects_by_id
@@ -88,7 +89,7 @@ def _recent_deliveries(projects: list[Project], items: list[PlanItem], tasks: li
         lambda task: (task.project_id, task.run_id, task.work_item_id),
     )
     rows = []
-    for item in landed[:DELIVERY_CAP]:
+    for item in landed[offset:offset + limit]:
         project = projects_by_id[item.project_id]
         attempt = max(checked.get((item.project_id, item.plan_id, item.id), []),
                       key=lambda task: (task.finished_at, task.created_at, task.id), default=None)
@@ -113,6 +114,18 @@ def _recent_deliveries(projects: list[Project], items: list[PlanItem], tasks: li
             "validation": validation,
         })
     return {"count": len(landed), "items": rows}
+
+
+def build_deliveries(store, workspace_id: str, *, offset: int = 0, limit: int = 20) -> dict:
+    """The full pageable collection behind the overview's bounded delivery preview."""
+    observed_at = time.time()
+    projects = [project for project in store.list(Project, workspace_id=workspace_id)
+                if not project.archived]
+    return {
+        "observed_at": observed_at, "offset": offset, "limit": limit,
+        **_recent_deliveries(projects, store.list(PlanItem, workspace_id=workspace_id),
+                             store.list(Task, workspace_id=workspace_id), offset=offset, limit=limit),
+    }
 
 
 def testing_offers(
