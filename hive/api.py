@@ -857,12 +857,14 @@ def create_app(store, supervisor: Supervisor, config: Config, blobs=None, local_
         if action == "message" and not body.message.strip():
             raise HTTPException(400, "message is required")
         if action == "approve":
-            # Durable spec files already in the repo: accept directly. Otherwise
-            # approval *is* the ask to finalize: one scout turn writes and pushes
+            # An existing spec can be accepted directly unless this conversation
+            # agrees a new goal. That brief must update the old files first.
+            # Approval is the ask to finalize: one scout turn writes and pushes
             # the spec files, and its completion wakes planning (see
             # TaskResultProcessor._handle_intake_result on the finalize turn).
             status = intake.spec_status(config, project)
-            if status.ready:
+            new_goal = any(turn.get("kind") == "goal" for turn in conversation.transcript)
+            if status.ready and not new_goal:
                 conversation, status = intake.accept(store, supervisor, config, project, conversation)
                 return {"conversation": conversation.model_dump(), "spec_status": status.model_dump()}
             task = intake.queue_turn(store, project, conversation, "finalize")

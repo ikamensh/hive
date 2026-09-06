@@ -325,6 +325,7 @@ def prompt(
 ) -> str:
     if turn == "initial":
         org_context = store.get_org_context(project.workspace_id).strip()
+        current_goal = next((t["text"] for t in reversed(conversation.transcript) if t.get("kind") == "goal"), "")
         handed_spec = (
             [
                 "The user handed over this spec when creating the project. Treat it as the "
@@ -333,10 +334,9 @@ def prompt(
                 project.initial_spec.strip(),
                 "",
             ]
-            if project.initial_spec.strip()
+            if project.initial_spec.strip() and project.initial_spec.strip() != current_goal
             else []
         )
-        current_goal = next((t["text"] for t in reversed(conversation.transcript) if t.get("kind") == "goal"), "")
         carried = [t["text"].strip() for t in conversation.transcript
                    if t.get("role") == "user" and t.get("kind") != "goal"]
         prior_answers = (

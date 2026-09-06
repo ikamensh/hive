@@ -40,3 +40,26 @@ def test_goal_retries_preserve_original_spec_and_queue_one_scout():
     conflicting = client.post(f"/api/projects/{project_id}/intake/start", json={"goal": "Replace the app with a game"})
     assert conflicting.status_code == 409
     assert len(store.list(Task, project_id=project_id)) == 1
+
+
+def test_new_goal_approval_rewrites_existing_specs_from_the_agreed_brief(tmp_path):
+    """Existing spec files must not bypass finalization of a newly agreed goal."""
+    (tmp_path / "mission.md").write_text("# Mission\nHelp gardeners.\n")
+    (tmp_path / "iteration.md").write_text("# Goal\nThe old iteration.\n")
+    store = MemoryStore()
+    supervisor = Supervisor(store, lambda project, events: None)
+    client = TestClient(create_app(store, supervisor, Config(gcp_project="", gcs_bucket="",
+        gemini_api_key="", orch_model="", data_dir=str(tmp_path), gh_token="", runner_token="test")))
+    project = store.put(Project(name="Garden", spec_repo=str(tmp_path), pending_iteration_goal="Plan planting dates"))
+    conversation = store.put(AgentConversation(project_id=project.id, repo=str(tmp_path), backend="codex",
+        status="open", latest_brief="Track planting dates. Assume the northern hemisphere.",
+        transcript=[{"role": "user", "text": "Plan planting dates", "kind": "goal"}]))
+    project.intake_conversation_id = conversation.id
+    store.put(project)
+
+    response = client.post(f"/api/conversations/{conversation.id}/message", json={"action": "approve"})
+    assert response.status_code == 200
+    assert response.json()["conversation"]["status"] == "finalizing"
+    assert response.json()["task"]["conversation_turn"] == "finalize"
+    assert "northern hemisphere" in response.json()["task"]["instructions"]
+    assert (tmp_path / "iteration.md").read_text() == "# Goal\nThe old iteration.\n"
