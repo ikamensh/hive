@@ -7,9 +7,11 @@ from pathlib import Path
 
 
 def update_available(repo_root: Path) -> bool:
-    """True when origin/main has commits this checkout lacks. Any git or
-    network trouble reads as 'no update' — never take a working worker down
-    over a fetch hiccup."""
+    """True when origin/main can fast-forward this checkout to newer code.
+
+    A locally upgraded or divergent checkout must not restart into a downgrade.
+    Git or network trouble still leaves a working worker running.
+    """
     try:
         subprocess.run(
             ["git", "fetch", "--quiet", "origin", "main"],
@@ -19,6 +21,11 @@ def update_available(repo_root: Path) -> bool:
             ["git", "rev-parse", "HEAD", "FETCH_HEAD"],
             cwd=repo_root, check=True, capture_output=True, text=True, timeout=10,
         ).stdout.split()
-        return len(revs) == 2 and revs[0] != revs[1]
+        if len(revs) != 2 or revs[0] == revs[1]:
+            return False
+        return subprocess.run(
+            ["git", "merge-base", "--is-ancestor", *revs],
+            cwd=repo_root, capture_output=True, timeout=10,
+        ).returncode == 0
     except (subprocess.SubprocessError, OSError):
         return False

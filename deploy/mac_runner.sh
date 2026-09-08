@@ -3,10 +3,10 @@
 # Sources the once-materialized credentials, then execs the daemon in the repo.
 #
 # When HIVE_RUNNER_SELF_UPDATE=1 (set by install_mac_runner.sh for dedicated
-# service clones — never for dev checkouts), every start first syncs the clone
-# to origin/main. Combined with the daemon exiting between tasks when
-# origin/main moves ahead, and launchd's KeepAlive respawning us, the fleet
-# updates itself: crash recovery and code updates are the same path.
+# service clones — never for dev checkouts), every start first fast-forwards
+# to origin/main when possible, preserving unpublished local upgrades. The
+# daemon exits between tasks when origin/main moves ahead; launchd's KeepAlive
+# respawns it. Crash recovery and code updates use the same path.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -36,9 +36,10 @@ if [ -f "$PAUSE_FILE" ]; then
 fi
 
 if [ "${HIVE_RUNNER_SELF_UPDATE:-}" = "1" ] && [ -d "$REPO/.git" ]; then
-  # Best-effort: an offline start still runs the code we already have.
-  if git -C "$REPO" fetch --quiet origin main 2>/dev/null; then
-    git -C "$REPO" reset --hard --quiet FETCH_HEAD
+  # Offline or divergent history keeps the installed code running. An older
+  # origin/main is already up to date from this checkout's perspective.
+  if git -C "$REPO" fetch --quiet origin main 2>/dev/null \
+      && git -C "$REPO" merge --ff-only --quiet FETCH_HEAD; then
     uv sync --directory "$REPO" --frozen --no-dev --extra mac || true
   fi
 fi
