@@ -1,4 +1,12 @@
 import { test, expect } from "playwright/test";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+
+async function capture(page, name) {
+  if (!process.env.HIVE_UI_SCREENSHOTS) return;
+  await mkdir(process.env.HIVE_UI_SCREENSHOTS, { recursive: true });
+  await page.screenshot({ path: join(process.env.HIVE_UI_SCREENSHOTS, name), fullPage: true, animations: "disabled" });
+}
 
 const now = Date.now() / 1000;
 const agent = { id: "claude-mac", backend: "claude", status: "ready", available: true,
@@ -63,6 +71,38 @@ test("overview connects live work to its machine and shows evidenced delivery an
   const result = page.getByRole("link", { name: /Retry handling shipped/ });
   await expect(result).toHaveAttribute("href", /\/p\/atlas\?plan=old-plan/);
   await expect(page.getByText("Checks passed", { exact: true })).toBeVisible();
+});
+
+test("subscription summary shows each provider's shared 5-hour and weekly limits before model-specific quotas", async ({ page }) => {
+  // Account headroom must stay visible even when a provider puts model-specific windows first.
+  const snapshot = structuredClone(overview);
+  snapshot.capacity.machines[0].agents[0].usage_windows = [
+    { kind: "weekly_fable", model_scope: "fable", used_percent: 28, window_minutes: 10080, resets_at: now + 86400 },
+    { kind: "weekly", model_scope: "", used_percent: 16, window_minutes: 10080, resets_at: now + 86400 },
+    { kind: "session", model_scope: "", used_percent: 62, window_minutes: 300, resets_at: now + 14400 },
+  ];
+  snapshot.capacity.machines[0].agents.push({
+    ...agent, id: "codex-mac", backend: "codex", usage_source: "app-server",
+    usage_windows: [
+      { kind: "session", model_scope: "spark", used_percent: 0, window_minutes: 300, resets_at: now + 14400 },
+      { kind: "weekly", model_scope: "spark", used_percent: 0, window_minutes: 10080, resets_at: now + 86400 },
+      { kind: "weekly", model_scope: "", used_percent: 44, window_minutes: 10080, resets_at: now + 86400 },
+    ],
+  });
+  await setup(page, snapshot);
+  await page.goto("/");
+  const claude = page.getByRole("region", { name: "Claude limits on Mac Studio", exact: true });
+  await expect(claude.getByRole("progressbar", { name: "5-hour: 38% remaining", exact: true })).toHaveAttribute("value", "38");
+  await expect(claude.getByRole("progressbar", { name: "Weekly: 84% remaining", exact: true })).toHaveAttribute("value", "84");
+  const codex = page.getByRole("region", { name: "Codex limits on Mac Studio", exact: true });
+  await expect(codex.getByLabel("5-hour limit", { exact: true })).toContainText("Not reported");
+  await expect(codex.getByRole("progressbar", { name: "Weekly: 56% remaining", exact: true })).toHaveAttribute("value", "56");
+  await expect(codex.getByRole("progressbar")).toHaveCount(1);
+  await expect(page.getByText("100% remaining", { exact: true })).toHaveCount(0);
+  await capture(page, "subscription-limits-desktop.png");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await capture(page, "subscription-limits-mobile.png");
 });
 
 test("pause drains connected work and resume restores dispatch", async ({ page }) => {

@@ -23,7 +23,7 @@ async function setup(page) {
     machine_type: "", device_kind: "laptop", owner_user_id: "owner", last_seen: now };
   const runner = { id: "runner", name: "Runner", machine_id: "laptop", online: true, last_seen: now,
     backends: ["codex", "claude"] };
-  const state = { requests: [], denyProbe: true, failResources: false, overviewAge: 0 };
+  const state = { requests: [], resources, denyProbe: true, failResources: false, overviewAge: 0 };
   await page.route("**/api/**", async route => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -113,6 +113,29 @@ test("provider-limit links survive reload and do not turn missing readings into 
   await page.getByRole("button", { name: "Machines", exact: true }).click();
   await expect(page.getByRole("article", { name: "Laptop", exact: true })).toBeVisible();
   await expect(page).not.toHaveURL(/tab=limits/);
+});
+
+test("full provider limits keep model quotas distinct and identify stale readings and their source", async ({ page }) => {
+  // A separate model bucket must never masquerade as the shared account's available quota.
+  const state = await setup(page);
+  const now = Date.now() / 1000;
+  Object.assign(state.resources[0], {
+    usage_source: "app-server", usage_captured_at: now - 1800,
+    usage_windows: [
+      { kind: "session", model_scope: "spark", used_percent: 0, window_minutes: 300, resets_at: now + 7200 },
+      { kind: "weekly", model_scope: "spark", used_percent: 0, window_minutes: 10080, resets_at: now + 86400 },
+      { kind: "weekly", model_scope: "", used_percent: 44, window_minutes: 10080, resets_at: now + 86400 },
+    ],
+  });
+  await page.goto("/machines?tab=limits");
+  const codex = page.getByRole("region", { name: "Codex limits on Laptop", exact: true });
+  await expect(codex.getByLabel("5-hour limit", { exact: true })).toContainText("Not reported");
+  await expect(codex.getByRole("progressbar", { name: "Weekly: 56% last reported", exact: true })).toHaveAttribute("value", "56");
+  await expect(codex.getByRole("progressbar", { name: "5-hour · spark: 100% last reported", exact: true })).toHaveAttribute("value", "100");
+  await expect(codex.getByRole("progressbar", { name: "Weekly · spark: 100% last reported", exact: true })).toHaveAttribute("value", "100");
+  await expect(codex.getByText("Source: Codex CLI", { exact: true })).toBeVisible();
+  await expect(codex.getByText(/% remaining/)).toHaveCount(0);
+  await capture(page, "capacity-scoped-limits.png");
 });
 
 test("a failed refresh shows last known capacity until retry restores a current observation", async ({ page }) => {
