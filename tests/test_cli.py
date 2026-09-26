@@ -72,6 +72,7 @@ def test_codex_window_cadence_survives_collector_heartbeat_and_cli(
     }) + "\n")
     with monkeypatch.context() as isolated_home:
         isolated_home.setattr(Path, "home", lambda: tmp_path)
+        isolated_home.setenv("PATH", str(tmp_path / "no-cli"))
         snapshot = collect_usage("codex")
     assert snapshot is not None
     client, _ = harness

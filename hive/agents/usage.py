@@ -12,8 +12,8 @@ Two independent capabilities, both best-effort and read-only:
   quota. claude: the Claude Code OAuth token (keychain on macOS, credentials
   file elsewhere) authorizes `GET api.anthropic.com/api/oauth/usage`, which
   returns exact used-percent + reset time for the 5h/weekly windows. codex:
-  every session rollout under `~/.codex/sessions` carries `rate_limits`
-  snapshots; we read the newest one. Both are account-wide, so they also see
+  the native app-server reads current main-account limits, with observed
+  main-bucket rollout snapshots as a fallback. Both are account-wide, so they also see
   usage from outside Hive. cursor/gemini-cli expose nothing — empirical
   tracking from error messages is all we get there.
 
@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import re
+import selectors
 import subprocess
 import time
 from datetime import datetime, timedelta
@@ -277,20 +278,79 @@ def _claude_usage() -> dict | None:
     }
 
 
-# --- codex: rate_limits snapshots in the session rollouts -------------------
+# --- codex: live account limits, with observed rollout fallback --------------
+
+
+def _codex_account_limits() -> dict | None:
+    """Read native account telemetry without starting a thread or model turn."""
+    proc = subprocess.Popen(
+        ["codex", "app-server", "--stdio"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, bufsize=0,
+    )
+    deadline = time.monotonic() + 15
+    buffered = b""
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(proc.stdout, selectors.EVENT_READ)
+
+            def send(message: dict) -> None:
+                proc.stdin.write(json.dumps(message).encode() + b"\n")
+                proc.stdin.flush()
+
+            def request(request_id: int, method: str, **params) -> dict:
+                nonlocal buffered
+                send({"id": request_id, "method": method, "params": params})
+                while True:
+                    while b"\n" in buffered:
+                        line, buffered = buffered.split(b"\n", 1)
+                        message = json.loads(line)
+                        if message.get("id") == request_id:
+                            if "error" in message:
+                                raise ValueError("Codex account telemetry request failed")
+                            return message["result"]
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not selector.select(remaining):
+                        raise subprocess.TimeoutExpired(proc.args, 15)
+                    chunk = proc.stdout.read(65536)
+                    if not chunk:
+                        raise ValueError("Codex account telemetry stream closed")
+                    buffered += chunk
+
+            request(1, "initialize", clientInfo={"name": "hive_usage", "version": "1"})
+            send({"method": "initialized"})
+            payload = request(2, "account/rateLimits/read")
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        proc.stdin.close()
+        proc.stdout.close()
+
+    buckets = payload.get("rateLimitsByLimitId")
+    limits = buckets.get("codex") if buckets is not None else payload.get("rateLimits")
+    if not limits or limits.get("limitId") not in (None, "codex"):
+        return None
+    return _codex_snapshot(limits, "") | {"source": "app-server", "captured_at": time.time()}
 
 
 def _codex_usage(sessions_dir: Path | None = None) -> dict | None:
-    """The newest `rate_limits` snapshot across recent codex session rollouts.
-
-    Codex reports account-wide window state on every turn of every session
-    (Hive's and the human's alike), so the freshest rollout line is the truth
-    as of its own timestamp — `captured_at` carries that, letting the chief
-    judge staleness."""
+    """Prefer live main-account telemetry; retain a fallback's observation age."""
+    if sessions_dir is None:
+        try:
+            live = _codex_account_limits()
+            if live is not None:
+                return live
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            pass
     root = sessions_dir or Path.home() / ".codex" / "sessions"
     files = sorted(root.glob("*/*/*/rollout-*.jsonl"), key=lambda p: p.stat().st_mtime)
-    for path in reversed(files[-5:]):
-        found: dict | None = None
+    found: dict | None = None
+    newest = 0.0
+    for path in reversed(files[-20:]):
         try:
             with open(path, encoding="utf-8", errors="replace") as fh:
                 for line in fh:
@@ -301,37 +361,43 @@ def _codex_usage(sessions_dir: Path | None = None) -> dict | None:
                     except json.JSONDecodeError:
                         continue
                     limits = (event.get("payload") or {}).get("rate_limits") or {}
-                    if limits:
-                        found = {"limits": limits, "timestamp": event.get("timestamp", "")}
+                    # Spark and other model buckets are independent allowances.
+                    # A newer foreign event must never become general Codex usage.
+                    if not limits or limits.get("limit_id") not in (None, "codex"):
+                        continue
+                    timestamp = event.get("timestamp", "")
+                    captured_at = _iso_epoch(timestamp)
+                    if captured_at > newest:
+                        found = {"limits": limits, "timestamp": timestamp}
+                        newest = captured_at
         except OSError:
             continue
-        if found:
-            return _codex_snapshot(found["limits"], found["timestamp"])
-    return None
+    return _codex_snapshot(found["limits"], found["timestamp"]) if found else None
 
 
 def _codex_snapshot(limits: dict, timestamp: str) -> dict:
     windows = []
     for key in ("primary", "secondary"):
         block = limits.get(key) or {}
-        if not block:
+        used_percent = block.get("used_percent", block.get("usedPercent"))
+        if used_percent is None:
             continue
-        window_minutes = int(block.get("window_minutes") or 0)
+        window_minutes = int(block.get("window_minutes", block.get("windowDurationMins")) or 0)
         windows.append(
             {
                 # Codex can put a weekly window in either native slot.
                 "kind": {300: "session", 10080: "weekly"}.get(window_minutes, key),
-                "used_percent": float(block.get("used_percent") or 0.0),
+                "used_percent": float(used_percent),
                 "window_minutes": window_minutes,
-                "resets_at": float(block.get("resets_at") or 0.0),
-                "severity": "exceeded" if limits.get("rate_limit_reached_type") == key else "",
+                "resets_at": float(block.get("resets_at", block.get("resetsAt")) or 0.0),
+                "severity": "exceeded" if limits.get("rate_limit_reached_type", limits.get("rateLimitReachedType")) == key else "",
             }
         )
     return {
         "backend": "codex",
-        "plan": limits.get("plan_type") or "",
+        "plan": limits.get("plan_type", limits.get("planType")) or "",
         "source": "rollout",
-        "captured_at": _iso_epoch(timestamp) or time.time(),
+        "captured_at": _iso_epoch(timestamp),
         "windows": windows,
     }
 
