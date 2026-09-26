@@ -16,7 +16,8 @@ gemini-cli), independent of any hive service:
 
 Session factories import `kodo` lazily, so importing this package (e.g. on
 hive's chief) needs no agent CLIs installed. `python -m hive.agents` surveys
-the current machine. Demos: `demos/agents/`.
+the current machine; `python -m hive.agents run` delegates one task from any
+shell, on OpenCode's free model by default. Demos: `demos/agents/`.
 """
 
 from hive.agents.backends import (

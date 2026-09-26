@@ -30,7 +30,8 @@ APIs — there is no privileged internal path.
 | `hive.llm` | provider-agnostic tool-loop LLM access: `ToolSet` schemas from plain callables, `ToolLoop`, the 3-method `LLMAdapter` protocol, pricing | `calculator_agent.py` — tool-calling agent (real provider when a key exists, scripted otherwise); `custom_adapter.py` — bring-your-own-model via the adapter protocol |
 
 `python -m hive.fleet` and `python -m hive.agents` are quick machine surveys
-built from the same APIs.
+built from the same APIs; `python -m hive.agents run` delegates one agent task
+from any shell (free OpenCode by default).
 
 ## How hive composes them
 
