@@ -110,6 +110,9 @@ def test_detect_capabilities_recognizes_node_playwright(monkeypatch):
     monkeypatch.setattr(runner.shutil, "which", fake_which)
     monkeypatch.setattr(runner.importlib.util, "find_spec", lambda name: None)
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    # CI hosts (GitHub's Ubuntu image) ship an Android SDK; this machine has none.
+    monkeypatch.delenv("ANDROID_HOME", raising=False)
+    monkeypatch.delenv("ANDROID_SDK_ROOT", raising=False)
 
     assert runner.detect_capabilities() == ["browser"]
     assert calls == [["npx", "--no-install", "playwright", "--version"]]
